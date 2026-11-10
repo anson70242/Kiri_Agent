@@ -1,0 +1,74 @@
+name: Deploy
+
+# Deploys main to the server after CI passes on that exact commit.
+# "Run workflow" in the Actions tab deploys the current main by hand.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+# One deploy at a time; a newer one waits instead of interrupting a running one.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    env:
+      SSH_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
+      APP_DIR: ${{ vars.DEPLOY_PATH || '/home/anson/kiri' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The commit CI just tested (workflow_run), or main (manual run).
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Set up SSH
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER_NAME: ${{ secrets.DEPLOY_USER }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          cat >> ~/.ssh/config <<EOF
+          Host server
+            HostName $HOST
+            User $USER_NAME
+            Port $SSH_PORT
+            IdentityFile ~/.ssh/deploy_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+          EOF
+
+      - name: Upload code
+        # .env and data live only on the server; --delete never touches excluded paths.
+        run: |
+          rsync -az --delete \
+            --exclude '.git/' --exclude '.github/' --exclude '.venv/' \
+            --exclude '.env' --exclude 'data/' --exclude 'tests/' \
+            --exclude '__pycache__/' --exclude '.pytest_cache/' \
+            ./ "server:$APP_DIR/"
+
+      - name: Build and restart
+        run: |
+          ssh server "cd '$APP_DIR' && \
+            docker compose up -d --build --remove-orphans --wait --wait-timeout 120 && \
+            docker image prune -f > /dev/null && \
+            docker compose ps"
+
+      - name: Show logs on failure
+        if: failure()
+        run: ssh server "cd '$APP_DIR' && docker compose logs --tail 100" || true

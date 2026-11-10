@@ -1,0 +1,27 @@
+# Fixed project name, so the data volume is "kiri_kiri-data" whatever the folder is called.
+name: kiri
+
+services:
+  kiri:
+    build: .
+    image: kiri-agent:latest
+    container_name: kiri
+    restart: unless-stopped
+    # Secrets (DISCORD_WEBHOOK_URL, ...) live in .env on the server, never in the image.
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - kiri-data:/app/data
+    ports:
+      # Server-local only. Reach it from your devices through `tailscale serve`
+      # (see docs/deploy.md); the public IP never exposes the dashboard.
+      - "127.0.0.1:8770:8770"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  kiri-data:

@@ -1,0 +1,32 @@
+{
+  "model": "${OPENAI_MODEL}",
+  "base_url": "${OPENAI_BASE_URL}",
+  "api_key_env": "OPENAI_API_KEY",
+  "max_tokens": 4096,
+  "temperature": 0.7,
+  "max_steps": 40,
+  "request_timeout": 600,
+  "default_agent": "main",
+  "agents": {
+    "main": {
+      "prompt": "main.md",
+      "tools": "*"
+    }
+  },
+  "monitor": {
+    "interval": 60,
+    "streamers": [
+      { "name": "惑世いと", "platform": "youtube", "channel": "@wakuse_ito" },
+      { "name": "柊優花", "platform": "youtube", "channel": "@柊優花" },
+      { "name": "東雲はる", "platform": "youtube", "channel": "@東雲はるch" },
+      { "name": "sola", "platform": "youtube", "channel": "@sola_she" },
+      { "name": "柊優花", "platform": "twitch", "channel": "hiiragiyukaofficial" }
+    ]
+  },
+  "notify": {
+    "on_startup": false,
+    "on_offline": true,
+    "offline_grace": 120,
+    "discord": { "webhook_env": "DISCORD_WEBHOOK_URL", "mention": "" }
+  }
+}

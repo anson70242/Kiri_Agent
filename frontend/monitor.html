@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kiri_Agent</title>
+<style>
+  :root { /* 天青 Azure: white top bar, soft blue gradient background */
+    --bg: linear-gradient(160deg, #eef5ff 0%, #f3faff 50%, #f5f7ff 100%) fixed;
+    --card: #ffffff; --text: #172554; --muted: #5a6b8c; --border: #c7dbf7;
+    --accent: #2563eb; --live: #e11d48; --live-bg: #fde2e7; --up: #c2410c; --up-bg: #ffedd5;
+    --off: #5a6b8c; --off-bg: #e8effb; --unk: #7c3aed; --unk-bg: #ede9fe;
+    --topbar-bg: rgba(255,255,255,.85); --topbar-text: #1e40af; --topbar-muted: #5a6b8c;
+    --topbar-accent: #2563eb; --topbar-border: #c7dbf7;
+    --shadow: 0 1px 2px rgba(37,99,235,.06), 0 8px 20px rgba(37,99,235,.10);
+    --yt: #dc2626; --tw: #7c3aed;
+  }
+  * { box-sizing: border-box; }
+  html { color-scheme: light; }
+  body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; }
+  .topbar { position: sticky; top: 0; z-index: 10; background: var(--topbar-bg); backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--topbar-border); }
+  .topbar-inner { max-width: 1100px; margin: 0 auto; padding: 0 16px; height: 56px;
+    display: flex; align-items: center; gap: 28px; }
+  .brand { font-weight: 800; font-size: 18px; letter-spacing: .2px; color: var(--topbar-text); text-decoration: none; }
+  .nav { display: flex; gap: 4px; height: 100%; overflow-x: auto; }
+  .nav a { display: flex; align-items: center; padding: 0 12px; color: var(--topbar-muted); text-decoration: none;
+    font-size: 14px; border-bottom: 2px solid transparent; white-space: nowrap; }
+  .nav a:hover { color: var(--topbar-text); }
+  .nav a.active { color: var(--topbar-accent); border-bottom-color: var(--topbar-accent); font-weight: 600; }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 48px; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; margin-bottom: 20px; }
+  h1 { font-size: 22px; margin: 0; }
+  .summary { display: flex; gap: 8px; flex-wrap: wrap; }
+  .chip { padding: 2px 10px; border-radius: 999px; font-size: 13px; font-weight: 600; }
+  .spacer { flex: 1; }
+  .meta { color: var(--muted); font-size: 13px; }
+  button { font: inherit; font-size: 14px; padding: 6px 14px; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--border); background: var(--card); color: var(--text); }
+  button:hover { border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: wait; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px;
+    align-items: start; }
+  .grid.compact { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+  .grid.compact .card { padding: 12px 14px; }
+  .group + .group { margin-top: 28px; }
+  .group h2 { font-size: 14px; font-weight: 600; color: var(--muted); margin: 0 0 10px; letter-spacing: .3px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px;
+    display: flex; flex-direction: column; gap: 8px; min-width: 0; box-shadow: var(--shadow); }
+  .card.live { border-color: var(--live); box-shadow: 0 0 0 1px var(--live) inset, var(--shadow); }
+  .top { display: flex; align-items: center; gap: 8px; }
+  .cover { display: block; margin: -16px -16px 4px; aspect-ratio: 16 / 9; overflow: hidden;
+    border-radius: 11px 11px 0 0; background: var(--off-bg); }
+  .cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .avatar { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; flex: none;
+    background: var(--off-bg); }
+  .offline .avatar { filter: grayscale(.6); opacity: .8; }
+  .name { font-weight: 700; font-size: 17px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .platform { font-size: 12px; color: var(--muted); border: 1px solid var(--border); border-radius: 6px; padding: 0 6px; }
+  .platform.youtube { color: var(--yt); border-color: color-mix(in srgb, var(--yt) 35%, transparent); }
+  .platform.twitch { color: var(--tw); border-color: color-mix(in srgb, var(--tw) 35%, transparent); }
+  .state { margin-left: auto; white-space: nowrap; }
+  .live .state { background: var(--live-bg); color: var(--live); }
+  .upcoming .state { background: var(--up-bg); color: var(--up); }
+  .offline .state, .checking .state { background: var(--off-bg); color: var(--off); }
+  .unknown .state { background: var(--unk-bg); color: var(--unk); }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: currentColor;
+    margin-right: 6px; vertical-align: 1px; }
+  .live .dot { animation: pulse 1.4s infinite; }
+  @keyframes pulse { 50% { opacity: .25; } }
+  .title { overflow-wrap: anywhere; }
+  .title a { color: inherit; text-decoration: none; }
+  .title a:hover { color: var(--accent); text-decoration: underline; }
+  .sub { color: var(--muted); font-size: 13px; }
+  .err { color: var(--unk); font-size: 12px; overflow-wrap: anywhere; }
+  .empty { color: var(--muted); text-align: center; padding: 40px; }
+  /* Tag search */
+  .toolbar { margin: -4px 0 20px; }
+  .search { position: relative; max-width: 560px; }
+  .search-box { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 42px;
+    padding: 5px 8px 5px 12px; background: var(--card); border: 1px solid var(--border);
+    border-radius: 10px; box-shadow: var(--shadow); cursor: text; }
+  .search-box:focus-within { border-color: var(--accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+  .search-box .icon { color: var(--muted); font-size: 14px; }
+  .search-box input { flex: 1; min-width: 140px; border: 0; outline: 0; background: transparent;
+    font: inherit; color: var(--text); padding: 4px 2px; }
+  .tag { display: inline-flex; align-items: center; gap: 2px; padding: 2px 2px 2px 10px; border-radius: 999px;
+    font-size: 13px; font-weight: 600; color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  .tag.youtube { color: var(--yt); background: color-mix(in srgb, var(--yt) 10%, transparent); }
+  .tag.twitch { color: var(--tw); background: color-mix(in srgb, var(--tw) 10%, transparent); }
+  .tag button, .search .clear { border: 0; background: transparent; color: inherit; padding: 0 7px;
+    font-size: 15px; line-height: 20px; border-radius: 999px; }
+  .tag button:hover, .search .clear:hover { background: color-mix(in srgb, currentColor 15%, transparent); }
+  .search .clear { color: var(--muted); margin-left: auto; }
+  .menu { position: absolute; left: 0; right: 0; top: calc(100% + 6px); z-index: 20; padding: 6px;
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    box-shadow: 0 12px 32px rgba(23, 37, 84, .15); max-height: 360px; overflow: auto; }
+  .menu h3 { font-size: 12px; font-weight: 600; color: var(--muted); margin: 6px 8px 4px; }
+  .opt { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 8px; cursor: pointer; }
+  .opt.active { background: var(--off-bg); }
+  .opt img, .opt .ph { width: 26px; height: 26px; border-radius: 50%; object-fit: cover; flex: none;
+    background: var(--off-bg); }
+  .opt .meta2 { margin-left: auto; display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+  .sdot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--off); }
+  .sdot.live { background: var(--live); } .sdot.upcoming { background: var(--up); }
+  .menu .none { padding: 10px; color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<nav class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="/">Kiri_Agent</a>
+    <div class="nav">
+      <a href="/" class="active">直播监控</a>
+    </div>
+  </div>
+</nav>
+<main>
+  <header>
+    <h1>直播监控</h1>
+    <div class="summary" id="summary"></div>
+    <div class="spacer"></div>
+    <span class="meta" id="meta">加载中…</span>
+    <button id="notify" hidden>开启开播提醒</button>
+    <button id="refresh">立即刷新</button>
+  </header>
+  <div class="toolbar">
+    <div class="search" id="search">
+      <div class="search-box" id="search-box">
+        <span class="icon">🔍</span>
+        <span id="tags"></span>
+        <input id="q" placeholder="搜索主播或平台…" autocomplete="off" role="combobox" aria-controls="menu">
+        <button class="clear" id="clear" hidden aria-label="清除全部">✕</button>
+      </div>
+      <div class="menu" id="menu" role="listbox" hidden></div>
+    </div>
+  </div>
+  <div id="grid"></div>
+</main>
+<script>
+const LABEL = { live: "直播中", upcoming: "待机中", offline: "未开播", unknown: "检测失败", checking: "检测中" };
+const ORDER = { live: 0, upcoming: 1, unknown: 2, checking: 3, offline: 4 };
+const POLL_MS = 15000;
+let prevStates = null;
+
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const key = s => `${s.platform}:${s.channel}`;
+
+function since(iso) {
+  if (!iso) return "";
+  const m = Math.max(0, Math.floor((Date.now() - new Date(iso)) / 60000));
+  return m < 60 ? `${m} 分钟` : `${Math.floor(m / 60)} 小时 ${m % 60} 分`;
+}
+function clock(iso) {
+  return iso ? new Date(iso).toLocaleString("zh-CN", { hour12: false }) : "";
+}
+
+function card(s) {
+  const title = s.title
+    ? (s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title)}</a>` : esc(s.title))
+    : "";
+  let sub = "";
+  if (s.state === "live") sub = [
+    s.viewers != null ? `${s.viewers.toLocaleString()} 人观看` : "",
+    s.started_at ? `已播 ${since(s.started_at)} · 开始于 ${clock(s.started_at)}` : "",
+  ].filter(Boolean).join(" · ");
+  else if (s.state === "upcoming" && s.started_at) sub = `预定 ${clock(s.started_at)}`;
+  const img = src => `src="${esc(src)}" referrerpolicy="no-referrer" loading="lazy" alt=""`;
+  const cover = s.thumbnail
+    ? `<a class="cover" href="${esc(s.url || "#")}" target="_blank" rel="noopener"><img ${img(s.thumbnail)}></a>`
+    : "";
+  return `<div class="card ${s.state}">
+    ${cover}
+    <div class="top">
+      ${s.avatar ? `<img class="avatar" ${img(s.avatar)}>` : ""}
+      <span class="name" title="${esc(s.channel)}">${esc(s.name)}</span>
+      <span class="platform ${esc(s.platform)}">${esc(s.platform)}</span>
+      <span class="chip state"><span class="dot"></span>${LABEL[s.state] || s.state}</span>
+    </div>
+    ${title ? `<div class="title">${title}</div>` : ""}
+    ${sub ? `<div class="sub">${sub}</div>` : ""}
+    ${s.error ? `<div class="err">${esc(s.error)}</div>` : ""}
+  </div>`;
+}
+
+// ---- Tag filter: tags are {k: "n" (streamer name) | "p" (platform), v} ----
+const filter = { tags: [], text: "" };
+try {
+  const saved = JSON.parse(localStorage.getItem("kiri.filter.tags") || "[]");
+  if (Array.isArray(saved)) filter.tags = saved.filter(t => t && (t.k === "n" || t.k === "p") && t.v);
+} catch {}
+const saveTags = () => { try { localStorage.setItem("kiri.filter.tags", JSON.stringify(filter.tags)); } catch {} };
+const hasTag = (k, v) => filter.tags.some(t => t.k === k && t.v === v);
+
+function matches(r) {
+  const names = filter.tags.filter(t => t.k === "n").map(t => t.v);
+  const plats = filter.tags.filter(t => t.k === "p").map(t => t.v);
+  if (names.length && !names.includes(r.name)) return false;
+  if (plats.length && !plats.includes(r.platform)) return false;
+  const q = filter.text.trim().toLowerCase();
+  return !q || `${r.name} ${r.channel} ${r.platform} ${r.title || ""}`.toLowerCase().includes(q);
+}
+
+const byName = new Intl.Collator("ja");
+const sortRows = list => [...list].sort((a, b) =>
+  (ORDER[a.state] ?? 9) - (ORDER[b.state] ?? 9)
+  || byName.compare(a.name, b.name)
+  || a.platform.localeCompare(b.platform));
+let lastData = null;
+
+function draw() {
+  if (!lastData) return;
+  const all = sortRows(lastData.streamers);
+  const rows = all.filter(matches);
+  // Two sections so tall live cards (with covers) don't stretch the offline ones.
+  const active = rows.filter(r => r.state === "live" || r.state === "upcoming");
+  const rest = rows.filter(r => !active.includes(r));
+  const section = (title, items, cls) => items.length
+    ? `<section class="group"><h2>${title} · ${items.length}</h2><div class="grid ${cls}">${items.map(card).join("")}</div></section>`
+    : "";
+  document.getElementById("grid").innerHTML =
+    !all.length ? `<div class="empty">config.json 里 monitor.streamers 还没有主播</div>`
+    : !rows.length ? `<div class="empty">没有符合条件的主播</div>`
+    : section("直播中 / 待机", active, "") + section("未开播", rest, "compact");
+}
+
+// Search box + dropdown
+const qEl = document.getElementById("q"), menuEl = document.getElementById("menu");
+const tagsEl = document.getElementById("tags"), clearEl = document.getElementById("clear");
+let options = [], activeIdx = 0;
+
+function drawTags() {
+  tagsEl.innerHTML = filter.tags.map((t, i) =>
+    `<span class="tag ${t.k === "p" ? esc(t.v) : ""}">${esc(t.v)}<button data-i="${i}" aria-label="移除">×</button></span>`
+  ).join("");
+  clearEl.hidden = !filter.tags.length && !filter.text;
+  qEl.placeholder = filter.tags.length ? "" : "搜索主播或平台…";
+}
+
+function buildOptions() {
+  const list = lastData ? lastData.streamers : [];
+  const q = filter.text.trim().toLowerCase();
+  const people = new Map();  // name -> {avatar, platforms, best state}
+  for (const s of list) {
+    const p = people.get(s.name) || { avatar: null, platforms: [], state: "offline" };
+    p.avatar ||= s.avatar;
+    p.platforms.push(s.platform);
+    if ((ORDER[s.state] ?? 9) < (ORDER[p.state] ?? 9)) p.state = s.state;
+    people.set(s.name, p);
+  }
+  const names = [...people.keys()].sort(byName.compare)
+    .filter(n => !hasTag("n", n) && (!q || n.toLowerCase().includes(q)))
+    .map(n => ({ k: "n", v: n, ...people.get(n) }));
+  const plats = [...new Set(list.map(s => s.platform))].sort()
+    .filter(p => !hasTag("p", p) && (!q || p.includes(q)))
+    .map(p => ({ k: "p", v: p, count: list.filter(s => s.platform === p).length }));
+  return [...names, ...plats];
+}
+
+function drawMenu() {
+  options = buildOptions();
+  activeIdx = Math.min(activeIdx, Math.max(0, options.length - 1));
+  const row = (o, i) => o.k === "n"
+    ? `<div class="opt ${i === activeIdx ? "active" : ""}" role="option" data-i="${i}">
+         ${o.avatar ? `<img src="${esc(o.avatar)}" referrerpolicy="no-referrer" alt="">` : `<span class="ph"></span>`}
+         <span>${esc(o.v)}</span>
+         <span class="meta2">${o.platforms.map(esc).join(" · ")}<span class="sdot ${o.state}" title="${LABEL[o.state] || ""}"></span></span>
+       </div>`
+    : `<div class="opt ${i === activeIdx ? "active" : ""}" role="option" data-i="${i}">
+         <span class="platform ${esc(o.v)}">${esc(o.v)}</span>
+         <span class="meta2">${o.count} 位</span>
+       </div>`;
+  const n = options.filter(o => o.k === "n"), p = options.filter(o => o.k === "p");
+  menuEl.innerHTML = !options.length ? `<div class="none">没有更多可选的项目</div>`
+    : (n.length ? `<h3>主播</h3>` + n.map(o => row(o, options.indexOf(o))).join("") : "")
+    + (p.length ? `<h3>平台</h3>` + p.map(o => row(o, options.indexOf(o))).join("") : "");
+  menuEl.querySelector(".opt.active")?.scrollIntoView({ block: "nearest" });
+}
+
+const openMenu = () => { menuEl.hidden = false; drawMenu(); };
+const closeMenu = () => { menuEl.hidden = true; };
+
+function addTag(o) {
+  filter.tags.push({ k: o.k, v: o.v });
+  filter.text = ""; qEl.value = "";
+  saveTags(); drawTags(); drawMenu(); draw();
+}
+function removeTag(i) {
+  filter.tags.splice(i, 1);
+  saveTags(); drawTags(); if (!menuEl.hidden) drawMenu(); draw();
+}
+
+document.getElementById("search-box").addEventListener("mousedown", e => {
+  if (e.target.closest(".tag button, .clear")) return;
+  if (e.target !== qEl) e.preventDefault();
+  qEl.focus(); openMenu();
+});
+qEl.addEventListener("focus", openMenu);
+qEl.addEventListener("input", () => { filter.text = qEl.value; activeIdx = 0; drawTags(); drawMenu(); draw(); });
+qEl.addEventListener("keydown", e => {
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    if (menuEl.hidden) return openMenu();
+    if (options.length) activeIdx = (activeIdx + (e.key === "ArrowDown" ? 1 : -1) + options.length) % options.length;
+    drawMenu();
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    if (!menuEl.hidden && options[activeIdx]) addTag(options[activeIdx]);
+  } else if (e.key === "Backspace" && !qEl.value && filter.tags.length) {
+    removeTag(filter.tags.length - 1);
+  } else if (e.key === "Escape") {
+    closeMenu(); qEl.blur();
+  }
+});
+menuEl.addEventListener("mousedown", e => {
+  e.preventDefault();  // keep focus in the input
+  const opt = e.target.closest(".opt");
+  if (opt) addTag(options[+opt.dataset.i]);
+});
+menuEl.addEventListener("mousemove", e => {
+  const opt = e.target.closest(".opt");
+  if (opt && +opt.dataset.i !== activeIdx) { activeIdx = +opt.dataset.i; drawMenu(); }
+});
+tagsEl.addEventListener("click", e => {
+  const b = e.target.closest("button[data-i]");
+  if (b) removeTag(+b.dataset.i);
+});
+clearEl.addEventListener("click", () => {
+  filter.tags = []; filter.text = ""; qEl.value = "";
+  saveTags(); drawTags(); if (!menuEl.hidden) drawMenu(); draw();
+});
+document.addEventListener("mousedown", e => { if (!e.target.closest("#search")) closeMenu(); });
+drawTags();
+
+function render(data) {
+  lastData = data;
+  draw();
+  if (!menuEl.hidden) drawMenu();
+  const rows = data.streamers;
+
+  const count = st => rows.filter(r => r.state === st).length;
+  const live = count("live");
+  document.getElementById("summary").innerHTML =
+    `<span class="chip" style="background:var(--live-bg);color:var(--live)">直播中 ${live}</span>` +
+    `<span class="chip" style="background:var(--up-bg);color:var(--up)">待机 ${count("upcoming")}</span>` +
+    `<span class="chip" style="background:var(--off-bg);color:var(--off)">共 ${rows.length}</span>`;
+  document.title = live ? `(${live}) Kiri_Agent` : "Kiri_Agent";
+  document.getElementById("meta").textContent = data.last_refresh
+    ? `后端每 ${data.interval} 秒检测 · 上次 ${clock(data.last_refresh)}` : "首次检测中…";
+
+  // Notify on offline -> live transitions (not on first load).
+  const now = Object.fromEntries(rows.map(r => [key(r), r]));
+  if (prevStates && "Notification" in window && Notification.permission === "granted") {
+    for (const r of rows) {
+      if (r.state === "live" && prevStates[key(r)] && prevStates[key(r)] !== "live") {
+        const n = new Notification(`${r.name} 开播了`, { body: r.title || "" });
+        if (r.url) n.onclick = () => window.open(r.url, "_blank");
+      }
+    }
+  }
+  prevStates = Object.fromEntries(Object.entries(now).map(([k, r]) => [k, r.state]));
+}
+
+async function load(method = "GET") {
+  try {
+    const res = await fetch(method === "POST" ? "/api/refresh" : "/api/status", { method });
+    render(await res.json());
+  } catch (e) {
+    document.getElementById("meta").textContent = "连不上后端，确认 server 在运行";
+  }
+}
+
+const btn = document.getElementById("refresh");
+btn.onclick = async () => { btn.disabled = true; await load("POST"); btn.disabled = false; };
+
+const nbtn = document.getElementById("notify");
+if ("Notification" in window && Notification.permission === "default") {
+  nbtn.hidden = false;
+  nbtn.onclick = async () => { await Notification.requestPermission(); nbtn.hidden = true; };
+}
+
+load();
+setInterval(load, POLL_MS);
+
+</script>
+</body>
+</html>

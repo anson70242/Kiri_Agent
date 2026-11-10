@@ -1,0 +1,52 @@
+name: CI
+
+# Runs on every pull request (so you see results before merging) and again on main
+# after the merge lands.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install Python and dependencies
+        run: uv sync --locked
+
+      # Network tests (real YouTube / Twitch) are skipped by default; see pyproject.toml.
+      - name: Run tests
+        run: uv run pytest -q
+
+  docker:
+    # Catches a broken Dockerfile before it reaches the server.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t kiri-agent:ci .
+
+      - name: Smoke test (container starts and serves /api/status)
+        run: |
+          docker run -d --name kiri-ci -p 127.0.0.1:8770:8770 kiri-agent:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8770/api/status > /dev/null; then
+              echo "dashboard is up"; exit 0
+            fi
+            sleep 1
+          done
+          docker logs kiri-ci
+          exit 1

@@ -1,0 +1,101 @@
+"""Discord notifications via a channel webhook (no bot needed).
+
+Create one in Discord: channel settings → Integrations → Webhooks → New Webhook →
+Copy Webhook URL, then put it in .env as DISCORD_WEBHOOK_URL.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from datetime import datetime
+from typing import Any
+
+import httpx
+
+from .base import EventKind, Notifier, PermanentNotifyError, StreamEvent
+
+PLATFORM_COLORS = {"youtube": 0xFF0000, "twitch": 0x9146FF}
+DEFAULT_COLOR = 0xE11D48
+OFFLINE_COLOR = 0x6B7280
+
+
+def _duration(start: datetime, end: datetime) -> str:
+    minutes = max(0, int((end - start).total_seconds() // 60))
+    h, m = divmod(minutes, 60)
+    return f"{h} 小时 {m} 分" if h else f"{m} 分钟"
+
+
+class DiscordNotifier(Notifier):
+    name = "discord"
+
+    def __init__(self, webhook_url: str, mention: str | None = None, client: httpx.AsyncClient | None = None):
+        self.webhook_url = webhook_url
+        self.mention = (mention or "").strip()  # pinged on go-live only
+        self.client = client or httpx.AsyncClient(timeout=15)
+
+    def build_payload(self, event: StreamEvent) -> dict[str, Any]:
+        status = event.status
+        s = status.streamer
+        live = event.kind is EventKind.LIVE
+        embed: dict[str, Any] = {
+            "title": (status.title or ("直播中" if live else "直播已结束"))[:256],
+            "color": PLATFORM_COLORS.get(s.platform, DEFAULT_COLOR) if live else OFFLINE_COLOR,
+            "author": {"name": f"{s.name} · {s.platform}"},
+            "footer": {"text": "Kiri_Agent 直播监控"},
+        }
+        if status.url:
+            embed["url"] = status.url
+            embed["author"]["url"] = status.url
+        if status.avatar:
+            embed["author"]["icon_url"] = status.avatar
+
+        fields = []
+        if live:
+            if status.thumbnail:
+                embed["image"] = {"url": status.thumbnail}
+            if status.started_at:
+                embed["timestamp"] = status.started_at.isoformat()
+            if status.viewers is not None:
+                fields.append({"name": "观看人数", "value": f"{status.viewers:,}", "inline": True})
+            content = f"🔴 **{s.name}** 开播了！"
+            if self.mention:
+                content = f"{self.mention} {content}"
+        else:
+            if status.thumbnail:
+                embed["thumbnail"] = {"url": status.thumbnail}
+            if event.ended_at:
+                embed["timestamp"] = event.ended_at.isoformat()
+                if status.started_at:
+                    fields.append({"name": "直播时长", "value": _duration(status.started_at, event.ended_at), "inline": True})
+            content = f"⚫ **{s.name}** 下播了"
+        if fields:
+            embed["fields"] = fields
+
+        return {
+            "content": content,
+            "embeds": [embed],
+            # Only ping on go-live, and only what `mention` asks for.
+            "allowed_mentions": {"parse": ["everyone", "roles", "users"] if live and self.mention else []},
+        }
+
+    async def send(self, event: StreamEvent) -> None:
+        """Network errors and 5xx raise normally (the queue retries them); a rejected
+        webhook or payload (4xx) raises PermanentNotifyError."""
+        payload = self.build_payload(event)
+        for _ in range(3):
+            resp = await self.client.post(self.webhook_url, json=payload)
+            if resp.status_code == 429:  # rate limited: wait as told, then retry
+                try:
+                    retry_after = float(resp.json().get("retry_after", 1))
+                except ValueError:
+                    retry_after = 1.0
+                await asyncio.sleep(min(retry_after, 60))
+                continue
+            if 400 <= resp.status_code < 500:
+                raise PermanentNotifyError(f"Discord rejected the message: HTTP {resp.status_code} {resp.text[:200]}")
+            resp.raise_for_status()
+            return
+        raise RuntimeError("Discord kept rate-limiting the webhook")
+
+    async def aclose(self) -> None:
+        await self.client.aclose()
