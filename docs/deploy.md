@@ -114,6 +114,38 @@ docker compose exec kiri /app/.venv/bin/python -m backend.downloader --info <会
 - 这份 cookie 等于账号登录态，不要提交到 git，也不要发给别人。
 - 用账号跑 yt-dlp 有被 YouTube 封号的风险，下载频率别太高；能接受的话用小号开会员。
 
+## LLM 代理（经日本电脑调用 OpenAI / Claude / Gemini）
+
+这些 API 不对香港开放。服务器只让 LLM 请求经 Tailscale 走日本那台电脑出去，
+下载、监控仍从香港直连。
+
+```
+容器 ──LLM 请求──▶ Tailscale ──▶ 日本电脑 100.126.34.25:8118（backend.llm_proxy）──▶ api.openai.com 等
+```
+
+代理只接受带密码的 HTTPS 隧道，只放行 `api.openai.com`、`api.anthropic.com`、
+`generativelanguage.googleapis.com`（其他域名在电脑 `.env` 里用 `LLM_PROXY_ALLOW=a.com,b.com` 加）。
+
+**日本电脑（一次）**
+
+1. `.env` 里有 `LLM_PROXY_TOKEN=<随机密码>`（已生成）。
+2. PowerShell 跑 `.\scripts\install-llm-proxy.ps1`：登录 Windows 就在后台启动，挂了每分钟重启。日志在 `data/llm_proxy.log`。
+3. 电脑要一直开着：设置 → 系统 → 电源 → 睡眠设为「从不」。关机或睡眠时服务器的 LLM 调用会失败。
+
+**服务器**
+
+在 `~/kiri/.env` 加一行（密码就是电脑 `.env` 里的 `LLM_PROXY_TOKEN`），然后 `docker compose up -d`：
+
+```sh
+LLM_PROXY=http://kiri:<LLM_PROXY_TOKEN>@100.126.34.25:8118
+```
+
+测试（不带密码应返回 `407`，说明网络通、代理在跑）：
+
+```sh
+curl -s -o /dev/null -w "%{http_connect}\n" -x http://100.126.34.25:8118 https://api.openai.com/
+```
+
 ## 从零开始装一台新服务器
 
 1. 装 Docker（`curl -fsSL https://get.docker.com | sudo sh`）和 rsync，把部署用户加进 `docker` 组。

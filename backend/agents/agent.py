@@ -22,7 +22,7 @@ from agents import (
 )
 from agents.extensions.handoff_prompt import RECOMMENDED_PROMPT_PREFIX
 from dotenv import load_dotenv
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, DefaultAsyncHttpxClient
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -44,9 +44,12 @@ def build_model() -> Model:
             f"请从 .env.example 复制一份到 {REPO_ROOT / '.env'} 并填好。"
         )
 
+    # LLM_PROXY：只让 LLM 请求走代理（例如香港服务器经日本电脑的 backend.llm_proxy）
+    proxy = os.getenv("LLM_PROXY", "").strip()
     client = AsyncOpenAI(
         base_url=os.environ["OPENAI_BASE_URL"],
         api_key=os.environ["OPENAI_API_KEY"],
+        http_client=DefaultAsyncHttpxClient(proxy=proxy) if proxy else None,
     )
 
     # 显式构造 model 对象，而不是给 Agent 传模型名字符串，原因有两个：
