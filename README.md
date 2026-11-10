@@ -135,6 +135,19 @@ chat next to it: `.live_chat.json` (YouTube, raw yt-dlp format) or `.chat.json` 
 TwitchDownloaderCLI's layout). A channel listed in `monitor.streamers` uses that
 streamer's name; any other channel uses its display name.
 
+Every downloaded chat is also cleaned into `.chat_parsed.json` (AutoKiri's format, one
+message per line; `sc` only on YouTube Super Chats / Stickers), see
+[chat_clean.py](backend/downloader/chat_clean.py):
+
+```json
+[
+  {"time": "00:07:15", "user": "@bob", "msg": "こんゆかし :_chu:"},
+  {"time": "01:06:40", "user": "@spica", "msg": "おめでとう", "sc": "¥320"}
+]
+```
+
+`uv run -m backend.downloader --clean <file>.live_chat.json ...` cleans files downloaded earlier.
+
 - Members-only / age-restricted: a failed attempt is retried with cookies, from
   `download.cookies_file` (`data/youtube_cookies.txt`) if it exists, else from
   `download.cookies_from_browser` (default `firefox`; empty to disable). A server has

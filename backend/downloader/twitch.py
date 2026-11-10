@@ -51,7 +51,7 @@ class TwitchDownloader(PlatformDownloader):
         if self.settings.twitch_oauth:
             ydl.cookiejar.set_cookie(make_cookie("auth-token", self.settings.twitch_oauth, ".twitch.tv"))
 
-    def download_chat(self, info: VideoInfo, out_dir: Path) -> Path:
+    def download_raw_chat(self, info: VideoInfo, out_dir: Path) -> Path:
         if info.extractor != "TwitchVod":
             raise DownloadError("chat replay is only available for VODs, not clips")
         path = out_dir / f"{info.stem}.chat.json"

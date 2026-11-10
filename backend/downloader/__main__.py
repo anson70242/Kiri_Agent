@@ -9,6 +9,7 @@
     uv run -m backend.downloader --pending         # list the chat retry queue
     uv run -m backend.downloader --retry           # retry every queued chat now
     uv run -m backend.downloader --wait            # retry queued chats on schedule until done
+    uv run -m backend.downloader --clean <raw chat file>...   # (re)write .chat_parsed.json
 """
 
 import argparse
@@ -21,6 +22,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import REPO_ROOT, DownloadError, PendingChats, download, downloader_for, load_settings
+from .chat_clean import clean_chat
 
 
 def fmt_time(ts: float) -> str:
@@ -70,9 +72,21 @@ def main() -> int:
     p.add_argument("--pending", action="store_true", help="list the chat retry queue")
     p.add_argument("--retry", action="store_true", help="retry every queued chat now")
     p.add_argument("--wait", action="store_true", help="keep retrying queued chats until done")
+    p.add_argument("--clean", nargs="+", type=Path, metavar="FILE",
+                   help="clean already-downloaded .live_chat.json / .chat.json files")
     args = p.parse_args()
+    if args.clean:
+        logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")
+        bad = 0
+        for raw in args.clean:
+            try:
+                print(f"✓ {clean_chat(raw)}")
+            except (OSError, ValueError) as e:
+                print(f"✗ {raw}: {e}", file=sys.stderr)
+                bad += 1
+        return 1 if bad else 0
     if not (args.urls or args.pending or args.retry or args.wait):
-        p.error("give a URL, or --pending / --retry / --wait")
+        p.error("give a URL, or --pending / --retry / --wait / --clean")
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
 

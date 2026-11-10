@@ -150,13 +150,14 @@ class FakeDownloader(PlatformDownloader):
         p.write_bytes(b"x")
         return p
 
-    def download_chat(self, info, out_dir: Path) -> Path:
+    def download_raw_chat(self, info, out_dir: Path) -> Path:
         if "chat" in self.fail:
             raise DownloadError("chat boom")
         if "chat_not_ready" in self.fail:
             raise ChatNotReady("not yet")
-        p = out_dir / f"{info.stem}.chat.json"
-        p.write_text("{}")
+        p = out_dir / f"{info.stem}.chat.json"  # Twitch layout, so it gets cleaned
+        p.write_text(json.dumps({"comments": [{"content_offset_seconds": 61, "commenter": {"display_name": "Bob"},
+                                               "message": {"body": "hi"}}]}))
         return p
 
 
@@ -263,7 +264,8 @@ def test_retry_waits_for_schedule_then_succeeds(tmp_path, fake):
     clock.t += 1800
     r = q.retry([], st)
     [(e, path)] = r.done
-    assert path == tmp_path / "out" / "[20261110][Chan] Title.chat.json" and path.exists()
+    assert path == tmp_path / "out" / "[20261110][Chan] Title.chat_parsed.json" and path.exists()
+    assert (path.parent / "[20261110][Chan] Title.chat.json").exists()  # raw kept
     assert q.load() == [] and q.next_due() is None
 
 
@@ -310,3 +312,64 @@ def test_clean_error_drops_prefix_and_colors():
     from backend.downloader.base import clean_error
     e = Exception("\n\x1b[0;31mERROR:\x1b[0m [youtube] x: members only. Use --cookies blah")
     assert clean_error(e) == "[youtube] x: members only."
+
+
+# ---- chat cleaning ----
+
+def yt_line(offset_ms, renderer: str, body: dict) -> str:
+    return json.dumps({"replayChatItemAction": {"videoOffsetTimeMsec": str(offset_ms), "actions": [
+        {"addChatItemAction": {"item": {renderer: body}}}]}}, ensure_ascii=False)
+
+
+def test_clean_youtube_chat(tmp_path):
+    from backend.downloader.chat_clean import clean_chat
+    raw = tmp_path / "[20261005][東雲はる] t.live_chat.json"
+    raw.write_text("\n".join([
+        yt_line(3_723_456, "liveChatTextMessageRenderer", {
+            "authorName": {"simpleText": "@bob"},
+            "message": {"runs": [{"text": "hi "},
+                                 {"emoji": {"emojiId": "UC/x", "shortcuts": [":_chu:"], "isCustomEmoji": True}},
+                                 {"emoji": {"emojiId": "😀", "shortcuts": [":grinning:"]}}]}}),
+        yt_line(4_000_000, "liveChatPaidMessageRenderer", {
+            "authorName": {"simpleText": "@spica"}, "purchaseAmountText": {"simpleText": "¥100"},
+            "message": {"runs": [{"text": "おめでとう"}]}}),
+        yt_line(5_000_000, "liveChatPaidStickerRenderer", {
+            "authorName": {"simpleText": "@amy"}, "purchaseAmountText": {"simpleText": "$5.00"}}),
+        yt_line(6_000_000, "liveChatMembershipItemRenderer", {"authorName": {"simpleText": "@new"}}),
+        yt_line(7_000_000, "liveChatTextMessageRenderer", {"authorName": {"simpleText": "@e"}, "message": {"runs": []}}),
+        "not json",
+        "",
+    ]), encoding="utf-8")
+    out = clean_chat(raw)
+    assert out.name == "[20261005][東雲はる] t.chat_parsed.json"
+    assert json.loads(out.read_text(encoding="utf-8")) == [
+        {"time": "01:02:03", "user": "@bob", "msg": "hi :_chu:😀"},
+        {"time": "01:06:40", "user": "@spica", "msg": "おめでとう", "sc": "¥100"},
+        {"time": "01:23:20", "user": "@amy", "msg": "[Super Sticker]", "sc": "$5.00"},
+    ]
+    # AutoKiri's layout: one message per line
+    assert out.read_text(encoding="utf-8").count("\n") == 5
+
+
+def test_clean_twitch_chat(tmp_path):
+    from backend.downloader.chat_clean import clean_chat
+    raw = tmp_path / "x.chat.json"
+    raw.write_text(json.dumps({"comments": [
+        convert_comment(node(1, 3725, "hello")),
+        convert_comment(node(2, 3726, "   ")),
+    ]}), encoding="utf-8")
+    assert json.loads(clean_chat(raw).read_text(encoding="utf-8")) == [
+        {"time": "01:02:05", "user": "Bob", "msg": "hello"}]
+
+
+def test_clean_empty_chat_writes_empty_list(tmp_path):
+    from backend.downloader.chat_clean import clean_chat
+    raw = tmp_path / "x.chat.json"
+    raw.write_text('{"comments": []}')
+    assert json.loads(clean_chat(raw).read_text()) == []
+
+
+def test_clean_rejects_unknown_file(tmp_path):
+    from backend.downloader.chat_clean import parsed_path
+    with pytest.raises(ValueError):
+        parsed_path(tmp_path / "x.json")

@@ -1,0 +1,156 @@
+"""Turn a raw chat replay into a short, uniform list for reading and LLM prompts.
+
+Output (`<stem>.chat_parsed.json`, AutoKiri's layout, one message per line):
+
+    [
+      {"time": "00:12:34", "user": "Bob", "msg": "こんゆかし〜"},
+      {"time": "00:15:00", "user": "@spica_v", "msg": "おめでとう", "sc": "¥100"}
+    ]
+
+`time` is the offset from the start of the VOD. `sc` only appears on YouTube paid
+messages (Super Chat / Super Sticker). Messages without any text are dropped.
+Custom emotes are kept as their name (`:_chu:`, `Kappa`), standard emoji as the emoji.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from pathlib import Path
+from typing import Any
+
+log = logging.getLogger(__name__)
+
+ChatLine = dict[str, str]
+
+
+def fmt_time(seconds: float) -> str:
+    s = max(0, int(seconds))
+    return f"{s // 3600:02d}:{s % 3600 // 60:02d}:{s % 60:02d}"
+
+
+# ---- YouTube (yt-dlp live_chat: one JSON object per line) ----
+
+def parse_youtube(path: Path) -> list[ChatLine]:
+    lines: list[ChatLine] = []
+    with path.open(encoding="utf-8") as f:
+        for raw in f:
+            if not raw.strip():
+                continue
+            try:
+                item = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            replay = item.get("replayChatItemAction") or {}
+            offset = replay.get("videoOffsetTimeMsec") or item.get("videoOffsetTimeMsec")
+            for action in replay.get("actions") or []:
+                renderers = ((action.get("addChatItemAction") or {}).get("item")) or {}
+                for kind, r in renderers.items():
+                    if line := youtube_line(kind, r, offset):
+                        lines.append(line)
+    return lines
+
+
+def youtube_line(kind: str, r: dict[str, Any], offset: str | None) -> ChatLine | None:
+    if kind == "liveChatTextMessageRenderer":
+        msg, sc = youtube_runs(r.get("message")), None
+    elif kind == "liveChatPaidMessageRenderer":
+        msg, sc = youtube_runs(r.get("message")), simple_text(r.get("purchaseAmountText"))
+    elif kind == "liveChatPaidStickerRenderer":
+        label = (((r.get("sticker") or {}).get("accessibility") or {}).get("accessibilityData") or {}).get("label")
+        msg, sc = f"[Super Sticker{': ' + label if label else ''}]", simple_text(r.get("purchaseAmountText"))
+    else:  # memberships, engagement banners, polls...
+        return None
+    if not msg.strip() and not sc:
+        return None
+    if offset is not None:
+        time = fmt_time(int(offset) / 1000)
+    else:  # very old replays: only the "1:23:45" stamp shown next to the message
+        time = stamp_to_time(simple_text(r.get("timestampText")) or "0:00")
+    line = {"time": time, "user": simple_text(r.get("authorName")) or "Unknown", "msg": msg}
+    if sc:
+        line["sc"] = sc
+    return line
+
+
+def youtube_runs(message: dict[str, Any] | None) -> str:
+    out = []
+    for run in (message or {}).get("runs") or []:
+        if "text" in run:
+            out.append(run["text"])
+        elif emoji := run.get("emoji"):
+            shortcuts = emoji.get("shortcuts") or []
+            if emoji.get("isCustomEmoji") and shortcuts:
+                out.append(shortcuts[0])  # channel emote: ":_chu:"
+            else:
+                out.append(emoji.get("emojiId") or (shortcuts[0] if shortcuts else ""))
+    return "".join(out)
+
+
+def simple_text(obj: dict[str, Any] | None) -> str:
+    if not obj:
+        return ""
+    if "simpleText" in obj:
+        return obj["simpleText"]
+    return "".join(r.get("text", "") for r in obj.get("runs") or [])
+
+
+def stamp_to_time(stamp: str) -> str:
+    try:
+        parts = [int(p) for p in stamp.lstrip("-").split(":")]
+    except ValueError:
+        return "00:00:00"
+    seconds = 0
+    for p in parts:
+        seconds = seconds * 60 + p
+    return fmt_time(seconds)
+
+
+# ---- Twitch (TwitchDownloader layout, written by twitch.py) ----
+
+def parse_twitch(path: Path) -> list[ChatLine]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    lines: list[ChatLine] = []
+    for c in data.get("comments") or []:
+        message = c.get("message") or {}
+        msg = message.get("body") or ""
+        if not msg.strip():
+            continue
+        commenter = c.get("commenter") or {}
+        lines.append({
+            "time": fmt_time(c.get("content_offset_seconds") or 0),
+            "user": commenter.get("display_name") or commenter.get("name") or "Unknown",
+            "msg": msg,
+        })
+    return lines
+
+
+# ---- files ----
+
+PARSERS = {".live_chat.json": parse_youtube, ".chat.json": parse_twitch}
+PARSED_SUFFIX = ".chat_parsed.json"
+
+
+def parsed_path(raw: Path) -> Path:
+    """`<stem>.live_chat.json` / `<stem>.chat.json` -> `<stem>.chat_parsed.json`."""
+    for suffix in PARSERS:
+        if raw.name.endswith(suffix):
+            return raw.with_name(raw.name.removesuffix(suffix) + PARSED_SUFFIX)
+    raise ValueError(f"not a raw chat file: {raw.name}")
+
+
+def clean_chat(raw: Path) -> Path:
+    """Parse a raw chat file (type from its suffix) and write `<stem>.chat_parsed.json`."""
+    out = parsed_path(raw)
+    parser = next(p for s, p in PARSERS.items() if raw.name.endswith(s))
+    lines = parser(raw)
+    write_lines(lines, out)
+    log.info("chat cleaned: %d messages -> %s", len(lines), out.name)
+    return out
+
+
+def write_lines(lines: list[ChatLine], out: Path) -> None:
+    body = ",\n".join("  " + json.dumps(line, ensure_ascii=False) for line in lines)
+    tmp = out.with_name(out.name + ".part")
+    tmp.write_text(f"[\n{body}\n]\n" if lines else "[]\n", encoding="utf-8")
+    tmp.replace(out)

@@ -24,7 +24,7 @@ class YoutubeDownloader(PlatformDownloader):
     def video_options(self, outtmpl: Path) -> dict[str, Any]:
         return super().video_options(outtmpl) | {"format": VIDEO_FORMAT}
 
-    def download_chat(self, info: VideoInfo, out_dir: Path) -> Path:
+    def download_raw_chat(self, info: VideoInfo, out_dir: Path) -> Path:
         path = out_dir / f"{info.stem}.live_chat.json"
         if path.exists():
             return path

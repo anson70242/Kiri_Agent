@@ -24,6 +24,8 @@ from yt_dlp.utils import DownloadError as YtdlpError
 
 from backend.monitor import Streamer
 
+from .chat_clean import clean_chat
+
 log = logging.getLogger(__name__)
 
 
@@ -143,9 +145,18 @@ class PlatformDownloader(ABC):
             raise DownloadError(f"yt-dlp finished but {path.name} is missing")
         return path
 
-    @abstractmethod
     def download_chat(self, info: VideoInfo, out_dir: Path) -> Path:
-        """Save the chat replay next to the video and return its path."""
+        """Download the chat replay, clean it, and return the cleaned file
+        (`<stem>.chat_parsed.json`). The raw file stays next to it."""
+        raw = self.download_raw_chat(info, out_dir)
+        try:
+            return clean_chat(raw)
+        except (OSError, ValueError) as e:
+            raise DownloadError(f"chat downloaded but cleaning failed ({raw.name}): {e}") from e
+
+    @abstractmethod
+    def download_raw_chat(self, info: VideoInfo, out_dir: Path) -> Path:
+        """Save the platform's raw chat replay next to the video and return its path."""
 
     # ---- hooks for subclasses ----
 
