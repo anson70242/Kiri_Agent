@@ -12,7 +12,8 @@ services:
       - path: .env
         required: false
     volumes:
-      - kiri-data:/app/data
+      - kiri-data:/app/data  # notify state, chat retry queue, youtube_cookies.txt
+      - kiri-downloads:/app/downloads
     ports:
       # Server-local only. Reach it from your devices through `tailscale serve`
       # (see docs/deploy.md); the public IP never exposes the dashboard.
@@ -25,3 +26,4 @@ services:
 
 volumes:
   kiri-data:
+  kiri-downloads:

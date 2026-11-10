@@ -101,6 +101,9 @@ Guarantees (covered by the tests):
 - Messages are sent in order from a queue, retried up to 5 times with backoff, and
   never slow down polling. A rejected webhook (4xx) is logged and not retried.
 
+What it can't do (e.g. a whole stream that starts and ends while the monitor is down
+is missed) is listed in [docs/monitor-limitations.md](docs/monitor-limitations.md).
+
 1. Discord channel settings → Integrations → Webhooks → New Webhook → Copy Webhook URL.
 2. Put it in `.env` as `DISCORD_WEBHOOK_URL=...`.
 3. `uv run -m backend.notify` sends a test message (`--live` announces whoever is live now).
@@ -112,6 +115,49 @@ Optional `notify.discord.mention` in `config.json`: `@everyone`, `@here` or a ro
 
 New channel: add a `Notifier` subclass with `name = "<channel>"` and `send()`, import it
 in [`backend/notify/__init__.py`](backend/notify/__init__.py), add a `notify.<channel>` entry.
+
+## Downloader
+
+Downloads a YouTube / Twitch VOD and its chat replay. No external exe: video and
+metadata use the `yt-dlp` Python package (nightly pre-release, since YouTube changes
+often), its JS runtime is the `deno` pip package, and Twitch chat comes straight from
+Twitch's GQL API. Only ffmpeg must be installed (on PATH, or `download.ffmpeg`).
+
+```sh
+uv run -m backend.downloader <url>              # video + chat
+uv run -m backend.downloader <url> --no-video   # chat only (--no-chat: video only)
+uv run -m backend.downloader <url> --info       # metadata only
+uv lock --upgrade-package yt-dlp && uv sync     # update to the latest yt-dlp nightly
+```
+
+Files go to `downloads/<streamer>/<YYYYMMDD>/<title>/[date][streamer] title.mp4`, with
+chat next to it: `.live_chat.json` (YouTube, raw yt-dlp format) or `.chat.json` (Twitch,
+TwitchDownloaderCLI's layout). A channel listed in `monitor.streamers` uses that
+streamer's name; any other channel uses its display name.
+
+- Members-only / age-restricted: a failed attempt is retried with cookies, from
+  `download.cookies_file` (`data/youtube_cookies.txt`) if it exists, else from
+  `download.cookies_from_browser` (default `firefox`; empty to disable). A server has
+  no browser, so it uses the cookies file: see "YouTube 会限 cookie" in
+  [docs/deploy.md](docs/deploy.md).
+- Twitch subscriber-only VODs: set `TWITCH_OAUTH` in `.env` (the `auth-token` cookie of twitch.tv).
+- Live streams are refused. Right after a YouTube stream ends it is still processing:
+  the video is refused until it's done (run again later).
+
+YouTube chat replay often appears only hours after a stream ends. When it isn't there
+yet, the chat is queued in `data/pending_chat.json` and retried every 30 min, for up to
+48 h (`download.chat_retry`). It lands next to the video under the original file name.
+
+```sh
+uv run -m backend.downloader --pending          # list queued chats
+uv run -m backend.downloader --retry            # retry them all now
+uv run -m backend.downloader --wait             # retry on schedule until the queue is empty
+uv run -m backend.downloader <url> --wait       # download, then wait for a late chat
+```
+
+From code: `download(url, *load_settings(config))` in
+[backend/downloader/__init__.py](backend/downloader/__init__.py). A new platform is a
+`PlatformDownloader` subclass with `platform`, `url_re` and `download_chat()`.
 
 ## Tests
 

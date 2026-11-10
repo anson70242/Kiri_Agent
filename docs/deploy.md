@@ -66,7 +66,53 @@ docker compose restart         # 重启
 
 - **改主播名单**：在本地改 `config.json`，push 到 main，会自动部署。
 - **改密钥**：改服务器上的 `~/kiri/.env`，然后跑 `docker compose up -d`。
+- **下载影片**：`docker compose exec kiri /app/.venv/bin/python -m backend.downloader <url>`。
+  文件在数据卷 `kiri_kiri-downloads` 里（容器内 `/app/downloads`），
+  拿出来用 `docker compose cp kiri:/app/downloads/<主播> ./`。
 - 服务器上的服务和你本地跑的 `uv run -m backend.monitor.server` 会各自发 Discord 通知。服务器部署好以后，本地就不要再开着监控了，否则会收到两份通知。
+
+## YouTube 会限 cookie
+
+服务器没有浏览器，所以会限影片靠一份 cookie 文件：容器里的 `/app/data/youtube_cookies.txt`
+（数据卷 `kiri_kiri-data`，部署不会动它）。普通下载失败时，下载器会带上这份 cookie 重试一次。
+
+**1. 本机导出（Firefox）**
+
+1. 装扩展 [cookies.txt](https://addons.mozilla.org/firefox/addon/cookies-txt/)，并在扩展设置里允许它在无痕窗口运行。
+2. 开一个新的无痕窗口（`Ctrl+Shift+P`），登录有会员资格的 YouTube 账号。
+3. 在同一个分页打开 `https://www.youtube.com/robots.txt`（只开这一个无痕分页）。
+4. 用扩展导出当前网站的 cookie，存成 `youtube_cookies.txt`。
+5. 关掉无痕窗口，之后别再用这个会话登录 YouTube，否则 YouTube 会轮换 cookie，导出的就失效了。
+
+**2. 传到服务器（本机 PowerShell）**
+
+```sh
+scp youtube_cookies.txt HK-Server:~/
+```
+
+**3. 放进容器（服务器上）**
+
+```sh
+cd ~/kiri
+docker compose cp ~/youtube_cookies.txt kiri:/app/data/youtube_cookies.txt
+docker compose exec -u root kiri sh -c 'chown app /app/data/youtube_cookies.txt && chmod 600 /app/data/youtube_cookies.txt'
+rm ~/youtube_cookies.txt        # 别在家目录留副本
+```
+
+`chown` 不能省：yt-dlp 会把更新后的 cookie 写回这个文件，文件要归容器里的 `app` 用户才写得进去。
+
+**4. 测试**
+
+```sh
+docker compose exec kiri /app/.venv/bin/python -m backend.downloader --info <会限影片链接>
+```
+
+能印出标题就是成功。日志里出现 `retrying with cookies file youtube_cookies.txt` 表示用到了这份 cookie。
+
+**失效了怎么办**：报错里有 `Sign in`、`members-only` 或 `This content isn't available`，就照上面重新导出一份，覆盖旧文件。
+
+- 这份 cookie 等于账号登录态，不要提交到 git，也不要发给别人。
+- 用账号跑 yt-dlp 有被 YouTube 封号的风险，下载频率别太高；能接受的话用小号开会员。
 
 ## 从零开始装一台新服务器
 

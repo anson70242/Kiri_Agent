@@ -8,6 +8,9 @@ ENV UV_COMPILE_BYTECODE=1 \
     UV_PYTHON_DOWNLOADS=never \
     PYTHONUNBUFFERED=1
 
+# ffmpeg: the downloader merges / remuxes video with it.
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg     && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # Dependencies first: this layer is reused until pyproject.toml / uv.lock change.
@@ -18,8 +21,9 @@ COPY backend ./backend
 COPY frontend ./frontend
 COPY config.json ./
 
-# Run as a normal user; data/ holds notify state and is a volume (see docker-compose.yml).
-RUN useradd --create-home --uid 10001 app && mkdir -p /app/data && chown app /app/data
+# Run as a normal user. data/ (notify state, cookies) and downloads/ are volumes
+# (see docker-compose.yml); a new volume copies this ownership.
+RUN useradd --create-home --uid 10001 app && mkdir -p /app/data /app/downloads     && chown app /app/data /app/downloads
 USER app
 
 EXPOSE 8770
