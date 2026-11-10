@@ -272,7 +272,7 @@ def norm(channel: str) -> str:
 
 def clean_error(e: Exception) -> str:
     """First line of a yt-dlp error, without its generic "how to pass cookies" advice."""
-    msg = str(e).removeprefix("ERROR: ").strip()
+    msg = re.sub(r"\x1b\[[0-9;]*m", "", str(e)).strip().removeprefix("ERROR:").strip()
     if not msg:
         return type(e).__name__
     return msg.splitlines()[0].split(" Use --cookies", 1)[0].strip()

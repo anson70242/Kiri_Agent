@@ -304,3 +304,9 @@ def test_cookie_retry_prefers_cookies_file(tmp_path):
     f.write_text("# Netscape HTTP Cookie File\n")
     assert dl.cookie_source()[1] == {"cookiefile": str(f)}
     assert YoutubeDownloader(DownloadSettings(cookies_file=tmp_path / "none")).cookie_source() is None
+
+
+def test_clean_error_drops_prefix_and_colors():
+    from backend.downloader.base import clean_error
+    e = Exception("\n\x1b[0;31mERROR:\x1b[0m [youtube] x: members only. Use --cookies blah")
+    assert clean_error(e) == "[youtube] x: members only."
