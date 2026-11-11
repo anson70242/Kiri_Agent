@@ -86,8 +86,8 @@
   .density { margin-top: 12px; }
   .density h3, .chat h3 { font-size: 13px; color: var(--muted); margin: 0 0 6px; font-weight: 600;
     display: flex; align-items: center; gap: 8px; }
-  canvas { width: 100%; height: 90px; display: block; cursor: pointer; }
-  .chat { display: flex; flex-direction: column; height: min(75vh, 720px); }
+  canvas { width: 100%; height: 48px; display: block; cursor: pointer; }
+  .chat { display: flex; flex-direction: column; height: min(88vh, 960px); }
   .chat label { margin-left: auto; font-weight: 400; display: flex; align-items: center; gap: 4px; cursor: pointer; }
   .chat label input { padding: 0; }
   .msgs { flex: 1; overflow-y: auto; font-size: 13px; border-top: 1px solid var(--border); }
@@ -99,10 +99,11 @@
   .msg .sc { background: var(--up-bg); color: var(--up); border-radius: 4px; padding: 0 4px; margin-right: 6px; font-weight: 600; }
   @media (max-width: 860px) { .chat { height: 60vh; } }
   /* Left column = video panel + transcript panel, together as tall as the chat panel */
-  .leftcol { display: flex; flex-direction: column; gap: 14px; height: min(75vh, 720px); min-width: 0; }
+  .leftcol { display: flex; flex-direction: column; gap: 14px; height: min(88vh, 960px); min-width: 0; }
   .leftcol > .panel:first-child { flex: none; }
-  .leftcol video { max-height: 42vh; }
-  .subs { flex: 1; min-height: 120px; display: flex; flex-direction: column; }
+  .leftcol video { max-height: 40vh; }
+  .leftcol .density { margin-top: 8px; }
+  .subs { flex: 1; min-height: 240px; display: flex; flex-direction: column; }
   .subs h3 { font-size: 13px; color: var(--muted); margin: 0 0 6px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
   .subs label { margin-left: auto; font-weight: 400; display: flex; align-items: center; gap: 4px; cursor: pointer; }
   .subs label input { padding: 0; }
