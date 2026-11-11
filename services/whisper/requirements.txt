@@ -1,5 +1,13 @@
-faster-whisper>=1.2.1
-fastapi>=0.115.0
-uvicorn[standard]>=0.34.0
-python-multipart>=0.0.18
-numpy>=1.26.0
+# Pinned to the versions of the image that has been running fine (Yaki_Agent's
+# whisper-server). Unpinned, a fresh build pulled av 19, whose av.open() no longer
+# takes the `metadata_errors` argument faster-whisper 1.2.1 passes: every request 500s.
+faster-whisper==1.2.1
+av==17.0.0
+ctranslate2==4.7.1
+onnxruntime==1.24.4
+tokenizers==0.22.2
+numpy==2.4.4
+fastapi==0.136.0
+starlette==1.0.0
+uvicorn[standard]==0.44.0
+python-multipart==0.0.26

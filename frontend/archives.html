@@ -201,23 +201,24 @@ const dur = s => s >= 3600 ? `${Math.floor(s / 3600)} 小时 ${Math.floor(s / 60
 function drawDownloads() {
   const box = document.getElementById("downloads");
   if (!box || !downloads) return;
-  const { active, queue } = downloads;
-  const waiting = queue.filter(j => !active || j.url !== active.url);
+  const { active, queue } = downloads;  // active: up to one download + one transcription
+  const busy = new Set(active.map(a => `${a.stage} ${a.url}`));
+  const waiting = queue.filter(j => !busy.has(`${j.stage} ${j.url}`));
   let html = "";
-  if (active) {
-    const pct = active.percent;
+  for (const a of active) {
+    const pct = a.percent;
     const parts = [];
-    if (active.total) parts.push(`${size(active.downloaded)} / ${size(active.total)}`);
-    else if (active.downloaded) parts.push(size(active.downloaded));
-    if (active.speed) parts.push(`${size(active.speed)}/s`);
-    if (active.eta != null) parts.push(`剩余 ${dur(active.eta)}`);
+    if (a.total) parts.push(`${size(a.downloaded)} / ${size(a.total)}`);
+    else if (a.downloaded) parts.push(size(a.downloaded));
+    if (a.speed) parts.push(`${size(a.speed)}/s`);
+    if (a.eta != null) parts.push(`剩余 ${dur(a.eta)}`);
     html += `<div class="job active"><div class="head">
-        <span class="chip dl">${active.stage === "transcribe" ? "转写字幕中"
+        <span class="chip dl">${a.stage === "transcribe" ? "转写字幕中"
           : pct == null ? "准备中" : `下载中 ${pct.toFixed(1)}%`}</span>
-        <span class="creator">${esc(active.name)}</span>
-        <span class="title">${esc(active.title || active.url)}</span>
+        <span class="creator">${esc(a.name)}</span>
+        <span class="title">${esc(a.title || a.url)}</span>
         <span class="meta">${esc(parts.join(" · "))}</span></div>
-      ${active.stage === "transcribe" ? `<div class="meta">已用 ${dur(Date.now() / 1000 - active.started)}（4 小时直播约 20 分钟）</div>`
+      ${a.stage === "transcribe" ? `<div class="meta">已用 ${dur(Date.now() / 1000 - a.started)}（4 小时直播约 20 分钟）</div>`
         : `<div class="bar"><div style="width:${pct ?? 0}%"></div></div>`}</div>`;
   }
   html += waiting.map(j => `<div class="job"><div class="head">
@@ -233,12 +234,13 @@ async function pollDownloads() {
   try {
     const r = await fetch("/api/downloads");
     const next = await r.json();
-    const finished = downloads?.active && !next.active;
+    // a job left the active list: a download or transcription just ended
+    const finished = (downloads?.active || []).some(a => !(next.active || []).some(b => b.url === a.url && b.stage === a.stage));
     downloads = next.enabled ? next : null;
     drawDownloads();
     if (finished && !location.hash) load();  // a download just ended: refresh the list (not a detail page)
   } catch {}
-  setTimeout(pollDownloads, downloads?.active ? 2000 : 10000);
+  setTimeout(pollDownloads, downloads?.active?.length ? 2000 : 10000);
 }
 
 // ---- Detail view ----

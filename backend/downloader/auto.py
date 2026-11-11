@@ -1,7 +1,8 @@
 """Download a stream's archive automatically once it ends.
 
     LiveNotifier ("stream ended") -> AutoDownloader.on_ended (queue a job)
-    -> AutoDownloader.run (one job at a time, in a thread) -> Discord via LiveNotifier.send
+    -> AutoDownloader.run (a download worker and a transcription worker, each one job
+       at a time, in threads) -> Discord via LiveNotifier.send
 
 config.json:
 
@@ -48,6 +49,7 @@ from .pending import PendingChats
 log = logging.getLogger(__name__)
 
 NOT_READY = ("is_live", "is_upcoming", "post_live")
+STAGES = ("download", "transcribe")
 AUTH_HINTS = ("member", "sign in", "cookie", "login", "subscriber", "private")
 
 
@@ -115,8 +117,9 @@ class AutoDownloader:
         self.max_errors = max_errors
         self.notify = notify
         self.clock = clock
-        self._wake = asyncio.Event()
-        self._active: dict[str, Any] | None = None  # job being downloaded + progress
+        # Two workers, one per stage, so a long transcription never holds up downloads.
+        self._wake = {stage: asyncio.Event() for stage in STAGES}
+        self._active: dict[str, dict[str, Any] | None] = dict.fromkeys(STAGES)  # job + progress
 
     # ---- queue ----
 
@@ -149,12 +152,13 @@ class AutoDownloader:
         jobs.append(job)
         self.save(jobs)
         log.info("auto-download queued: %s %s", status.streamer.name, status.url)
-        self._wake.set()
+        self._wake["download"].set()
 
     def snapshot(self) -> dict[str, Any]:
         """What's downloading now and what's queued, for the archives page."""
         return {
-            "active": dict(a) if (a := self._active) else None,  # copy: the thread mutates it
+            # copies: the worker threads mutate them
+            "active": [dict(a) for stage in STAGES if (a := self._active[stage])],
             "queue": [
                 {
                     "name": j.status.streamer.name,
@@ -174,36 +178,42 @@ class AutoDownloader:
     # ---- worker ----
 
     async def run(self) -> None:
-        """Process due jobs forever (one at a time), plus the late-chat retry queue."""
+        """Process due jobs forever: one download and one transcription at a time,
+        side by side. The download worker also retries late chats."""
+        await asyncio.gather(*(self.run_stage(stage) for stage in STAGES))
+
+    async def run_stage(self, stage: str) -> None:
+        wake = self._wake[stage]
         while True:
-            self._wake.clear()
+            wake.clear()
             try:
-                await self.run_due()
-                await self.retry_chats()
+                await self.run_due(stage)
+                if stage == "download":
+                    await self.retry_chats()
             except Exception:  # noqa: BLE001 - keep the worker alive
-                log.exception("auto-download worker error")
+                log.exception("%s worker error", stage)
             try:
-                await asyncio.wait_for(self._wake.wait(), self.sleep_time())
+                await asyncio.wait_for(wake.wait(), self.sleep_time(stage))
             except TimeoutError:
                 pass
 
-    def sleep_time(self) -> float:
-        times = [j.next_try for j in self.load()]
-        if queue := PendingChats.from_settings(self.settings):
+    def sleep_time(self, stage: str | None = None) -> float:
+        times = [j.next_try for j in self.load() if stage in (None, j.stage)]
+        if stage in (None, "download") and (queue := PendingChats.from_settings(self.settings)):
             if (due := queue.next_due()) is not None:
                 times.append(due)
         if not times:
             return 300
         return min(300.0, max(1.0, min(times) - self.clock()))
 
-    async def run_due(self) -> None:
-        while job := self.next_due():
+    async def run_due(self, stage: str | None = None) -> None:
+        while job := self.next_due(stage):
             outcome = await asyncio.to_thread(self.attempt, job)
             self.finish(job, outcome)
 
-    def next_due(self) -> Job | None:
+    def next_due(self, stage: str | None = None) -> Job | None:
         now = self.clock()
-        due = [j for j in self.load() if j.next_try <= now]
+        due = [j for j in self.load() if j.next_try <= now and stage in (None, j.stage)]
         return min(due, key=lambda j: j.next_try) if due else None
 
     def attempt(self, job: Job) -> Outcome:
@@ -219,14 +229,15 @@ class AutoDownloader:
             info = dl.info(url)
             if info.live_status in NOT_READY:
                 return Outcome("wait", f"stream is {info.live_status}")
-            self._active = {"name": s.streamer.name, "platform": s.streamer.platform,
-                            "title": s.title, "url": s.url, "started": self.clock(), "stage": "download",
-                            "percent": None, "downloaded": 0, "total": None, "speed": None, "eta": None}
+            self._active["download"] = {
+                "name": s.streamer.name, "platform": s.streamer.platform, "title": s.title, "url": s.url,
+                "started": self.clock(), "stage": "download",
+                "percent": None, "downloaded": 0, "total": None, "speed": None, "eta": None}
             result = download(url, self.settings, self.streamers, info=info, progress=self._on_progress)
         except DownloadError as e:
             return Outcome("error", str(e))
         finally:
-            self._active = None
+            self._active["download"] = None
         if err := result.errors.get("video"):
             return Outcome("error", err, result)
         pruned = self.prune(result.output_dir, self.keep.get(s.streamer.id, 6))
@@ -234,21 +245,22 @@ class AutoDownloader:
 
     def attempt_transcribe(self, job: Job) -> Outcome:
         s = job.status
-        self._active = {"name": s.streamer.name, "platform": s.streamer.platform, "title": s.title,
-                        "url": s.url, "started": self.clock(), "stage": "transcribe", "percent": None,
-                        "downloaded": 0, "total": None, "speed": None, "eta": None}
+        self._active["transcribe"] = {
+            "name": s.streamer.name, "platform": s.streamer.platform, "title": s.title, "url": s.url,
+            "started": self.clock(), "stage": "transcribe",
+            "percent": None, "downloaded": 0, "total": None, "speed": None, "eta": None}
         try:
             assert self.transcribe and job.video
             self.transcribe(Path(job.video))
         except Exception as e:  # noqa: BLE001 - ASR, ffmpeg or a missing file: all retried
             return Outcome("error", str(e) or type(e).__name__)
         finally:
-            self._active = None
+            self._active["transcribe"] = None
         return Outcome("done")
 
     def _on_progress(self, d: dict[str, Any]) -> None:
         """yt-dlp progress hook (runs in the download thread)."""
-        active = self._active
+        active = self._active["download"]
         if active is None or d.get("status") != "downloading":
             return
         done = d.get("downloaded_bytes") or 0
@@ -285,7 +297,7 @@ class AutoDownloader:
                 current.attempts, current.errors, current.last_error = 0, 0, ""
                 current.next_try = now
                 self.save(rest + [current])
-                self._wake.set()
+                self._wake["transcribe"].set()
             else:
                 self.save(rest)
             return

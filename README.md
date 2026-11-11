@@ -171,7 +171,7 @@ From code: `download(url, *load_settings(config))` in
 
 When the monitor reports a stream ended (same rule as the "ended" Discord message), the
 archive of a streamer with `"auto_download": true` in `monitor.streamers` is queued and
-downloaded (video ≤ `download.max_height`, default 1080p, plus chat), one at a time, by
+downloaded (video ≤ `download.max_height`, default 1080p, plus chat) by
 the dashboard server or `uv run -m backend.monitor`. See
 [auto.py](backend/downloader/auto.py).
 
@@ -187,7 +187,9 @@ the dashboard server or `uv run -m backend.monitor`. See
 
 ## Transcription
 
-After an auto-download, the same queue job moves to a "transcribe" stage: ffmpeg
+After an auto-download, the same queue job moves to a "transcribe" stage. Downloads and
+transcriptions have a worker each (one download + one transcription at a time, side by
+side), so a long transcription never holds up the next download. ffmpeg
 extracts the audio (16 kHz mono Opus) and the whole stream is sent to the `whisper`
 service ([services/whisper](services/whisper), faster-whisper large-v3-turbo, started by
 `docker-compose.yml` on the GPU, reachable only from kiri). Result next to the video:

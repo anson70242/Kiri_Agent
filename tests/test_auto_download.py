@@ -3,6 +3,8 @@
 import asyncio
 import json
 import os
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -150,11 +152,51 @@ def test_transcription_failures_give_up_with_message(tmp_path):
     assert "CUDA OOM" in sent[1].detail
 
 
+def test_downloads_keep_going_while_a_transcription_runs(tmp_path, monkeypatch):
+    release = threading.Event()
+    downloaded_b = threading.Event()
+
+    def slow_transcribe(video):
+        assert release.wait(5), "transcription never released"
+
+    def fake_download(url, settings, streamers, info=None, progress=None):
+        downloaded_b.set()
+        out = settings.output_dir / "B" / "20261110" / "b"
+        out.mkdir(parents=True)
+        return DownloadResult(info, out, video=out / "b.mp4")
+
+    monkeypatch.setattr(auto_mod, "downloader_for", lambda *a: FakeDL())
+    monkeypatch.setattr(auto_mod, "download", fake_download)
+    ad, _, _ = make(tmp_path, keep={A.id: 2, B.id: 2}, transcribe=slow_transcribe)
+    ad.clock = time.time
+    ad.on_ended(ended(A))
+    ad.finish(ad.next_due(), downloaded(tmp_path))  # A: waiting for transcription
+    ad.on_ended(ended(B, "b1"))  # B: waiting for download
+
+    async def scenario():
+        worker = asyncio.create_task(ad.run())
+        try:
+            # B downloads while A's transcription is still blocked.
+            assert await asyncio.to_thread(downloaded_b.wait, 3)
+            assert "transcribe" in [a["stage"] for a in ad.snapshot()["active"]]
+            release.set()
+            for _ in range(100):
+                await asyncio.sleep(0.02)
+                if not [j for j in ad.load() if j.stage == "transcribe" and j.status.streamer == A]:
+                    break
+        finally:
+            release.set()
+            worker.cancel()
+
+    asyncio.run(scenario())
+    assert all(j.status.streamer != A for j in ad.load())  # A transcribed and done
+
+
 # ---- progress snapshot (what the archives page shows) ----
 
 def test_snapshot_lists_queued_jobs(tmp_path):
     ad, clock, _ = make(tmp_path)
-    assert ad.snapshot() == {"active": None, "queue": []}
+    assert ad.snapshot() == {"active": [], "queue": []}
     ad.on_ended(ended())
     job = ad.next_due()
     ad.finish(job, Outcome("wait", "stream is post_live"))
@@ -214,7 +256,7 @@ def test_snapshot_shows_progress_while_downloading(tmp_path, monkeypatch):
         # yt-dlp progress hook payload (fragmented download: estimate, no total)
         progress({"status": "downloading", "downloaded_bytes": 250, "total_bytes_estimate": 1000,
                   "speed": 50.0, "eta": 15})
-        seen["active"] = ad.snapshot()["active"]
+        (seen["active"],) = ad.snapshot()["active"]
         return DownloadResult(info, out, video=out / "x.mp4")
 
     monkeypatch.setattr(auto_mod, "download", fake_download)
@@ -225,7 +267,7 @@ def test_snapshot_shows_progress_while_downloading(tmp_path, monkeypatch):
     assert active["name"] == "A" and active["title"] == "title v1"
     assert active["percent"] == 25.0
     assert (active["downloaded"], active["total"], active["speed"], active["eta"]) == (250, 1000, 50.0, 15)
-    assert ad.snapshot()["active"] is None  # cleared once the attempt is over
+    assert ad.snapshot()["active"] == []  # cleared once the attempt is over
 
 
 def test_attempt_video_error(tmp_path, monkeypatch):

@@ -30,7 +30,7 @@ def test_downloads_lists_queue(tmp_path):
 
     body = TestClient(create_app(cfg)).get("/api/downloads").json()
 
-    assert body["enabled"] is True and body["active"] is None
+    assert body["enabled"] is True and body["active"] == []
     (row,) = body["queue"]
     assert (row["name"], row["title"], row["attempts"], row["next_try"]) == ("A", "title v1", 1, 200.0)
 
@@ -38,4 +38,4 @@ def test_downloads_lists_queue(tmp_path):
 def test_downloads_when_auto_download_is_off(tmp_path):
     cfg = write_config(tmp_path, auto=False)
     body = TestClient(create_app(cfg)).get("/api/downloads").json()
-    assert body == {"enabled": False, "active": None, "queue": []}
+    assert body == {"enabled": False, "active": [], "queue": []}
