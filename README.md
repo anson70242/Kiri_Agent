@@ -76,9 +76,10 @@ setting `platform = "<name>"` and implementing `_check()`, then import it in
 ## Go-live notifications
 
 When a monitored streamer goes from offline / upcoming to live, the monitor (both the
-dashboard server and `uv run -m backend.monitor`) sends a Discord message. Streamers
-already live at startup are skipped (`notify.on_startup: true` to change that), and the
-same stream is never announced twice.
+dashboard server and `uv run -m backend.monitor`) sends a Discord message. On the very
+first start (no `data/notify_state.json` yet) streamers already live are skipped
+(`notify.on_startup: true` to change that); a streamer added to the config later is
+announced even if already live. The same stream is never announced twice.
 
 When a stream ends it sends an "ended" message with the stream's duration, after the
 streamer stays not-live for `notify.offline_grace` seconds (default 120), so a brief

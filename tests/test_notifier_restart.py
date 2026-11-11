@@ -5,7 +5,7 @@ import json
 
 from backend.notify import LiveNotifier
 
-from .helpers import LIVE, OFFLINE, Recorder, ev, live, off
+from .helpers import LIVE, OFFLINE, B, Recorder, ev, live, off
 
 GRACE = 0.05
 
@@ -62,6 +62,22 @@ def test_went_live_while_down_is_reported_after_restart(tmp_path):
         session(f, [(live(), None)]),
     )
     assert second == [ev(LIVE)]
+
+
+def test_fresh_start_skips_streamers_already_live(tmp_path):
+    f = tmp_path / "s.json"
+    (events,) = run(session(f, [(live(), None), (live(B, sid="b1"), None)]))
+    assert events == []
+
+
+def test_streamer_added_to_config_while_live_is_announced(tmp_path):
+    f = tmp_path / "s.json"
+    _, second = run(
+        session(f, [(off(), None)]),
+        # B was added to the config and is already live at the restart.
+        session(f, [(off(), None), (live(B, sid="b1"), None)]),
+    )
+    assert second == [ev(LIVE, "b1", B)]
 
 
 def test_restart_inside_grace_window_still_reports_ended(tmp_path):

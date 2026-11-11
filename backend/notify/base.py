@@ -66,8 +66,9 @@ class LiveNotifier:
     Register `on_change` in `StreamMonitor.on_change`.
 
     Rules, per streamer:
-    - Went live: a new broadcast is seen live. Never announced twice. A streamer seen
-      for the very first time (no saved state) is skipped unless `notify_on_startup`.
+    - Went live: a new broadcast is seen live. Never announced twice. On a fresh start
+      (no saved state at all) streamers already live are skipped unless
+      `notify_on_startup`; a streamer newly added to an existing setup is announced.
     - Ended: the live broadcast stays not-live for `offline_grace` seconds. If the same
       broadcast comes back within that window nothing is sent. If a *different*
       broadcast appears, the old one is reported ended first, then the new one live.
@@ -101,6 +102,10 @@ class LiveNotifier:
         # streamer id -> current live broadcast, or None if known not live.
         # A missing key means "never seen" (first sighting).
         self._live: dict[str, StreamStatus | None] = self._load_state()
+        # No saved state at all (first deploy, wiped volume): whoever is live now was
+        # live before we existed, so don't flood the channel. With saved state, a
+        # streamer missing from it was just added to the config and is announced.
+        self._fresh_start = not self._live
         self._pending_end: dict[str, asyncio.Task[None]] = {}
         self._queue: asyncio.Queue[StreamEvent] | None = None
         self._worker: asyncio.Task[None] | None = None
@@ -129,7 +134,8 @@ class LiveNotifier:
                 new = replace(new, stream_id=prev.stream_id)
             self._live[sid] = new
             self._save_state()
-            if not same and (not first_sighting or self.notify_on_startup):
+            skip = first_sighting and self._fresh_start and not self.notify_on_startup
+            if not same and not skip:
                 self._enqueue(StreamEvent(EventKind.LIVE, new))
         elif prev is not None:
             if sid not in self._pending_end:
