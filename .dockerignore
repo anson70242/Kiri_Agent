@@ -6,6 +6,9 @@ venv
 data
 tests
 docs
+services
+downloads
+reference
 **/__pycache__
 *.py[cod]
 .pytest_cache

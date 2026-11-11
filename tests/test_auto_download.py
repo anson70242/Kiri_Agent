@@ -107,6 +107,49 @@ def test_job_added_during_attempt_is_kept(tmp_path):
     assert sorted(j.status.streamer.id for j in ad.load()) == sorted([A.id, B.id])
 
 
+# ---- transcription stage ----
+
+def downloaded(tmp_path):
+    video = tmp_path / "v.mp4"
+    video.write_bytes(b"x")
+    info = VideoInfo("youtube", "v1", "u", "t", "@a", "A", "20261110")
+    return Outcome("done", result=DownloadResult(info, tmp_path, video=video))
+
+
+def test_download_done_moves_job_to_transcription(tmp_path):
+    calls = []
+    ad, _, sent = make(tmp_path, transcribe=calls.append)
+    ad.on_ended(ended())
+    ad.finish(ad.next_due(), downloaded(tmp_path))
+
+    assert [e.kind for e in sent] == [EventKind.DOWNLOADED]
+    (job,) = ad.load()
+    assert job.stage == "transcribe" and job.video == str(tmp_path / "v.mp4")
+    assert ad.snapshot()["queue"][0]["stage"] == "transcribe"
+
+    outcome = ad.attempt(ad.next_due())
+    assert outcome.kind == "done" and calls == [tmp_path / "v.mp4"]
+    ad.finish(job, outcome)
+    assert ad.load() == []
+
+
+def test_transcription_failures_give_up_with_message(tmp_path):
+    def boom(video):
+        raise RuntimeError("whisper request failed: 500 CUDA OOM")
+
+    ad, clock, sent = make(tmp_path, transcribe=boom)
+    ad.on_ended(ended())
+    ad.finish(ad.next_due(), downloaded(tmp_path))
+    for _ in range(3):
+        job = ad.next_due()
+        ad.finish(job, ad.attempt(job))
+        clock.t += 900
+
+    assert ad.load() == []
+    assert [e.kind for e in sent] == [EventKind.DOWNLOADED, EventKind.TRANSCRIBE_FAILED]
+    assert "CUDA OOM" in sent[1].detail
+
+
 # ---- progress snapshot (what the archives page shows) ----
 
 def test_snapshot_lists_queued_jobs(tmp_path):
@@ -272,8 +315,21 @@ def test_load_auto_from_config(tmp_path):
     assert ad.keep == {"youtube:@a": 6, "twitch:b": 2}
     assert ad.retry_interval == 300
 
+    assert ad.transcribe is None  # no "asr" section: download only
+
     cfg.write_text(json.dumps({"monitor": {"streamers": [{"platform": "youtube", "channel": "@c"}]}}), encoding="utf-8")
     assert load_auto(cfg) is None
+
+
+def test_load_auto_with_asr(tmp_path):
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({
+        "monitor": {"streamers": [{"name": "A", "platform": "youtube", "channel": "@a", "auto_download": True}]},
+        "asr": {"url": "http://whisper:8000", "language": "ja"},
+    }), encoding="utf-8")
+    ad = load_auto(cfg)
+    assert ad.transcribe is not None
+    assert ad.transcribe.keywords["settings"].url == "http://whisper:8000"
 
 
 def test_discord_download_payloads():
@@ -282,6 +338,8 @@ def test_discord_download_payloads():
     bad = d.build_payload(StreamEvent(EventKind.DOWNLOAD_FAILED, live(), detail="boom"))
     assert "回放已下载" in ok["content"] and ok["embeds"][0]["description"] == "影片：x.mp4"
     assert "失败" in bad["content"] and bad["allowed_mentions"] == {"parse": []}
+    asr = d.build_payload(StreamEvent(EventKind.TRANSCRIBE_FAILED, live(), detail="whisper down"))
+    assert "字幕转写失败" in asr["content"] and asr["embeds"][0]["description"] == "whisper down"
     asyncio.run(d.aclose())
 
 

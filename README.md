@@ -16,7 +16,8 @@ Tencent Docs) so a team can split up the clipping work. A human still makes the 
 | Chat cleaning | Raw chat → `{"time","user","msg"}` lines | done |
 | [Auto download](#auto-download) | Stream ends → archive downloaded, old ones pruned, Discord report | done |
 | Chat density | Messages per minute, spikes, Super Chats → candidate highlight times | planned |
-| Segment analysis | Transcribe, split the VOD into segments, LLM summary + score per segment | planned |
+| [Transcription](#transcription) | Downloaded VOD → `<stem>.transcript.json` via faster-whisper on the GPU | done |
+| Segment analysis | 5-minute segments, LLM summary + score per segment | planned |
 | Highlight report | Ranked timeline for editors | planned |
 | Sheet upload | Push the report to Google Sheets / Tencent Docs (docs.qq.com) | planned |
 
@@ -183,6 +184,25 @@ the dashboard server or `uv run -m backend.monitor`. See
   oldest go first.
 - The queue is `data/download_queue.json`, so a restart (deploy) resumes it; late chats
   use the chat retry queue below.
+
+## Transcription
+
+After an auto-download, the same queue job moves to a "transcribe" stage: ffmpeg
+extracts the audio (16 kHz mono Opus) and the whole stream is sent to the `whisper`
+service ([services/whisper](services/whisper), faster-whisper large-v3-turbo, started by
+`docker-compose.yml` on the GPU, reachable only from kiri). Result next to the video:
+
+```json
+[
+  {"start": 0.0, "end": 2.0, "text": "ちょっと話がまじで噛み合わへんくて"},
+  {"start": 3.0, "end": 5.0, "text": "なんか味せえへんやんみたいな"}
+]
+```
+
+About 13× realtime on a GTX 1660 (a 4 h stream in ~20 min). Failures are retried
+`download.auto.max_errors` times, then Discord gets a "字幕转写失败" message. Configure
+with the `asr` section of `config.json` (`url`, `language`, `vad`; remove it to skip
+transcription). By hand: `uv run -m backend.asr <video> --url http://...:8000`.
 
 ## Tests
 

@@ -36,7 +36,7 @@ class DiscordNotifier(Notifier):
         self.client = client or httpx.AsyncClient(timeout=15)
 
     def build_payload(self, event: StreamEvent) -> dict[str, Any]:
-        if event.kind in (EventKind.DOWNLOADED, EventKind.DOWNLOAD_FAILED):
+        if event.kind in (EventKind.DOWNLOADED, EventKind.DOWNLOAD_FAILED, EventKind.TRANSCRIBE_FAILED):
             return self.download_payload(event)
         status = event.status
         s = status.streamer
@@ -98,7 +98,8 @@ class DiscordNotifier(Notifier):
             embed["author"]["icon_url"] = status.avatar
         if event.detail:
             embed["description"] = event.detail[:4000]
-        verb = "回放已下载" if ok else "回放下载失败"
+        verb = {EventKind.DOWNLOADED: "回放已下载", EventKind.DOWNLOAD_FAILED: "回放下载失败",
+                EventKind.TRANSCRIBE_FAILED: "字幕转写失败"}[event.kind]
         return {
             "content": f"{'📥' if ok else '❗'} **{s.name}** {verb}",
             "embeds": [embed],

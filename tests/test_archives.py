@@ -24,6 +24,7 @@ def client(tmp_path):
         {"time": "00:02:10", "user": "c", "msg": "8888", "sc": "¥500"},
     ]
     (done / f"{STEM}.chat_parsed.json").write_text(json.dumps(chat), encoding="utf-8")
+    (done / f"{STEM}.transcript.json").write_text('[{"start": 1.0, "end": 2.0, "text": "やっほー"}]', encoding="utf-8")
     partial = out / "柊優花/20261106/雑談"
     partial.mkdir(parents=True)
     (partial / "[20261106][柊優花] 雑談.mp4.part").write_bytes(b"xx")
@@ -44,6 +45,8 @@ def test_list(client):
     assert done["video"] == f"{STEM}.mp4" and done["video_size"] == 10
     assert not done["downloading"]
     assert done["has_chat"] and done["chat_count"] == 3
+    assert done["transcript_file"] == f"{STEM}.transcript.json"
+    assert newest["transcript_file"] is None
 
 
 def test_list_missing_dir(tmp_path):

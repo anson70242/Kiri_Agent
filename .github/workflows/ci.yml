@@ -25,6 +25,9 @@ jobs:
       - name: Install Python and dependencies
         run: uv sync --locked
 
+      - name: Install ffmpeg (audio extraction tests)
+        run: sudo apt-get update -q && sudo apt-get install -y -q ffmpeg
+
       # Network tests (real YouTube / Twitch) are skipped by default; see pyproject.toml.
       - name: Run tests
         run: uv run pytest -q
@@ -36,6 +39,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check docker-compose.yml
+        run: docker compose config --quiet
+
+      # The whisper image (CUDA + model, ~7 GB) is only built on the server.
       - name: Build image
         run: docker build -t kiri-agent:ci .
 

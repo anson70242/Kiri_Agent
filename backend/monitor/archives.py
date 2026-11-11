@@ -16,6 +16,7 @@ from .__main__ import REPO_ROOT
 
 PAGE = REPO_ROOT / "frontend" / "archives.html"
 CHAT_SUFFIX = ".chat_parsed.json"
+TRANSCRIPT_SUFFIX = ".transcript.json"  # backend.asr
 RAW_CHAT_SUFFIXES = (".live_chat.json", ".chat.json")
 
 # chat_parsed path -> (mtime_ns, message count)
@@ -62,6 +63,7 @@ def _archive(root: Path, folder: Path) -> dict:
     video = _video_file(files)
     chat = next((f for f in files if f.name.endswith(CHAT_SUFFIX)), None)
     raw_chat = next((f for f in files if f.name.endswith(RAW_CHAT_SUFFIXES)), None)
+    transcript = next((f for f in files if f.name.endswith(TRANSCRIPT_SUFFIX)), None)
     creator, date, title = folder.relative_to(root).parts
     return {
         "creator": creator,
@@ -75,6 +77,7 @@ def _archive(root: Path, folder: Path) -> dict:
         "chat_file": chat.name if chat else None,
         "raw_chat_file": raw_chat.name if raw_chat else None,
         "chat_count": _chat_count(chat) if chat else 0,
+        "transcript_file": transcript.name if transcript else None,
         "size": sum(f.stat().st_size for f in files),
         "mtime": max((f.stat().st_mtime for f in files), default=folder.stat().st_mtime),
     }

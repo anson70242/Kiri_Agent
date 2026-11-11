@@ -18,11 +18,35 @@ services:
       # Server-local only. Reach it from your devices through `tailscale serve`
       # (see docs/deploy.md); the public IP never exposes the dashboard.
       - "127.0.0.1:8770:8770"
-    logging:
+    depends_on:
+      - whisper
+    logging: &logging
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
+
+  # Speech-to-text (faster-whisper large-v3-turbo) on the GPU. No published port:
+  # only kiri reaches it, at http://whisper:8000 on the compose network.
+  whisper:
+    build: ./services/whisper
+    image: kiri-whisper:latest
+    container_name: kiri-whisper
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 120s
+      retries: 3
+    logging: *logging
 
 volumes:
   kiri-data:

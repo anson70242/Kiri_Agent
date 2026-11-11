@@ -136,7 +136,8 @@ try { filter.creator = localStorage.getItem("kiri.archives.creator") || ""; } ca
 function badges(a) {
   return (a.downloading ? `<span class="chip dl">下载中</span>` : "")
     + (a.has_chat ? `<span class="chip ch">有弹幕 ${a.chat_count.toLocaleString()}</span>`
-                  : `<span class="chip nochat">无弹幕</span>`);
+                  : `<span class="chip nochat">无弹幕</span>`)
+    + (a.transcript_file ? `<span class="chip ch">有字幕</span>` : "");
 }
 
 // ---- List view ----
@@ -211,14 +212,16 @@ function drawDownloads() {
     if (active.speed) parts.push(`${size(active.speed)}/s`);
     if (active.eta != null) parts.push(`剩余 ${dur(active.eta)}`);
     html += `<div class="job active"><div class="head">
-        <span class="chip dl">${pct == null ? "准备中" : `下载中 ${pct.toFixed(1)}%`}</span>
+        <span class="chip dl">${active.stage === "transcribe" ? "转写字幕中"
+          : pct == null ? "准备中" : `下载中 ${pct.toFixed(1)}%`}</span>
         <span class="creator">${esc(active.name)}</span>
         <span class="title">${esc(active.title || active.url)}</span>
         <span class="meta">${esc(parts.join(" · "))}</span></div>
-      <div class="bar"><div style="width:${pct ?? 0}%"></div></div></div>`;
+      ${active.stage === "transcribe" ? `<div class="meta">已用 ${dur(Date.now() / 1000 - active.started)}（4 小时直播约 20 分钟）</div>`
+        : `<div class="bar"><div style="width:${pct ?? 0}%"></div></div>`}</div>`;
   }
   html += waiting.map(j => `<div class="job"><div class="head">
-      <span class="chip" style="background:var(--off-bg);color:var(--off)">排队中</span>
+      <span class="chip" style="background:var(--off-bg);color:var(--off)">${j.stage === "transcribe" ? "等待转写" : "等待下载"}</span>
       <span class="creator">${esc(j.name)}</span>
       <span class="title">${esc(j.title || j.url)}</span>
       <span class="meta">${j.next_try * 1000 > Date.now() ? `下次尝试 ${clock(j.next_try)}` : "马上开始"}${j.attempts ? ` · 已试 ${j.attempts} 次` : ""}</span></div>
@@ -243,7 +246,8 @@ async function drawDetail(folder) {
   const a = data.archives.find(x => x.folder === folder);
   if (!a) { app.innerHTML = `<div class="empty">找不到这场录播 · <a href="#">返回列表</a></div>`; return; }
   const files = [a.video && [a.video, "视频"], a.chat_file && [a.chat_file, "弹幕 (清洗后)"],
-                 a.raw_chat_file && [a.raw_chat_file, "弹幕 (原始)"]].filter(Boolean);
+                 a.raw_chat_file && [a.raw_chat_file, "弹幕 (原始)"],
+                 a.transcript_file && [a.transcript_file, "字幕"]].filter(Boolean);
   app.innerHTML = `<div class="detail">
     <header>
       <button onclick="location.hash=''">← 返回</button>

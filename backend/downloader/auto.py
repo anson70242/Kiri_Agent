@@ -27,6 +27,7 @@ Rules:
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 import shutil
@@ -36,6 +37,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from backend.asr import ASRSettings, transcribe
 from backend.monitor import StreamMonitor, Streamer, StreamStatus
 from backend.notify import EventKind, LiveNotifier, StreamEvent, load_notifier
 
@@ -57,6 +59,8 @@ class Job:
     attempts: int = 0
     errors: int = 0  # failures other than "not ready yet"
     last_error: str = ""
+    stage: Literal["download", "transcribe"] = "download"
+    video: str | None = None  # set once downloaded
 
     @property
     def key(self) -> str:
@@ -70,6 +74,8 @@ class Job:
             "attempts": self.attempts,
             "errors": self.errors,
             "last_error": self.last_error,
+            "stage": self.stage,
+            "video": self.video,
         }
 
     @classmethod
@@ -97,7 +103,9 @@ class AutoDownloader:
         max_errors: int = 3,
         notify: Callable[[StreamEvent], None] | None = None,
         clock: Callable[[], float] = time.time,
+        transcribe: Callable[[Path], Any] | None = None,  # video -> transcript; None: skip
     ):
+        self.transcribe = transcribe
         self.settings = settings
         self.streamers = list(streamers)
         self.keep = keep
@@ -157,6 +165,7 @@ class AutoDownloader:
                     "next_try": j.next_try,
                     "attempts": j.attempts,
                     "last_error": j.last_error,
+                    "stage": j.stage,
                 }
                 for j in self.load()
             ],
@@ -198,7 +207,9 @@ class AutoDownloader:
         return min(due, key=lambda j: j.next_try) if due else None
 
     def attempt(self, job: Job) -> Outcome:
-        """One try at downloading a job's archive (blocking)."""
+        """One try at the job's current stage (blocking)."""
+        if job.stage == "transcribe":
+            return self.attempt_transcribe(job)
         s = job.status
         try:
             dl = downloader_for(s.url or "", self.settings, self.streamers)
@@ -209,7 +220,7 @@ class AutoDownloader:
             if info.live_status in NOT_READY:
                 return Outcome("wait", f"stream is {info.live_status}")
             self._active = {"name": s.streamer.name, "platform": s.streamer.platform,
-                            "title": s.title, "url": s.url, "started": self.clock(),
+                            "title": s.title, "url": s.url, "started": self.clock(), "stage": "download",
                             "percent": None, "downloaded": 0, "total": None, "speed": None, "eta": None}
             result = download(url, self.settings, self.streamers, info=info, progress=self._on_progress)
         except DownloadError as e:
@@ -220,6 +231,20 @@ class AutoDownloader:
             return Outcome("error", err, result)
         pruned = self.prune(result.output_dir, self.keep.get(s.streamer.id, 6))
         return Outcome("done", result=result, pruned=pruned)
+
+    def attempt_transcribe(self, job: Job) -> Outcome:
+        s = job.status
+        self._active = {"name": s.streamer.name, "platform": s.streamer.platform, "title": s.title,
+                        "url": s.url, "started": self.clock(), "stage": "transcribe", "percent": None,
+                        "downloaded": 0, "total": None, "speed": None, "eta": None}
+        try:
+            assert self.transcribe and job.video
+            self.transcribe(Path(job.video))
+        except Exception as e:  # noqa: BLE001 - ASR, ffmpeg or a missing file: all retried
+            return Outcome("error", str(e) or type(e).__name__)
+        finally:
+            self._active = None
+        return Outcome("done")
 
     def _on_progress(self, d: dict[str, Any]) -> None:
         """yt-dlp progress hook (runs in the download thread)."""
@@ -246,10 +271,23 @@ class AutoDownloader:
         current.last_error = outcome.message
 
         name = job.status.streamer.name
+        if outcome.kind == "done" and current.stage == "transcribe":
+            log.info("transcribed: %s %s", name, current.video)
+            self.save(rest)
+            return
         if outcome.kind == "done":
             log.info("auto-download done: %s %s", name, outcome.result and outcome.result.video)
-            self.save(rest)
             self._send(EventKind.DOWNLOADED, job, success_detail(outcome))
+            video = outcome.result.video if outcome.result else None
+            if self.transcribe and video:
+                # Next stage: same job, fresh retry counters.
+                current.stage, current.video = "transcribe", str(video)
+                current.attempts, current.errors, current.last_error = 0, 0, ""
+                current.next_try = now
+                self.save(rest + [current])
+                self._wake.set()
+            else:
+                self.save(rest)
             return
         if outcome.kind == "wait":
             if now - current.queued_at >= self.give_up:
@@ -265,7 +303,12 @@ class AutoDownloader:
                         current.errors, self.max_errors, name, outcome.message)
             if current.errors >= self.max_errors:
                 self.save(rest)
-                self._send(EventKind.DOWNLOAD_FAILED, job, failure_detail(current))
+                if current.stage == "transcribe":
+                    self._send(EventKind.TRANSCRIBE_FAILED, job,
+                               f"影片已下载，但试了 {current.attempts} 次字幕转写仍失败：\n"
+                               f"```{current.last_error[:1500]}```")
+                else:
+                    self._send(EventKind.DOWNLOAD_FAILED, job, failure_detail(current))
                 return
         current.next_try = now + self.retry_interval
         self.save(rest + [current])
@@ -357,6 +400,16 @@ def load_auto(config: Path) -> AutoDownloader | None:
         return None
     settings, streamers = load_settings(config)
     state = Path(auto.get("state_file") or "data/download_queue.json")
+    asr_cfg = cfg.get("asr") or {}
+    transcriber = None
+    if asr_cfg and asr_cfg.get("enabled") is not False:
+        asr = ASRSettings(
+            url=asr_cfg.get("url") or ASRSettings.url,
+            language=asr_cfg.get("language") or ASRSettings.language,
+            vad=bool(asr_cfg.get("vad", True)),
+            ffmpeg=settings.ffmpeg or "ffmpeg",
+        )
+        transcriber = functools.partial(transcribe, settings=asr)
     return AutoDownloader(
         settings,
         streamers,
@@ -365,6 +418,7 @@ def load_auto(config: Path) -> AutoDownloader | None:
         retry_interval=float(auto.get("retry_minutes", 15)) * 60,
         give_up=float(auto.get("give_up_hours", 12)) * 3600,
         max_errors=int(auto.get("max_errors", 3)),
+        transcribe=transcriber,
     )
 
 
