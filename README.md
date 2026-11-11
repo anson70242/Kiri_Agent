@@ -1,60 +1,53 @@
 # Kiri Agent
 
-A tool-using LLM agent with no dependencies — Python standard library only, no install
-step. It speaks the OpenAI chat completions protocol, so it runs against OpenAI or any
-compatible endpoint (a local server, a proxy, another provider) by changing one config
-value.
+Helps people cut highlight clips from VTuber / streamer broadcasts. It watches channels,
+downloads each archive when a stream ends, and analyses the VOD so an editor knows
+where to look: segment-by-segment summaries and scores, plus chat activity as a signal
+for the exciting moments. The result is uploaded to a shared online sheet (Google Sheets,
+Tencent Docs) so a team can split up the clipping work. A human still makes the final cut.
+
+## Pipeline
+
+| Step | What it does | Status |
+| --- | --- | --- |
+| [Live monitor](#live-monitor) | Polls YouTube / Twitch channels, web dashboard | done |
+| [Notifications](#go-live-notifications) | Discord message on go-live and stream end | done |
+| [Downloader](#downloader) | VOD + chat replay via yt-dlp and Twitch GQL; members / sub-only with cookies | done |
+| Chat cleaning | Raw chat → `{"time","user","msg"}` lines | done |
+| Auto download | Monitor triggers the downloader when a stream ends | planned |
+| Chat density | Messages per minute, spikes, Super Chats → candidate highlight times | planned |
+| Segment analysis | Transcribe, split the VOD into segments, LLM summary + score per segment | planned |
+| Highlight report | Ranked timeline for editors | planned |
+| Sheet upload | Push the report to Google Sheets / Tencent Docs (docs.qq.com) | planned |
 
 ## Setup
 
 ```sh
-cp .env.example .env      # then put your key in it
+uv sync
+cp .env.example .env      # then fill in what you use
 ```
 
-Edit `config.json` to pick your model and endpoint. Then:
+Python 3.13+, [uv](https://docs.astral.sh/uv/), and ffmpeg (for downloads).
+
+## Agent
+
+[backend/agents/agent.py](backend/agents/agent.py) is the LLM side, built on the
+OpenAI Agents SDK over the chat completions API, so any OpenAI-compatible endpoint works
+(OpenAI, a local llama.cpp / vLLM / Ollama, ...). It is still a scaffold; the analysis
+agents will live here. Set `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL` in `.env`:
 
 ```sh
-python backend/agents/agent.py "list the knowledge base and tell me what is there"
-python backend/agents/agent.py                    # interactive session
-python backend/agents/agent.py --agent reader "summarize backend/"
+uv run backend/agents/agent.py "hello"     # one-shot
+uv run backend/agents/agent.py             # interactive session
 ```
 
-## Tools
+### LLM proxy
 
-| Tool | What it does |
-| --- | --- |
-| `read_file` | Line-numbered read, with `offset`/`limit` paging |
-| `write_file` | Write a file, creating parent directories |
-| `edit_file` | Exact string replacement; refuses ambiguous matches unless `replace_all` |
-| `list_dir` | Directory listing with sizes |
-| `change_dir` | Move the agent's working directory |
-| `bash` | Run a shell command; covers mkdir, mv, rm, git, scripts |
-
-Every path is resolved against the agent's current directory and confined to the
-workspace, so `../../..` returns an error the model can recover from rather than
-reaching the rest of the disk. Set `KIRI_WORKSPACE` to point that root elsewhere.
-
-Adding a tool is one decorated function in [tools.py](backend/agents/tools.py); the
-decorator registers the schema and the dispatcher picks it up automatically.
-
-## Agents and subagents
-
-An agent is defined entirely by a profile — a system prompt, a set of tools, and
-optionally its own model — so the same `Agent` class serves as the main agent and as
-any subagent. Prompts live one-per-file in
-[backend/agents/prompts/](backend/agents/prompts/); profiles live in `config.json`:
-
-```json
-"agents": {
-  "main":   { "prompt": "main.md", "tools": "*" },
-  "reader": { "prompt": "reader.md",
-              "tools": ["read_file", "list_dir"],
-              "model": "gpt-4o-mini" }
-}
-```
-
-Adding a subagent means adding a prompt file and a profile entry — no code change.
-In Python, `Agent.named(cfg, "reader")` gives you that agent.
+If the server is somewhere LLM providers don't serve, `LLM_PROXY` in its `.env` sends
+only the LLM client's requests through another machine that runs
+[backend/llm_proxy.py](backend/llm_proxy.py): an HTTPS CONNECT proxy reachable only over
+Tailscale, password-protected, allowing only the LLM API hosts. Downloads and
+monitoring keep connecting directly. Setup: "LLM 代理" in [docs/deploy.md](docs/deploy.md).
 
 ## Live monitor
 
@@ -196,15 +189,6 @@ One-time server setup (Docker, deploy user, SSH key, GitHub secrets, Tailscale):
 
 ## Configuration
 
-`config.json` holds everything safe to commit; `.env` holds the key. `api_key_env`
-names the environment variable to read, so switching providers is a config edit.
-
-| Key | Purpose |
-| --- | --- |
-| `model` | Default model for agents that do not override it |
-| `base_url` | API root; `/chat/completions` is appended |
-| `api_key_env` | Environment variable holding the key |
-| `max_tokens`, `temperature` | Sampling settings |
-| `max_steps` | Tool-call round trips allowed per turn, so a loop cannot run away |
-| `request_timeout` | Seconds per HTTP request |
-| `default_agent` | Profile used when `--agent` is omitted |
+`config.json` holds everything safe to commit (`monitor`, `notify`, `download`);
+secrets go in `.env` (see [.env.example](.env.example)): LLM endpoint and key,
+`DISCORD_WEBHOOK_URL`, `TWITCH_OAUTH`, `LLM_PROXY` / `LLM_PROXY_TOKEN`.
