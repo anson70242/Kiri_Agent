@@ -9,6 +9,7 @@ Polls in the background; the page reads /api/status.
 import argparse
 import asyncio
 import contextlib
+import logging
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -16,10 +17,12 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 
-from backend.notify import load_notifier
+from backend.downloader import load_settings
+from backend.downloader.auto import attach
 
 from . import StreamMonitor
 from .__main__ import REPO_ROOT, load_config
+from .archives import create_router
 
 PAGE = REPO_ROOT / "frontend" / "monitor.html"
 
@@ -28,23 +31,27 @@ def create_app(config: Path, interval: float | None = None) -> FastAPI:
     streamers, cfg_interval = load_config(config)
     interval = interval or cfg_interval
     mon = StreamMonitor(streamers)
-    notifier = load_notifier(config)
-    if notifier:
-        mon.on_change.append(notifier.on_change)
+    notifier, auto = attach(config, mon)
+    if notifier and notifier.notifiers:
         print("Notify: " + ", ".join(n.name for n in notifier.notifiers))
     else:
         print("Notify: off (set DISCORD_WEBHOOK_URL in .env to enable)")
+    print(f"Auto-download: {len(auto.keep)} streamer(s)" if auto else "Auto-download: off")
 
     @contextlib.asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         task = asyncio.create_task(mon.run(interval))
+        auto_task = asyncio.create_task(auto.run()) if auto else None
         yield
         task.cancel()
+        if auto_task:
+            auto_task.cancel()
         await mon.aclose()
         if notifier:
             await notifier.aclose()
 
     app = FastAPI(title="Kiri Live Monitor", lifespan=lifespan)
+    app.include_router(create_router(load_settings(config)[0].output_dir))
 
     def snapshot() -> dict:
         rows = []
@@ -85,6 +92,8 @@ def main() -> None:
     p.add_argument("--interval", type=float, help="seconds between polls (overrides config)")
     args = p.parse_args()
 
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)  # its request log prints the webhook secret
     print(f"Dashboard: http://{args.host}:{args.port}")
     uvicorn.run(create_app(args.config, args.interval), host=args.host, port=args.port, log_level="warning")
 

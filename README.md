@@ -14,7 +14,7 @@ Tencent Docs) so a team can split up the clipping work. A human still makes the 
 | [Notifications](#go-live-notifications) | Discord message on go-live and stream end | done |
 | [Downloader](#downloader) | VOD + chat replay via yt-dlp and Twitch GQL; members / sub-only with cookies | done |
 | Chat cleaning | Raw chat → `{"time","user","msg"}` lines | done |
-| Auto download | Monitor triggers the downloader when a stream ends | planned |
+| [Auto download](#auto-download) | Stream ends → archive downloaded, old ones pruned, Discord report | done |
 | Chat density | Messages per minute, spikes, Super Chats → candidate highlight times | planned |
 | Segment analysis | Transcribe, split the VOD into segments, LLM summary + score per segment | planned |
 | Highlight report | Ranked timeline for editors | planned |
@@ -165,6 +165,24 @@ uv run -m backend.downloader <url> --wait       # download, then wait for a late
 From code: `download(url, *load_settings(config))` in
 [backend/downloader/__init__.py](backend/downloader/__init__.py). A new platform is a
 `PlatformDownloader` subclass with `platform`, `url_re` and `download_chat()`.
+
+## Auto download
+
+When the monitor reports a stream ended (same rule as the "ended" Discord message), the
+archive of a streamer with `"auto_download": true` in `monitor.streamers` is queued and
+downloaded (video ≤ `download.max_height`, default 1080p, plus chat), one at a time, by
+the dashboard server or `uv run -m backend.monitor`. See
+[auto.py](backend/downloader/auto.py).
+
+- Not ready yet (YouTube still processing, Twitch archive not listed): retried every
+  `download.auto.retry_minutes` (15) for up to `give_up_hours` (12).
+- Other failures (expired cookies, deleted video, network) are retried `max_errors` (3)
+  times, then Discord gets a failure message, with a hint when cookies look expired.
+- Success: Discord message with file size and chat status. Then that streamer's folder
+  is trimmed to `keep` archives (per streamer, default `download.auto.keep` = 6); the
+  oldest go first.
+- The queue is `data/download_queue.json`, so a restart (deploy) resumes it; late chats
+  use the chat retry queue below.
 
 ## Tests
 

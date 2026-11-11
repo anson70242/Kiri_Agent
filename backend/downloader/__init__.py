@@ -41,6 +41,7 @@ def load_settings(config: Path) -> tuple[DownloadSettings, list[Streamer]]:
       "cookies_from_browser": "firefox",
       "twitch_oauth_env": "TWITCH_OAUTH",
       "ffmpeg": "",
+      "max_height": 1080,
       "chat_retry": { "interval_minutes": 30, "give_up_hours": 48 }
     }
 
@@ -62,6 +63,7 @@ def load_settings(config: Path) -> tuple[DownloadSettings, list[Streamer]]:
         twitch_oauth=(os.getenv(d.get("twitch_oauth_env") or "TWITCH_OAUTH") or os.getenv("twitch_OAuth") or "").strip() or None,
         ffmpeg=d.get("ffmpeg") or None,
         concurrent_fragments=int(d.get("concurrent_fragments", 5)),
+        max_height=int(h) if (h := d.get("max_height", 1080)) else None,
         pending_file=pending if pending.is_absolute() else REPO_ROOT / pending,
         chat_retry_interval=float(retry.get("interval_minutes", 30)) * 60,
         chat_retry_give_up=float(retry.get("give_up_hours", 48)) * 3600,
@@ -90,6 +92,7 @@ def download(
     *,
     video: bool = True,
     chat: bool = True,
+    info: VideoInfo | None = None,
 ) -> DownloadResult:
     """Download a VOD and/or its chat into `<output_dir>/<creator>/<date>/<title>/`.
 
@@ -100,9 +103,11 @@ def download(
 
     Right after a YouTube stream ends it is "post_live" (still processing): the video
     is refused for now, and the chat is tried once and queued if it isn't there yet.
+
+    `info`: metadata already fetched with `dl.info(url)`, to skip fetching it again.
     """
     dl = downloader_for(url, settings, streamers)
-    info = dl.info(url)
+    info = info or dl.info(url)
     if info.live_status in ("is_live", "is_upcoming"):
         raise DownloadError(f"stream is {info.live_status}; download it after the VOD is ready")
     out_dir = settings.output_dir / info.folder

@@ -9,20 +9,17 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any
 
 from .base import ChatNotReady, DownloadError, PlatformDownloader, VideoInfo, outtmpl
-
-# Formats that stay H.264 + AAC in mp4 (what editors handle best), else anything.
-VIDEO_FORMAT = "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b"
-
 
 class YoutubeDownloader(PlatformDownloader):
     platform = "youtube"
     url_re = re.compile(r"(?:^|[/.])(?:youtube\.com|youtu\.be)/", re.I)
 
-    def video_options(self, outtmpl: Path) -> dict[str, Any]:
-        return super().video_options(outtmpl) | {"format": VIDEO_FORMAT}
+    def video_format(self) -> str:
+        # Prefer H.264 + AAC in mp4 (what editors handle best), up to max_height.
+        h = f"[height<={self.settings.max_height}]" if self.settings.max_height else ""
+        return f"bv*{h}[ext=mp4]+ba[ext=m4a]/b{h}[ext=mp4]/bv*{h}+ba/b{h}/bv*+ba/b"
 
     def download_raw_chat(self, info: VideoInfo, out_dir: Path) -> Path:
         path = out_dir / f"{info.stem}.live_chat.json"

@@ -12,7 +12,7 @@ import json
 import logging
 import os
 from abc import ABC, abstractmethod
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import StrEnum
@@ -27,13 +27,16 @@ log = logging.getLogger(__name__)
 class EventKind(StrEnum):
     LIVE = "live"  # went live
     OFFLINE = "offline"  # stream ended
+    DOWNLOADED = "downloaded"  # archive auto-downloaded (backend.downloader.auto)
+    DOWNLOAD_FAILED = "download_failed"  # auto-download gave up
 
 
 @dataclass
 class StreamEvent:
     kind: EventKind
-    status: StreamStatus  # for OFFLINE: the last live status (title, url, start time)
+    status: StreamStatus  # for OFFLINE / DOWNLOAD*: the last live status (title, url, start time)
     ended_at: datetime | None = None
+    detail: str | None = None  # DOWNLOAD*: what happened, shown in the message
 
 
 class PermanentNotifyError(Exception):
@@ -107,6 +110,9 @@ class LiveNotifier:
         # streamer missing from it was just added to the config and is announced.
         self._fresh_start = not self._live
         self._pending_end: dict[str, asyncio.Task[None]] = {}
+        # Called with every "ended" event (even when on_offline is off), e.g. to
+        # start the auto-download. Must return quickly.
+        self.on_ended: list[Callable[[StreamEvent], None]] = []
         self._queue: asyncio.Queue[StreamEvent] | None = None
         self._worker: asyncio.Task[None] | None = None
 
@@ -155,12 +161,24 @@ class LiveNotifier:
             self._emit_offline(prev, ended_at)
 
     def _emit_offline(self, prev: StreamStatus, ended_at: datetime) -> None:
+        event = StreamEvent(EventKind.OFFLINE, prev, ended_at)
+        for callback in self.on_ended:
+            try:
+                callback(event)
+            except Exception:  # noqa: BLE001 - a listener bug must not break notifications
+                log.exception("on_ended listener failed")
         if self.notify_offline:
-            self._enqueue(StreamEvent(EventKind.OFFLINE, prev, ended_at))
+            self._enqueue(event)
 
     # ---- delivery ----
 
+    def send(self, event: StreamEvent) -> None:
+        """Queue any event (e.g. a download result) for delivery; doesn't wait."""
+        self._enqueue(event)
+
     def _enqueue(self, event: StreamEvent) -> None:
+        if not self.notifiers:
+            return
         if self._queue is None:
             self._queue = asyncio.Queue()
             self._worker = asyncio.create_task(self._run_worker())

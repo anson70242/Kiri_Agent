@@ -18,7 +18,7 @@ log = logging.getLogger(__name__)
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-def load_notifier(config: Path) -> LiveNotifier | None:
+def load_notifier(config: Path, allow_empty: bool = False) -> LiveNotifier | None:
     """Build a LiveNotifier from config.json's `notify` section and .env secrets.
 
     "notify": {
@@ -29,7 +29,8 @@ def load_notifier(config: Path) -> LiveNotifier | None:
     }
 
     A channel whose webhook env var is empty is skipped with a warning.
-    Returns None when no channel is usable.
+    Returns None when no channel is usable, unless `allow_empty` (the stream-ended
+    tracking is still needed, e.g. for auto-download).
     """
     load_dotenv(REPO_ROOT / ".env")
     cfg = json.loads(config.read_text(encoding="utf-8")).get("notify") or {}
@@ -47,7 +48,7 @@ def load_notifier(config: Path) -> LiveNotifier | None:
             continue
         notifiers.append(Notifier.registry[name](url, mention=opts.get("mention")))
 
-    if not notifiers:
+    if not notifiers and not allow_empty:
         return None
     state_file = Path(cfg.get("state_file", "data/notify_state.json"))
     return LiveNotifier(

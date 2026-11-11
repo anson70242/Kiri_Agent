@@ -103,6 +103,13 @@ class PendingChats:
             log.info("chat queued for retry: %s", info.title)
         self.save(entries)
 
+    def drop_under(self, folder: Path) -> None:
+        """Forget queued chats whose video folder is inside `folder` (it was deleted)."""
+        entries = self.load()
+        keep = [e for e in entries if not e.output_dir.is_relative_to(folder)]
+        if len(keep) != len(entries):
+            self.save(keep)
+
     def next_due(self) -> float | None:
         """Time of the next scheduled retry, None when the queue is empty."""
         return min((e.next_try for e in self.load()), default=None)

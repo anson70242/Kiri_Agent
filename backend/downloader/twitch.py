@@ -15,6 +15,7 @@ import json
 import logging
 import re
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +37,7 @@ COMMENTS_QUERY = (
     "}},pageInfo{hasNextPage}}}}"
 )
 RETRIES = 5
+VOD_MATCH_SECONDS = 30 * 60  # archive start vs. the start time the monitor saw
 
 
 class TwitchDownloader(PlatformDownloader):
@@ -50,6 +52,27 @@ class TwitchDownloader(PlatformDownloader):
     def add_cookies(self, ydl: yt_dlp.YoutubeDL) -> None:
         if self.settings.twitch_oauth:
             ydl.cookiejar.set_cookie(make_cookie("auth-token", self.settings.twitch_oauth, ".twitch.tv"))
+
+    def find_vod(self, stream_url: str, channel: str, started_at: datetime | None) -> str | None:
+        """The channel's newest archive, if it is the broadcast that started at
+        `started_at` (within VOD_MATCH_SECONDS). None: not there (yet)."""
+        login = channel.rstrip("/").rsplit("/", 1)[-1]
+        listing = self._ytdlp(
+            f"https://www.twitch.tv/{login}/videos?filter=archives&sort=time",
+            {"extract_flat": True, "playlistend": 3},
+            download=False,
+        )
+        for entry in listing.get("entries") or []:
+            url = entry.get("url")
+            if not url:
+                continue
+            if started_at is None:
+                return url  # nothing to match against: trust the newest
+            raw = self._ytdlp(url, {"skip_download": True}, download=False)
+            ts = raw.get("timestamp")
+            if ts and abs(ts - started_at.timestamp()) <= VOD_MATCH_SECONDS:
+                return url
+        return None
 
     def download_raw_chat(self, info: VideoInfo, out_dir: Path) -> Path:
         if info.extractor != "TwitchVod":

@@ -17,6 +17,8 @@ from .base import EventKind, Notifier, PermanentNotifyError, StreamEvent
 PLATFORM_COLORS = {"youtube": 0xFF0000, "twitch": 0x9146FF}
 DEFAULT_COLOR = 0xE11D48
 OFFLINE_COLOR = 0x6B7280
+DOWNLOADED_COLOR = 0x16A34A
+FAILED_COLOR = 0xDC2626
 
 
 def _duration(start: datetime, end: datetime) -> str:
@@ -34,6 +36,8 @@ class DiscordNotifier(Notifier):
         self.client = client or httpx.AsyncClient(timeout=15)
 
     def build_payload(self, event: StreamEvent) -> dict[str, Any]:
+        if event.kind in (EventKind.DOWNLOADED, EventKind.DOWNLOAD_FAILED):
+            return self.download_payload(event)
         status = event.status
         s = status.streamer
         live = event.kind is EventKind.LIVE
@@ -76,6 +80,29 @@ class DiscordNotifier(Notifier):
             "embeds": [embed],
             # Only ping on go-live, and only what `mention` asks for.
             "allowed_mentions": {"parse": ["everyone", "roles", "users"] if live and self.mention else []},
+        }
+
+    def download_payload(self, event: StreamEvent) -> dict[str, Any]:
+        status = event.status
+        s = status.streamer
+        ok = event.kind is EventKind.DOWNLOADED
+        embed: dict[str, Any] = {
+            "title": (status.title or "直播回放")[:256],
+            "color": DOWNLOADED_COLOR if ok else FAILED_COLOR,
+            "author": {"name": f"{s.name} · {s.platform}"},
+            "footer": {"text": "Kiri_Agent 自动下载"},
+        }
+        if status.url:
+            embed["url"] = status.url
+        if status.avatar:
+            embed["author"]["icon_url"] = status.avatar
+        if event.detail:
+            embed["description"] = event.detail[:4000]
+        verb = "回放已下载" if ok else "回放下载失败"
+        return {
+            "content": f"{'📥' if ok else '❗'} **{s.name}** {verb}",
+            "embeds": [embed],
+            "allowed_mentions": {"parse": []},
         }
 
     async def send(self, event: StreamEvent) -> None:

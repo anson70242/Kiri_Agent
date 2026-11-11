@@ -51,6 +51,7 @@ class DownloadSettings:
     # ffmpeg binary or its folder. None means "find it on PATH".
     ffmpeg: str | None = None
     concurrent_fragments: int = 5
+    max_height: int | None = 1080  # best video up to this height; None: no limit
     # Chats that weren't ready yet are queued here and retried. None: no queue.
     pending_file: Path | None = None
     chat_retry_interval: float = 30 * 60  # seconds between retries
@@ -164,12 +165,23 @@ class PlatformDownloader(ABC):
         """yt-dlp options for the video download; the result must end up as .mp4."""
         return {
             "outtmpl": str(outtmpl),
+            "format": self.video_format(),
             "merge_output_format": "mp4",
             "concurrent_fragment_downloads": self.settings.concurrent_fragments,
         }
 
+    def video_format(self) -> str:
+        """yt-dlp format: best up to `max_height`, falling back to plain best."""
+        h = f"[height<={self.settings.max_height}]" if self.settings.max_height else ""
+        return f"bv*{h}+ba/b{h}/bv*+ba/b"
+
     def add_cookies(self, ydl: yt_dlp.YoutubeDL) -> None:
         """Put platform auth cookies into a fresh YoutubeDL."""
+
+    def find_vod(self, stream_url: str, channel: str, started_at: datetime | None) -> str | None:
+        """URL of the archive of a stream that just ended (from the monitor), or None
+        if it isn't up yet. YouTube: the stream URL itself is the archive."""
+        return stream_url
 
     # ---- metadata ----
 

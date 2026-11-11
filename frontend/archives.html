@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>录播 · Kiri_Agent</title>
+<style>
+  :root { /* same 天青 Azure theme as monitor.html */
+    --bg: linear-gradient(160deg, #eef5ff 0%, #f3faff 50%, #f5f7ff 100%) fixed;
+    --card: #ffffff; --text: #172554; --muted: #5a6b8c; --border: #c7dbf7;
+    --accent: #2563eb; --live: #e11d48; --live-bg: #fde2e7; --up: #c2410c; --up-bg: #ffedd5;
+    --off: #5a6b8c; --off-bg: #e8effb; --ok: #15803d; --ok-bg: #dcfce7;
+    --topbar-bg: rgba(255,255,255,.85); --topbar-text: #1e40af; --topbar-muted: #5a6b8c;
+    --topbar-accent: #2563eb; --topbar-border: #c7dbf7;
+    --shadow: 0 1px 2px rgba(37,99,235,.06), 0 8px 20px rgba(37,99,235,.10);
+  }
+  * { box-sizing: border-box; }
+  html { color-scheme: light; }
+  body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; }
+  .topbar { position: sticky; top: 0; z-index: 10; background: var(--topbar-bg); backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--topbar-border); }
+  .topbar-inner { max-width: 1100px; margin: 0 auto; padding: 0 16px; height: 56px;
+    display: flex; align-items: center; gap: 28px; }
+  .brand { font-weight: 800; font-size: 18px; letter-spacing: .2px; color: var(--topbar-text); text-decoration: none; }
+  .nav { display: flex; gap: 4px; height: 100%; overflow-x: auto; }
+  .nav a { display: flex; align-items: center; padding: 0 12px; color: var(--topbar-muted); text-decoration: none;
+    font-size: 14px; border-bottom: 2px solid transparent; white-space: nowrap; }
+  .nav a:hover { color: var(--topbar-text); }
+  .nav a.active { color: var(--topbar-accent); border-bottom-color: var(--topbar-accent); font-weight: 600; }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 48px; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; margin-bottom: 20px; }
+  h1 { font-size: 22px; margin: 0; }
+  .summary { display: flex; gap: 8px; flex-wrap: wrap; }
+  .chip { padding: 2px 10px; border-radius: 999px; font-size: 13px; font-weight: 600; white-space: nowrap; }
+  .spacer { flex: 1; }
+  .meta { color: var(--muted); font-size: 13px; }
+  button, select, input { font: inherit; font-size: 14px; padding: 6px 12px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--card); color: var(--text); }
+  button { cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  input:focus, select:focus { outline: 0; border-color: var(--accent); }
+  .disk { min-width: 220px; }
+  .bar { height: 6px; border-radius: 999px; background: var(--off-bg); overflow: hidden; margin-top: 4px; }
+  .bar > div { height: 100%; background: var(--accent); }
+  .bar.warn > div { background: var(--live); }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin: -4px 0 20px; }
+  .toolbar input { flex: 1; min-width: 180px; max-width: 420px; }
+  .group + .group { margin-top: 24px; }
+  .group h2 { font-size: 14px; font-weight: 600; color: var(--muted); margin: 0 0 10px; letter-spacing: .3px; }
+  .list { display: flex; flex-direction: column; gap: 8px; }
+  .row { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px 16px;
+    box-shadow: var(--shadow); display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px;
+    cursor: pointer; text-decoration: none; color: inherit; }
+  .row:hover { border-color: var(--accent); }
+  .row .title { flex: 1 1 320px; min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
+  .row .info { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .creator { font-size: 12px; color: var(--accent); border: 1px solid var(--border); border-radius: 6px; padding: 0 6px; }
+  .dl { background: var(--up-bg); color: var(--up); }
+  .ch { background: var(--ok-bg); color: var(--ok); }
+  .nochat { background: var(--off-bg); color: var(--off); }
+  .empty { color: var(--muted); text-align: center; padding: 40px; }
+  /* Detail */
+  .detail h1 { font-size: 19px; overflow-wrap: anywhere; }
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 14px; align-items: start; }
+  @media (max-width: 860px) { .layout { grid-template-columns: 1fr; } }
+  .panel { background: var(--card); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow);
+    padding: 12px; min-width: 0; }
+  video { width: 100%; max-height: 70vh; background: #000; border-radius: 8px; display: block; }
+  .novideo { aspect-ratio: 16 / 9; display: flex; align-items: center; justify-content: center;
+    background: var(--off-bg); border-radius: 8px; color: var(--muted); }
+  .links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .links a { font-size: 13px; color: var(--accent); text-decoration: none; border: 1px solid var(--border);
+    border-radius: 8px; padding: 4px 10px; }
+  .links a:hover { border-color: var(--accent); }
+  .density { margin-top: 12px; }
+  .density h3, .chat h3 { font-size: 13px; color: var(--muted); margin: 0 0 6px; font-weight: 600;
+    display: flex; align-items: center; gap: 8px; }
+  canvas { width: 100%; height: 90px; display: block; cursor: pointer; }
+  .chat { display: flex; flex-direction: column; height: min(75vh, 720px); }
+  .chat label { margin-left: auto; font-weight: 400; display: flex; align-items: center; gap: 4px; cursor: pointer; }
+  .chat label input { padding: 0; }
+  .msgs { flex: 1; overflow-y: auto; font-size: 13px; border-top: 1px solid var(--border); }
+  .msg { padding: 3px 4px; border-bottom: 1px solid var(--off-bg); overflow-wrap: anywhere; }
+  .msg.cur { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+  .msg .t { color: var(--accent); cursor: pointer; font-variant-numeric: tabular-nums; margin-right: 6px; }
+  .msg .t:hover { text-decoration: underline; }
+  .msg .u { color: var(--muted); margin-right: 6px; }
+  .msg .sc { background: var(--up-bg); color: var(--up); border-radius: 4px; padding: 0 4px; margin-right: 6px; font-weight: 600; }
+  @media (max-width: 860px) { .chat { height: 60vh; } }
+</style>
+</head>
+<body>
+<nav class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="/">Kiri_Agent</a>
+    <div class="nav">
+      <a href="/">直播监控</a>
+      <a href="/archives" class="active">录播</a>
+    </div>
+  </div>
+</nav>
+<main id="app"><div class="empty">加载中…</div></main>
+<script>
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const app = document.getElementById("app");
+
+function size(n) {
+  const u = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return `${n.toFixed(i >= 3 ? 2 : i ? 1 : 0)} ${u[i]}`;
+}
+const fmtDate = d => d && d.length === 8 ? `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6)}` : d;
+const secs = t => String(t || "").split(":").reduce((a, p) => a * 60 + (+p || 0), 0);
+const hms = s => [Math.floor(s / 3600), Math.floor(s / 60) % 60, Math.floor(s % 60)]
+  .map(n => String(n).padStart(2, "0")).join(":");
+const fileUrl = (a, name, dl) =>
+  `/api/archives/file?folder=${encodeURIComponent(a.folder)}&name=${encodeURIComponent(name)}${dl ? "&download=1" : ""}`;
+
+let data = null;
+const filter = { creator: "", text: "" };
+try { filter.creator = localStorage.getItem("kiri.archives.creator") || ""; } catch {}
+
+function badges(a) {
+  return (a.downloading ? `<span class="chip dl">下载中</span>` : "")
+    + (a.has_chat ? `<span class="chip ch">有弹幕 ${a.chat_count.toLocaleString()}</span>`
+                  : `<span class="chip nochat">无弹幕</span>`);
+}
+
+// ---- List view ----
+function drawList() {
+  const all = data.archives;
+  const creators = [...new Set(all.map(a => a.creator))].sort(new Intl.Collator("ja").compare);
+  if (filter.creator && !creators.includes(filter.creator)) filter.creator = "";
+  const q = filter.text.trim().toLowerCase();
+  const rows = all.filter(a => (!filter.creator || a.creator === filter.creator)
+    && (!q || `${a.creator} ${a.title} ${a.date}`.toLowerCase().includes(q)));
+  const total = rows.reduce((s, a) => s + a.size, 0);
+  const d = data.disk;
+  const pct = d ? Math.round(d.used / d.total * 100) : 0;
+
+  const byDate = new Map();
+  for (const a of rows) (byDate.get(a.date) || byDate.set(a.date, []).get(a.date)).push(a);
+  const groups = [...byDate].map(([date, items]) => `<section class="group">
+      <h2>${esc(fmtDate(date))} · ${items.length}</h2>
+      <div class="list">${items.map(a => `<a class="row" href="#${encodeURIComponent(a.folder)}">
+        <span class="creator">${esc(a.creator)}</span>
+        <span class="title">${esc(a.title)}</span>
+        <span class="info"><span class="meta">${size(a.size)}</span>${badges(a)}</span>
+      </a>`).join("")}</div></section>`).join("");
+
+  app.innerHTML = `<header>
+      <h1>录播</h1>
+      <div class="summary">
+        <span class="chip" style="background:var(--off-bg);color:var(--off)">共 ${rows.length} 场 · ${size(total)}</span>
+        ${rows.some(a => a.downloading) ? `<span class="chip dl">下载中 ${rows.filter(a => a.downloading).length}</span>` : ""}
+      </div>
+      <div class="spacer"></div>
+      ${d ? `<div class="disk meta">磁盘 已用 ${size(d.used)} / ${size(d.total)} · 剩余 ${size(d.free)}
+        <div class="bar ${pct >= 90 ? "warn" : ""}"><div style="width:${pct}%"></div></div></div>` : ""}
+    </header>
+    <div class="toolbar">
+      <select id="creator"><option value="">全部主播</option>${creators.map(c =>
+        `<option ${c === filter.creator ? "selected" : ""}>${esc(c)}</option>`).join("")}</select>
+      <input id="q" placeholder="搜索标题…" value="${esc(filter.text)}" autocomplete="off">
+    </div>
+    ${!all.length ? `<div class="empty">还没有录播（${esc(data.output_dir)}）</div>`
+      : !rows.length ? `<div class="empty">没有符合条件的录播</div>` : groups}`;
+
+  document.getElementById("creator").onchange = e => {
+    filter.creator = e.target.value;
+    try { localStorage.setItem("kiri.archives.creator", filter.creator); } catch {}
+    drawList();
+  };
+  const qEl = document.getElementById("q");
+  qEl.oninput = () => { filter.text = qEl.value; drawList(); const el = document.getElementById("q");
+    el.focus(); el.setSelectionRange(el.value.length, el.value.length); };
+}
+
+// ---- Detail view ----
+async function drawDetail(folder) {
+  const a = data.archives.find(x => x.folder === folder);
+  if (!a) { app.innerHTML = `<div class="empty">找不到这场录播 · <a href="#">返回列表</a></div>`; return; }
+  const files = [a.video && [a.video, "视频"], a.chat_file && [a.chat_file, "弹幕 (清洗后)"],
+                 a.raw_chat_file && [a.raw_chat_file, "弹幕 (原始)"]].filter(Boolean);
+  app.innerHTML = `<div class="detail">
+    <header>
+      <button onclick="location.hash=''">← 返回</button>
+      <h1>${esc(a.title)}</h1>
+    </header>
+    <div class="summary" style="margin:-8px 0 14px">
+      <span class="creator">${esc(a.creator)}</span>
+      <span class="meta">${esc(fmtDate(a.date))} · ${size(a.size)}</span>${badges(a)}
+    </div>
+    <div class="layout">
+      <div class="panel">
+        ${a.video && !a.downloading ? `<video id="video" controls preload="metadata" src="${fileUrl(a, a.video)}"></video>`
+          : `<div class="novideo">${a.downloading ? "下载中，完成后可播放" : "没有视频文件"}</div>`}
+        <div class="links">${files.map(([n, label]) =>
+          `<a href="${fileUrl(a, n, true)}" download>⬇ ${label}</a>`).join("")}</div>
+        <div class="density" id="density" hidden><h3>弹幕密度（每分钟）<span class="meta" id="peak"></span></h3>
+          <canvas id="chart"></canvas></div>
+      </div>
+      <div class="panel chat"><h3>弹幕 <span class="meta" id="chatmeta"></span>
+          <label><input type="checkbox" id="follow" checked>跟随播放</label></h3>
+        <div class="msgs" id="msgs"><div class="empty">${a.has_chat ? "加载中…" : "没有清洗后的弹幕"}</div></div></div>
+    </div></div>`;
+  if (!a.has_chat) return;
+
+  let chat;
+  try {
+    const r = await fetch(`/api/archives/chat?folder=${encodeURIComponent(a.folder)}`);
+    if (!r.ok) throw new Error(r.status);
+    chat = await r.json();
+  } catch (e) {
+    document.getElementById("msgs").innerHTML = `<div class="empty">弹幕加载失败</div>`;
+    return;
+  }
+  if (location.hash.slice(1) !== encodeURIComponent(folder)) return;  // navigated away
+
+  const msgs = chat.messages, times = msgs.map(m => secs(m.time));
+  const video = document.getElementById("video");
+  const box = document.getElementById("msgs");
+  document.getElementById("chatmeta").textContent = `${msgs.length.toLocaleString()} 条`;
+  box.innerHTML = msgs.map((m, i) => `<div class="msg" data-i="${i}"><span class="t">${esc(m.time)}</span>`
+    + (m.sc ? `<span class="sc">${esc(m.sc)}</span>` : "")
+    + `<span class="u">${esc(m.user)}</span>${esc(m.msg)}</div>`).join("") || `<div class="empty">没有弹幕</div>`;
+  const seek = s => { if (video) { video.currentTime = s; video.play().catch(() => {}); } };
+  box.onclick = e => { const t = e.target.closest(".t"); if (t) seek(times[+t.parentElement.dataset.i]); };
+
+  // Density chart: one bar per minute; click to seek.
+  const density = chat.density, canvas = document.getElementById("chart");
+  if (density.length) {
+    document.getElementById("density").hidden = false;
+    const peak = Math.max(...density);
+    document.getElementById("peak").textContent = `峰值 ${peak} 条/分 @ ${hms(density.indexOf(peak) * 60)}`;
+  }
+  function drawChart() {
+    if (!density.length) return;
+    const dpr = devicePixelRatio || 1, w = canvas.clientWidth, h = canvas.clientHeight;
+    canvas.width = w * dpr; canvas.height = h * dpr;
+    const g = canvas.getContext("2d");
+    g.scale(dpr, dpr);
+    const max = Math.max(...density) || 1, bw = w / density.length;
+    g.fillStyle = "#93b4f0";
+    density.forEach((n, i) => { const bh = n / max * (h - 2); g.fillRect(i * bw, h - bh, Math.max(bw - (bw > 3 ? 1 : 0), 1), bh); });
+    if (video && video.currentTime) {
+      g.fillStyle = "#e11d48";
+      g.fillRect(Math.min(video.currentTime / 60 * bw, w - 2), 0, 2, h);
+    }
+  }
+  canvas.onclick = e => {
+    const r = canvas.getBoundingClientRect();
+    seek(Math.floor((e.clientX - r.left) / r.width * density.length) * 60);
+  };
+  canvas.onmousemove = e => {
+    const r = canvas.getBoundingClientRect(), i = Math.floor((e.clientX - r.left) / r.width * density.length);
+    canvas.title = density[i] != null ? `${hms(i * 60)} · ${density[i]} 条` : "";
+  };
+  drawChart();
+  window.onresize = drawChart;
+
+  // Highlight and follow the latest message at or before the playhead.
+  let cur = -1, lastMinute = -1;
+  if (video) video.ontimeupdate = () => {
+    const t = video.currentTime;
+    let lo = 0, hi = times.length - 1, idx = -1;
+    while (lo <= hi) { const mid = (lo + hi) >> 1; if (times[mid] <= t) { idx = mid; lo = mid + 1; } else hi = mid - 1; }
+    if (idx !== cur) {
+      box.children[cur]?.classList.remove("cur");
+      cur = idx;
+      const el = box.children[cur];
+      if (el) {
+        el.classList.add("cur");
+        if (document.getElementById("follow").checked) box.scrollTop = el.offsetTop - box.offsetTop - box.clientHeight + el.offsetHeight + 8;
+      }
+    }
+    if (Math.floor(t / 15) !== lastMinute) { lastMinute = Math.floor(t / 15); drawChart(); }
+  };
+}
+
+function route() {
+  if (!data) return;
+  window.onresize = null;
+  const folder = decodeURIComponent(location.hash.slice(1));
+  if (folder) drawDetail(folder); else drawList();
+  window.scrollTo(0, 0);
+}
+
+async function load() {
+  try {
+    const r = await fetch("/api/archives");
+    data = await r.json();
+    route();
+  } catch (e) {
+    app.innerHTML = `<div class="empty">连不上后端，确认 server 在运行</div>`;
+  }
+}
+window.addEventListener("hashchange", route);
+load();
+</script>
+</body>
+</html>

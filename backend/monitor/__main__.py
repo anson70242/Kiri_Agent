@@ -52,7 +52,8 @@ async def main() -> int:
     p.add_argument("--interval", type=float, help="seconds between polls (overrides config)")
     args = p.parse_args()
 
-    logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)  # its request log prints the webhook secret
     streamers, interval = load_config(args.config)
     if not streamers:
         print(f"No streamers under monitor.streamers in {args.config}", file=sys.stderr)
@@ -72,17 +73,19 @@ async def main() -> int:
             ts = new.checked_at.astimezone().strftime("%H:%M:%S")
             print(f"{ts}  {fmt(new)}", flush=True)
 
-        from backend.notify import load_notifier  # lazy: notify imports this package
+        from backend.downloader.auto import attach  # lazy: imports this package
 
         mon.on_change.append(on_change)
-        notifier = load_notifier(args.config)
-        if notifier:
-            mon.on_change.append(notifier.on_change)
+        notifier, auto = attach(args.config, mon)
+        names = ", ".join(n.name for n in notifier.notifiers) if notifier else ""
         print(f"Monitoring {len(streamers)} streamer(s) every {args.interval or interval:g}s. "
-              f"Notify: {', '.join(n.name for n in notifier.notifiers) if notifier else 'off'}. Ctrl+C to stop.")
+              f"Notify: {names or 'off'}. Auto-download: {'on' if auto else 'off'}. Ctrl+C to stop.")
+        auto_task = asyncio.create_task(auto.run()) if auto else None
         try:
             await mon.run(args.interval or interval)
         finally:
+            if auto_task:
+                auto_task.cancel()
             if notifier:
                 await notifier.aclose()
     return 0

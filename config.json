@@ -17,11 +17,11 @@
     "interval": 60,
     "streamers": [
       { "name": "惑世いと", "platform": "youtube", "channel": "@wakuse_ito" },
-      { "name": "柊優花", "platform": "youtube", "channel": "@柊優花" },
-      { "name": "東雲はる", "platform": "youtube", "channel": "@東雲はるch" },
+      { "name": "柊優花", "platform": "youtube", "channel": "@柊優花", "auto_download": true },
+      { "name": "東雲はる", "platform": "youtube", "channel": "@東雲はるch", "auto_download": true },
       { "name": "sola", "platform": "youtube", "channel": "@sola_she" },
-      { "name": "鹿乃まほろ", "platform": "youtube", "channel": "@Kano_" },
-      { "name": "柊優花", "platform": "twitch", "channel": "hiiragiyukaofficial" }
+      { "name": "鹿乃まほろ", "platform": "youtube", "channel": "@Kano_", "auto_download": true },
+      { "name": "柊優花", "platform": "twitch", "channel": "hiiragiyukaofficial", "auto_download": true }
     ]
   },
   "notify": {
@@ -36,6 +36,8 @@
     "cookies_from_browser": "firefox",
     "twitch_oauth_env": "TWITCH_OAUTH",
     "ffmpeg": "",
-    "chat_retry": { "interval_minutes": 30, "give_up_hours": 48 }
+    "max_height": 1080,
+    "chat_retry": { "interval_minutes": 30, "give_up_hours": 48 },
+    "auto": { "keep": 6, "retry_minutes": 15, "give_up_hours": 12, "max_errors": 3 }
   }
 }
