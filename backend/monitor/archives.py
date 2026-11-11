@@ -10,7 +10,7 @@ import shutil
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from .__main__ import REPO_ROOT
 
@@ -83,6 +83,11 @@ def _archive(root: Path, folder: Path) -> dict:
     }
 
 
+def _vtt_time(seconds: float) -> str:
+    ms = round(max(0.0, float(seconds)) * 1000)
+    return f"{ms // 3_600_000:02d}:{ms // 60_000 % 60:02d}:{ms // 1000 % 60:02d}.{ms % 1000:03d}"
+
+
 def list_archives(root: Path) -> list[dict]:
     """Every `<creator>/<date>/<title>/` folder, newest first."""
     if not root.is_dir():
@@ -139,6 +144,29 @@ def create_router(output_dir: Path) -> APIRouter:
                 density.extend([0] * (minute + 1 - len(density)))
             density[minute] += 1
         return {"messages": messages, "density": density}
+
+    def load_transcript(folder: str) -> list[dict]:
+        path = resolve_folder(folder)
+        file = next((f for f in path.iterdir() if f.name.endswith(TRANSCRIPT_SUFFIX)), None)
+        if not file:
+            raise HTTPException(404, "no transcript")
+        try:
+            return json.loads(file.read_text(encoding="utf-8"))
+        except ValueError:
+            raise HTTPException(500, "transcript is not valid JSON")
+
+    @router.get("/api/archives/transcript")
+    def transcript(folder: str) -> dict:
+        return {"segments": load_transcript(folder)}
+
+    @router.get("/api/archives/subtitles.vtt")
+    def subtitles(folder: str) -> Response:
+        """The transcript as WebVTT, for <track> on the video."""
+        cues = "".join(
+            f"\n{_vtt_time(s['start'])} --> {_vtt_time(s['end'])}\n{s['text']}\n"
+            for s in load_transcript(folder)
+        )
+        return Response("WEBVTT\n" + cues, media_type="text/vtt; charset=utf-8")
 
     @router.get("/api/archives/file")
     def file(folder: str, name: str, download: bool = False) -> FileResponse:

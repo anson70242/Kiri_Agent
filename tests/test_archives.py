@@ -63,6 +63,21 @@ def test_chat(client):
     assert r.status_code == 404
 
 
+def test_subtitles_vtt(client):
+    r = client.get("/api/archives/subtitles.vtt", params={"folder": FOLDER})
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/vtt")
+    assert r.text == "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nやっほー\n"
+    r = client.get("/api/archives/subtitles.vtt", params={"folder": "柊優花/20261106/雑談"})
+    assert r.status_code == 404  # no transcript yet
+    assert client.get("/api/archives/subtitles.vtt", params={"folder": "../.."}).status_code == 404
+
+
+def test_transcript(client):
+    r = client.get("/api/archives/transcript", params={"folder": FOLDER})
+    assert r.json() == {"segments": [{"start": 1.0, "end": 2.0, "text": "やっほー"}]}
+    assert client.get("/api/archives/transcript", params={"folder": "柊優花/20261106/雑談"}).status_code == 404
+
+
 def test_file_and_range(client):
     params = {"folder": FOLDER, "name": f"{STEM}.mp4"}
     r = client.get("/api/archives/file", params=params)

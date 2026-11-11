@@ -98,6 +98,16 @@
   .msg .u { color: var(--muted); margin-right: 6px; }
   .msg .sc { background: var(--up-bg); color: var(--up); border-radius: 4px; padding: 0 4px; margin-right: 6px; font-weight: 600; }
   @media (max-width: 860px) { .chat { height: 60vh; } }
+  /* Left column = video panel + transcript panel, together as tall as the chat panel */
+  .leftcol { display: flex; flex-direction: column; gap: 14px; height: min(75vh, 720px); min-width: 0; }
+  .leftcol > .panel:first-child { flex: none; }
+  .leftcol video { max-height: 42vh; }
+  .subs { flex: 1; min-height: 120px; display: flex; flex-direction: column; }
+  .subs h3 { font-size: 13px; color: var(--muted); margin: 0 0 6px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .subs label { margin-left: auto; font-weight: 400; display: flex; align-items: center; gap: 4px; cursor: pointer; }
+  .subs label input { padding: 0; }
+  video::cue { font-size: 90%; background: rgba(0, 0, 0, .6); }
+  @media (max-width: 860px) { .leftcol { height: auto; } .subs { height: 40vh; flex: none; } }
 </style>
 </head>
 <body>
@@ -260,18 +270,25 @@ async function drawDetail(folder) {
       <span class="meta">${esc(fmtDate(a.date))} · ${size(a.size)}</span>${badges(a)}
     </div>
     <div class="layout">
+      <div class="leftcol">
       <div class="panel">
-        ${a.video && !a.downloading ? `<video id="video" controls preload="metadata" src="${fileUrl(a, a.video)}"></video>`
+        ${a.video && !a.downloading ? `<video id="video" controls preload="metadata" src="${fileUrl(a, a.video)}">${a.transcript_file
+            ? `<track kind="subtitles" srclang="ja" label="日本語" default src="/api/archives/subtitles.vtt?folder=${encodeURIComponent(a.folder)}">` : ""}</video>`
           : `<div class="novideo">${a.downloading ? "下载中，完成后可播放" : "没有视频文件"}</div>`}
         <div class="links">${files.map(([n, label]) =>
           `<a href="${fileUrl(a, n, true)}" download>⬇ ${label}</a>`).join("")}</div>
         <div class="density" id="density" hidden><h3>弹幕密度（每分钟）<span class="meta" id="peak"></span></h3>
           <canvas id="chart"></canvas></div>
       </div>
+      <div class="panel subs"><h3>字幕 <span class="meta" id="submeta"></span>
+          <label><input type="checkbox" id="subfollow" checked>跟随播放</label></h3>
+        <div class="msgs" id="subs"><div class="empty">${a.transcript_file ? "加载中…" : "还没有字幕"}</div></div></div>
+      </div>
       <div class="panel chat"><h3>弹幕 <span class="meta" id="chatmeta"></span>
           <label><input type="checkbox" id="follow" checked>跟随播放</label></h3>
         <div class="msgs" id="msgs"><div class="empty">${a.has_chat ? "加载中…" : "没有清洗后的弹幕"}</div></div></div>
     </div></div>`;
+  showTranscript(a, folder);
   if (!a.has_chat) return;
 
   let chat;
@@ -329,7 +346,7 @@ async function drawDetail(folder) {
 
   // Highlight and follow the latest message at or before the playhead.
   let cur = -1, lastMinute = -1;
-  if (video) video.ontimeupdate = () => {
+  if (video) video.addEventListener("timeupdate", () => {
     const t = video.currentTime;
     let lo = 0, hi = times.length - 1, idx = -1;
     while (lo <= hi) { const mid = (lo + hi) >> 1; if (times[mid] <= t) { idx = mid; lo = mid + 1; } else hi = mid - 1; }
@@ -343,7 +360,44 @@ async function drawDetail(folder) {
       }
     }
     if (Math.floor(t / 15) !== lastMinute) { lastMinute = Math.floor(t / 15); drawChart(); }
+  });
+}
+
+// Transcript list under the video: click a time to seek, follows the playhead.
+async function showTranscript(a, folder) {
+  if (!a.transcript_file) return;
+  const box = document.getElementById("subs");
+  let segs;
+  try {
+    const r = await fetch(`/api/archives/transcript?folder=${encodeURIComponent(a.folder)}`);
+    if (!r.ok) throw new Error(r.status);
+    segs = (await r.json()).segments;
+  } catch (e) {
+    box.innerHTML = `<div class="empty">字幕加载失败</div>`;
+    return;
+  }
+  if (location.hash.slice(1) !== encodeURIComponent(folder)) return;  // navigated away
+  document.getElementById("submeta").textContent = `${segs.length.toLocaleString()} 句`;
+  box.innerHTML = segs.map((s, i) => `<div class="msg" data-i="${i}"><span class="t">${hms(s.start)}</span>${esc(s.text)}</div>`).join("")
+    || `<div class="empty">字幕是空的</div>`;
+  const video = document.getElementById("video");
+  box.onclick = e => {
+    const t = e.target.closest(".t");
+    if (t && video) { video.currentTime = segs[+t.parentElement.dataset.i].start; video.play().catch(() => {}); }
   };
+  let cur = -1;
+  if (video) video.addEventListener("timeupdate", () => {
+    const t = video.currentTime;
+    let lo = 0, hi = segs.length - 1, idx = -1;
+    while (lo <= hi) { const mid = (lo + hi) >> 1; if (segs[mid].start <= t) { idx = mid; lo = mid + 1; } else hi = mid - 1; }
+    if (idx === cur) return;
+    box.children[cur]?.classList.remove("cur");
+    cur = idx;
+    const el = box.children[cur];
+    if (!el) return;
+    el.classList.add("cur");
+    if (document.getElementById("subfollow").checked) box.scrollTop = el.offsetTop - box.offsetTop - box.clientHeight / 2 + el.offsetHeight / 2;
+  });
 }
 
 function route() {
