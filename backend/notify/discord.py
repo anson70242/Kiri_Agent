@@ -45,7 +45,7 @@ class DiscordNotifier(Notifier):
             "title": (status.title or ("直播中" if live else "直播已结束"))[:256],
             "color": PLATFORM_COLORS.get(s.platform, DEFAULT_COLOR) if live else OFFLINE_COLOR,
             "author": {"name": f"{s.name} · {s.platform}"},
-            "footer": {"text": "Kiri_Agent 直播监控"},
+            "footer": {"text": "Kiri_Agent 开播提醒"},
         }
         if status.url:
             embed["url"] = status.url
