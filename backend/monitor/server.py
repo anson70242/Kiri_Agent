@@ -76,6 +76,12 @@ def create_app(config: Path, interval: float | None = None) -> FastAPI:
     async def status() -> dict:
         return snapshot()
 
+    @app.get("/api/downloads")
+    async def downloads() -> dict:
+        if not auto:
+            return {"enabled": False, "active": None, "queue": []}
+        return {"enabled": True, **auto.snapshot()}
+
     @app.post("/api/refresh")
     async def refresh() -> dict:
         await mon.refresh()

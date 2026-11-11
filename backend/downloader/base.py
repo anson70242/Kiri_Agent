@@ -12,7 +12,7 @@ import http.cookiejar
 import logging
 import re
 from abc import ABC, abstractmethod
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -135,13 +135,18 @@ class PlatformDownloader(ABC):
         raw = self._ytdlp(url, {"skip_download": True}, download=False)
         return self.parse_info(raw, url)
 
-    def download_video(self, info: VideoInfo, out_dir: Path) -> Path:
+    def download_video(
+        self, info: VideoInfo, out_dir: Path, progress: Callable[[dict[str, Any]], None] | None = None
+    ) -> Path:
         path = out_dir / f"{info.stem}.mp4"
         if path.exists():
             log.info("video already exists, skipping: %s", path.name)
             return path
         log.info("downloading video: %s", info.url)
-        self._ytdlp(info.url, self.video_options(outtmpl(out_dir, info.stem)))
+        opts = self.video_options(outtmpl(out_dir, info.stem))
+        if progress:
+            opts["progress_hooks"] = [progress]
+        self._ytdlp(info.url, opts)
         if not path.exists():
             raise DownloadError(f"yt-dlp finished but {path.name} is missing")
         return path

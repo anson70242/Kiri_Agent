@@ -143,9 +143,11 @@ class FakeDownloader(PlatformDownloader):
     def info(self, url):
         return VideoInfo("fake", "1", url, "Title", "c", "Chan", "20261110", live_status=self.live_status)
 
-    def download_video(self, info, out_dir: Path) -> Path:
+    def download_video(self, info, out_dir: Path, progress=None) -> Path:
         if "video" in self.fail:
             raise DownloadError("video boom")
+        if progress:
+            progress({"status": "downloading", "downloaded_bytes": 1, "total_bytes": 2})
         p = out_dir / f"{info.stem}.mp4"
         p.write_bytes(b"x")
         return p
@@ -170,6 +172,12 @@ def fake(monkeypatch):
     monkeypatch.setattr(FakeDownloader, "fail", set())
     monkeypatch.setattr(FakeDownloader, "live_status", "was_live")
     return FakeDownloader
+
+
+def test_download_reports_video_progress(tmp_path, fake):
+    events = []
+    download("fake://x", DownloadSettings(output_dir=tmp_path), progress=events.append)
+    assert events == [{"status": "downloading", "downloaded_bytes": 1, "total_bytes": 2}]
 
 
 def test_download_writes_into_creator_date_title(tmp_path, fake):

@@ -60,6 +60,16 @@
   .ch { background: var(--ok-bg); color: var(--ok); }
   .nochat { background: var(--off-bg); color: var(--off); }
   .empty { color: var(--muted); text-align: center; padding: 40px; }
+  /* Auto-download progress */
+  #downloads:empty { display: none; }
+  #downloads { margin-bottom: 20px; display: flex; flex-direction: column; gap: 8px; }
+  .job { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px 16px;
+    box-shadow: var(--shadow); }
+  .job.active { border-color: var(--accent); }
+  .job .head { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+  .job .title { font-weight: 600; overflow-wrap: anywhere; flex: 1 1 260px; min-width: 0; }
+  .job .bar { height: 8px; margin-top: 8px; }
+  .job .err { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; margin-top: 4px; }
   /* Detail */
   .detail h1 { font-size: 19px; overflow-wrap: anywhere; }
   .layout { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 14px; align-items: start; }
@@ -166,6 +176,7 @@ function drawList() {
         `<option ${c === filter.creator ? "selected" : ""}>${esc(c)}</option>`).join("")}</select>
       <input id="q" placeholder="搜索标题…" value="${esc(filter.text)}" autocomplete="off">
     </div>
+    <div id="downloads"></div>
     ${!all.length ? `<div class="empty">还没有录播（${esc(data.output_dir)}）</div>`
       : !rows.length ? `<div class="empty">没有符合条件的录播</div>` : groups}`;
 
@@ -177,6 +188,54 @@ function drawList() {
   const qEl = document.getElementById("q");
   qEl.oninput = () => { filter.text = qEl.value; drawList(); const el = document.getElementById("q");
     el.focus(); el.setSelectionRange(el.value.length, el.value.length); };
+  drawDownloads();
+}
+
+// ---- Auto-download progress (own box, refreshed by polling; list view only) ----
+let downloads = null;
+const clock = ts => new Date(ts * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+const dur = s => s >= 3600 ? `${Math.floor(s / 3600)} 小时 ${Math.floor(s / 60) % 60} 分`
+  : s >= 60 ? `${Math.floor(s / 60)} 分 ${Math.floor(s % 60)} 秒` : `${Math.round(s)} 秒`;
+
+function drawDownloads() {
+  const box = document.getElementById("downloads");
+  if (!box || !downloads) return;
+  const { active, queue } = downloads;
+  const waiting = queue.filter(j => !active || j.url !== active.url);
+  let html = "";
+  if (active) {
+    const pct = active.percent;
+    const parts = [];
+    if (active.total) parts.push(`${size(active.downloaded)} / ${size(active.total)}`);
+    else if (active.downloaded) parts.push(size(active.downloaded));
+    if (active.speed) parts.push(`${size(active.speed)}/s`);
+    if (active.eta != null) parts.push(`剩余 ${dur(active.eta)}`);
+    html += `<div class="job active"><div class="head">
+        <span class="chip dl">${pct == null ? "准备中" : `下载中 ${pct.toFixed(1)}%`}</span>
+        <span class="creator">${esc(active.name)}</span>
+        <span class="title">${esc(active.title || active.url)}</span>
+        <span class="meta">${esc(parts.join(" · "))}</span></div>
+      <div class="bar"><div style="width:${pct ?? 0}%"></div></div></div>`;
+  }
+  html += waiting.map(j => `<div class="job"><div class="head">
+      <span class="chip" style="background:var(--off-bg);color:var(--off)">排队中</span>
+      <span class="creator">${esc(j.name)}</span>
+      <span class="title">${esc(j.title || j.url)}</span>
+      <span class="meta">${j.next_try * 1000 > Date.now() ? `下次尝试 ${clock(j.next_try)}` : "马上开始"}${j.attempts ? ` · 已试 ${j.attempts} 次` : ""}</span></div>
+      ${j.last_error ? `<div class="err">${esc(j.last_error)}</div>` : ""}</div>`).join("");
+  box.innerHTML = html;
+}
+
+async function pollDownloads() {
+  try {
+    const r = await fetch("/api/downloads");
+    const next = await r.json();
+    const finished = downloads?.active && !next.active;
+    downloads = next.enabled ? next : null;
+    drawDownloads();
+    if (finished && !location.hash) load();  // a download just ended: refresh the list (not a detail page)
+  } catch {}
+  setTimeout(pollDownloads, downloads?.active ? 2000 : 10000);
 }
 
 // ---- Detail view ----
@@ -300,6 +359,7 @@ async function load() {
 }
 window.addEventListener("hashchange", route);
 load();
+pollDownloads();
 </script>
 </body>
 </html>

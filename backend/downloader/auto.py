@@ -108,6 +108,7 @@ class AutoDownloader:
         self.notify = notify
         self.clock = clock
         self._wake = asyncio.Event()
+        self._active: dict[str, Any] | None = None  # job being downloaded + progress
 
     # ---- queue ----
 
@@ -141,6 +142,25 @@ class AutoDownloader:
         self.save(jobs)
         log.info("auto-download queued: %s %s", status.streamer.name, status.url)
         self._wake.set()
+
+    def snapshot(self) -> dict[str, Any]:
+        """What's downloading now and what's queued, for the archives page."""
+        return {
+            "active": dict(a) if (a := self._active) else None,  # copy: the thread mutates it
+            "queue": [
+                {
+                    "name": j.status.streamer.name,
+                    "platform": j.status.streamer.platform,
+                    "title": j.status.title,
+                    "url": j.status.url,
+                    "queued_at": j.queued_at,
+                    "next_try": j.next_try,
+                    "attempts": j.attempts,
+                    "last_error": j.last_error,
+                }
+                for j in self.load()
+            ],
+        }
 
     # ---- worker ----
 
@@ -188,13 +208,33 @@ class AutoDownloader:
             info = dl.info(url)
             if info.live_status in NOT_READY:
                 return Outcome("wait", f"stream is {info.live_status}")
-            result = download(url, self.settings, self.streamers, info=info)
+            self._active = {"name": s.streamer.name, "platform": s.streamer.platform,
+                            "title": s.title, "url": s.url, "started": self.clock(),
+                            "percent": None, "downloaded": 0, "total": None, "speed": None, "eta": None}
+            result = download(url, self.settings, self.streamers, info=info, progress=self._on_progress)
         except DownloadError as e:
             return Outcome("error", str(e))
+        finally:
+            self._active = None
         if err := result.errors.get("video"):
             return Outcome("error", err, result)
         pruned = self.prune(result.output_dir, self.keep.get(s.streamer.id, 6))
         return Outcome("done", result=result, pruned=pruned)
+
+    def _on_progress(self, d: dict[str, Any]) -> None:
+        """yt-dlp progress hook (runs in the download thread)."""
+        active = self._active
+        if active is None or d.get("status") != "downloading":
+            return
+        done = d.get("downloaded_bytes") or 0
+        total = d.get("total_bytes") or d.get("total_bytes_estimate")
+        active.update(
+            downloaded=done,
+            total=total,
+            percent=round(done / total * 100, 1) if total else None,
+            speed=d.get("speed"),
+            eta=d.get("eta"),
+        )
 
     def finish(self, job: Job, outcome: Outcome) -> None:
         """Record an attempt's outcome; send a message when the job is over."""

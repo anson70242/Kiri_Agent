@@ -107,6 +107,20 @@ def test_job_added_during_attempt_is_kept(tmp_path):
     assert sorted(j.status.streamer.id for j in ad.load()) == sorted([A.id, B.id])
 
 
+# ---- progress snapshot (what the archives page shows) ----
+
+def test_snapshot_lists_queued_jobs(tmp_path):
+    ad, clock, _ = make(tmp_path)
+    assert ad.snapshot() == {"active": None, "queue": []}
+    ad.on_ended(ended())
+    job = ad.next_due()
+    ad.finish(job, Outcome("wait", "stream is post_live"))
+    (row,) = ad.snapshot()["queue"]
+    assert row["name"] == "A" and row["title"] == "title v1"
+    assert row["attempts"] == 1 and row["last_error"] == "stream is post_live"
+    assert row["next_try"] == clock.t + 900
+
+
 # ---- attempt ----
 
 class FakeDL:
@@ -136,7 +150,7 @@ def test_attempt_downloads_and_prunes(tmp_path, monkeypatch):
     monkeypatch.setattr(auto_mod, "downloader_for", lambda *a: FakeDL())
     out = ad.settings.output_dir / "A" / "20261110" / "t"
 
-    def fake_download(url, settings, streamers, info=None):
+    def fake_download(url, settings, streamers, info=None, progress=None):
         out.mkdir(parents=True)
         return DownloadResult(info, out, video=out / "x.mp4")
 
@@ -144,6 +158,31 @@ def test_attempt_downloads_and_prunes(tmp_path, monkeypatch):
     ad.on_ended(ended())
     outcome = ad.attempt(ad.next_due())
     assert outcome.kind == "done" and outcome.result.output_dir == out
+
+
+def test_snapshot_shows_progress_while_downloading(tmp_path, monkeypatch):
+    ad, _, _ = make(tmp_path)
+    monkeypatch.setattr(auto_mod, "downloader_for", lambda *a: FakeDL())
+    out = ad.settings.output_dir / "A" / "20261110" / "t"
+    seen = {}
+
+    def fake_download(url, settings, streamers, info=None, progress=None):
+        out.mkdir(parents=True)
+        # yt-dlp progress hook payload (fragmented download: estimate, no total)
+        progress({"status": "downloading", "downloaded_bytes": 250, "total_bytes_estimate": 1000,
+                  "speed": 50.0, "eta": 15})
+        seen["active"] = ad.snapshot()["active"]
+        return DownloadResult(info, out, video=out / "x.mp4")
+
+    monkeypatch.setattr(auto_mod, "download", fake_download)
+    ad.on_ended(ended())
+    ad.attempt(ad.next_due())
+
+    active = seen["active"]
+    assert active["name"] == "A" and active["title"] == "title v1"
+    assert active["percent"] == 25.0
+    assert (active["downloaded"], active["total"], active["speed"], active["eta"]) == (250, 1000, 50.0, 15)
+    assert ad.snapshot()["active"] is None  # cleared once the attempt is over
 
 
 def test_attempt_video_error(tmp_path, monkeypatch):

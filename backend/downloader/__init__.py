@@ -12,8 +12,9 @@ from __future__ import annotations
 import json
 import logging
 import os
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -93,6 +94,7 @@ def download(
     video: bool = True,
     chat: bool = True,
     info: VideoInfo | None = None,
+    progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> DownloadResult:
     """Download a VOD and/or its chat into `<output_dir>/<creator>/<date>/<title>/`.
 
@@ -105,6 +107,7 @@ def download(
     is refused for now, and the chat is tried once and queued if it isn't there yet.
 
     `info`: metadata already fetched with `dl.info(url)`, to skip fetching it again.
+    `progress`: yt-dlp progress hook for the video (called from this thread).
     """
     dl = downloader_for(url, settings, streamers)
     info = info or dl.info(url)
@@ -118,7 +121,7 @@ def download(
         try:
             if info.live_status == "post_live":
                 raise DownloadError("YouTube is still processing the VOD; retry later")
-            result.video = dl.download_video(info, out_dir)
+            result.video = dl.download_video(info, out_dir, progress)
         except DownloadError as e:
             log.error("video download failed: %s", e)
             result.errors["video"] = str(e)
