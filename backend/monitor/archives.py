@@ -57,7 +57,7 @@ def summary(a: Archive) -> dict:
         "raw_chat_file": name(Artifact.RAW_CHAT),
         "chat_count": a.chat_count(),
         "transcript_file": name(Artifact.TRANSCRIPT),
-        "zh_transcript_file": name(Artifact.ZH_TRANSCRIPT),
+        "zh_transcript_file": name(Artifact.CHINESE_TRANSCRIPT),
         "highlights_file": name(Artifact.HIGHLIGHTS),
         "size": a.size,
         "mtime": a.mtime,

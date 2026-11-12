@@ -114,7 +114,7 @@ def translate(video: Path, complete: Complete, settings: TranslateSettings | Non
     missing = sum(1 for i in range(count) if i not in texts)
     if missing:
         log.warning("translate %s: %d lines kept in Japanese", video.name, missing)
-    return archive.save(Artifact.ZH_TRANSCRIPT, zh)
+    return archive.save(Artifact.CHINESE_TRANSCRIPT, zh)
 
 
 def translate_group(lines: list[dict[str, Any]], ids: list[int], complete: Complete,

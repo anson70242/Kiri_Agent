@@ -38,7 +38,7 @@ class Artifact(Enum):
     RAW_CHAT = (".live_chat.json", ".chat.json")  # YouTube, Twitch: as downloaded
     CHAT = (".chat_parsed.json",)  # cleaned chat
     TRANSCRIPT = (".transcript.json",)  # Japanese subtitles (backend.asr)
-    ZH_TRANSCRIPT = (".zh.transcript.json",)  # Chinese subtitles (backend.translate)
+    CHINESE_TRANSCRIPT = (".zh.transcript.json",)  # Chinese subtitles (backend.translate)
     HIGHLIGHTS = (".highlights.json",)  # 路灯表 (backend.analysis)
 
     @property
@@ -48,7 +48,7 @@ class Artifact(Enum):
     def matches(self, name: str) -> bool:
         """Whether a file name carries this artifact's suffix. The transcript's suffix is
         also the end of the Chinese transcript's; those never count as the transcript."""
-        if self is Artifact.TRANSCRIPT and Artifact.ZH_TRANSCRIPT.matches(name):
+        if self is Artifact.TRANSCRIPT and Artifact.CHINESE_TRANSCRIPT.matches(name):
             return False
         return name.endswith(self.suffixes)
 
@@ -62,7 +62,7 @@ class Artifact(Enum):
     @staticmethod
     def transcript(lang: str) -> Artifact:
         """The transcript in `lang`: "zh" is the Chinese transcript, anything else Japanese."""
-        return Artifact.ZH_TRANSCRIPT if lang == "zh" else Artifact.TRANSCRIPT
+        return Artifact.CHINESE_TRANSCRIPT if lang == "zh" else Artifact.TRANSCRIPT
 
 
 DOWNLOADING_SUFFIX = ".part"  # a download in progress (the video, or Twitch raw chat being fetched)

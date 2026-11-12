@@ -24,7 +24,7 @@ def test_an_artifact_is_the_file_named_after_the_video(tmp_path):
     assert a.file(Artifact.VIDEO) == folder / f"{STEM}.mp4"
     assert a.file(Artifact.CHAT) == folder / f"{STEM}.chat_parsed.json"
     assert a.file(Artifact.TRANSCRIPT) == folder / f"{STEM}.transcript.json"
-    assert a.file(Artifact.ZH_TRANSCRIPT) == folder / f"{STEM}.zh.transcript.json"
+    assert a.file(Artifact.CHINESE_TRANSCRIPT) == folder / f"{STEM}.zh.transcript.json"
     assert a.file(Artifact.HIGHLIGHTS) == folder / f"{STEM}.highlights.json"
     assert a.file(Artifact.RAW_CHAT) is None
 
@@ -37,7 +37,7 @@ def test_without_the_named_file_the_first_in_sorted_order_is_taken(tmp_path):
     a = Archive.from_folder(folder)
     assert a.file(Artifact.CHAT) == folder / "a.chat_parsed.json"
     assert a.file(Artifact.TRANSCRIPT) is None  # never the Chinese one
-    assert a.file(Artifact.ZH_TRANSCRIPT) == folder / "a.zh.transcript.json"
+    assert a.file(Artifact.CHINESE_TRANSCRIPT) == folder / "a.zh.transcript.json"
     (folder / "z.transcript.json").write_text("[]", encoding="utf-8")
     assert Archive.from_folder(folder).file(Artifact.TRANSCRIPT) == folder / "z.transcript.json"
 
@@ -84,7 +84,7 @@ def test_presence_is_reported_per_artifact(tmp_path):
     folder = sample_archive(tmp_path, zh_transcript=None, highlights=None)
     a = Archive.from_folder(folder)
     assert a.present() == {Artifact.VIDEO, Artifact.CHAT, Artifact.TRANSCRIPT}
-    assert a.has(Artifact.TRANSCRIPT) and not a.has(Artifact.ZH_TRANSCRIPT)
+    assert a.has(Artifact.TRANSCRIPT) and not a.has(Artifact.CHINESE_TRANSCRIPT)
     assert not a.downloading
 
 

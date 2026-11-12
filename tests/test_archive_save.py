@@ -49,7 +49,7 @@ def test_highlights_are_saved_with_one_space_indent(tmp_path):
 def test_lists_are_saved_one_compact_item_per_line(tmp_path):
     folder = sample_archive(tmp_path, chat=None, zh_transcript=None)
     a = Archive.from_folder(folder)
-    out = a.save(Artifact.ZH_TRANSCRIPT, SEGMENTS)
+    out = a.save(Artifact.CHINESE_TRANSCRIPT, SEGMENTS)
     assert out.read_text(encoding="utf-8") == (
         '[\n'
         '  {"start": 0.78, "end": 3.78, "text": "めっちゃ味するよ!"},\n'

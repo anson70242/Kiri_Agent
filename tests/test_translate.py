@@ -91,7 +91,7 @@ def test_nothing_usable_fails(tmp_path):
     video = make_transcript(tmp_path, 10)
     with pytest.raises(TranslateError):
         translate(video, FakeLLM(junk_first=99), TranslateSettings(retries=2))
-    assert not Archive.from_video(video).has(Artifact.ZH_TRANSCRIPT)
+    assert not Archive.from_video(video).has(Artifact.CHINESE_TRANSCRIPT)
 
 
 def test_no_transcript_fails(tmp_path):

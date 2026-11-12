@@ -510,7 +510,7 @@ def ready_detail(video: Path, site_url: str, output_dir: Path) -> str:
 
 
 READY_ARTIFACTS = [("影片", Artifact.VIDEO), ("弹幕", Artifact.CHAT), ("日文字幕", Artifact.TRANSCRIPT),
-                   ("中文字幕", Artifact.ZH_TRANSCRIPT), ("路灯表", Artifact.HIGHLIGHTS)]  # in the message's order
+                   ("中文字幕", Artifact.CHINESE_TRANSCRIPT), ("路灯表", Artifact.HIGHLIGHTS)]  # in the message's order
 
 
 def archive_link(site_url: str, output_dir: Path, folder: Path) -> str:
