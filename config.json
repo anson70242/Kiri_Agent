@@ -30,6 +30,12 @@
     "offline_grace": 120,
     "discord": { "webhook_env": "DISCORD_WEBHOOK_URL", "mention": "" }
   },
+  "llm": {
+    "base_url": "http://127.0.0.1:8317/v1",
+    "api_key_env": "AGY_API_KEY",
+    "model": "gemini-3.8-flash-high",
+    "proxy": true
+  },
   "asr": { "url": "http://whisper:8000", "language": "ja", "vad": true },
   "download": {
     "output_dir": "downloads",

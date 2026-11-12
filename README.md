@@ -44,11 +44,15 @@ uv run backend/agents/agent.py             # interactive session
 
 ### LLM proxy
 
-If the server is somewhere LLM providers don't serve, `LLM_PROXY` in its `.env` sends
-only the LLM client's requests through another machine that runs
-[backend/llm_proxy.py](backend/llm_proxy.py): an HTTPS CONNECT proxy reachable only over
-Tailscale, password-protected, allowing only the LLM API hosts. Downloads and
-monitoring keep connecting directly. Setup: "LLM 代理" in [docs/deploy.md](docs/deploy.md).
+The analysis LLM is set in `config.json` → `llm` (`base_url`, `model`, `api_key_env`,
+`proxy`), see [backend/llm.py](backend/llm.py). With `"proxy": true`, only LLM requests
+go through `LLM_PROXY`: another machine running [backend/llm_proxy.py](backend/llm_proxy.py),
+reachable only over Tailscale and password-protected. It tunnels HTTPS to the official
+LLM API hosts, and forwards plain HTTP to allowlisted local gateways on that machine
+(default `127.0.0.1:8317`, e.g. CLIProxyAPI for Google agy), so `base_url:
+http://127.0.0.1:8317/v1` means that machine's localhost. Downloads and monitoring keep
+connecting directly. `"proxy": false` (for anyone who doesn't need it) connects straight
+to `base_url`. Setup: "LLM 代理" in [docs/deploy.md](docs/deploy.md).
 
 ## Live monitor
 

@@ -123,8 +123,15 @@ docker compose exec kiri /app/.venv/bin/python -m backend.downloader --info <会
 容器 ──LLM 请求──▶ Tailscale ──▶ 日本电脑 100.126.34.25:8118（backend.llm_proxy）──▶ api.openai.com 等
 ```
 
-代理只接受带密码的 HTTPS 隧道，只放行 `api.openai.com`、`api.anthropic.com`、
-`generativelanguage.googleapis.com`（其他域名在电脑 `.env` 里用 `LLM_PROXY_ALLOW=a.com,b.com` 加）。
+代理只接受带密码的请求，只放行两种：
+- HTTPS 隧道到 `api.openai.com`、`api.anthropic.com`、`generativelanguage.googleapis.com`
+  （其他域名在电脑 `.env` 里用 `LLM_PROXY_ALLOW=a.com,b.com` 加）。
+- 普通 HTTP 转发到电脑本机的 LLM 网关，默认 `127.0.0.1:8317`（CLIProxyAPI / Google agy；
+  用 `LLM_PROXY_HTTP_ALLOW=127.0.0.1:8317,...` 改）。
+
+是否走代理由 `config.json` 的 `llm.proxy` 决定（`true` 走、`false` 直连，给不需要代理的人用）。
+现在的设定：`base_url` 是 `http://127.0.0.1:8317/v1`，`proxy: true`，
+所以服务器的请求经代理到日本电脑，再由电脑转给它自己的 8317。
 
 **日本电脑（一次）**
 
@@ -134,11 +141,16 @@ docker compose exec kiri /app/.venv/bin/python -m backend.downloader --info <会
 
 **服务器**
 
-在 `~/kiri/.env` 加一行（密码就是电脑 `.env` 里的 `LLM_PROXY_TOKEN`），然后 `docker compose up -d`：
+在 `~/kiri/.env` 加两行（密码是电脑 `.env` 里的 `LLM_PROXY_TOKEN`，key 是 agy 的 key，
+即电脑 `.env` 里的 `AGY_API_KEY`），然后 `docker compose up -d`：
 
 ```sh
 LLM_PROXY=http://kiri:<LLM_PROXY_TOKEN>@100.126.34.25:8118
+AGY_API_KEY=<agy 的 key>
 ```
+
+改了 `backend/llm_proxy.py` 之后，电脑上要重启代理：
+`Stop-ScheduledTask "Kiri LLM Proxy"; Start-ScheduledTask "Kiri LLM Proxy"`。
 
 测试（不带密码应返回 `407`，说明网络通、代理在跑）：
 

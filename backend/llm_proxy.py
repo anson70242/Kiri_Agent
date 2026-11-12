@@ -8,9 +8,15 @@ client uses it. Everything else on the server (downloads, monitor) connects dire
     uv run -m backend.llm_proxy --host 127.0.0.1 --port 8118
     pythonw -m backend.llm_proxy --log data/llm_proxy.log   # no console (autostart)
 
+Two kinds of traffic:
+- HTTPS CONNECT tunnels to port 443 of the hosts in ALLOWED_HOSTS (official APIs;
+  extend with LLM_PROXY_ALLOW="host1,host2" in .env).
+- Plain HTTP requests to a local LLM gateway on this machine, e.g. CLIProxyAPI on
+  127.0.0.1:8317 (LLM_PROXY_HTTP_ALLOW). The server sets base_url to
+  http://127.0.0.1:8317/v1 and the request runs from here.
+Anything else gets 403.
+
 Safety:
-- Only HTTPS CONNECT tunnels, only to port 443 of the hosts in ALLOWED_HOSTS
-  (extend with LLM_PROXY_ALLOW="host1,host2" in .env). Anything else gets 403.
 - Needs `LLM_PROXY_TOKEN` (from .env) as the proxy password; refuses to start without it.
 - Bind it to the Tailscale address, never 0.0.0.0, so only your tailnet can reach it.
 """
@@ -27,6 +33,7 @@ import socket
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 
@@ -38,6 +45,9 @@ ALLOWED_HOSTS = {
     "api.anthropic.com",
     "generativelanguage.googleapis.com",
 }
+# Local LLM gateway (CLIProxyAPI) the server may call through us as plain HTTP.
+# Override with LLM_PROXY_HTTP_ALLOW="127.0.0.1:8317,127.0.0.1:11434" ("" disables).
+DEFAULT_HTTP_ALLOW = "127.0.0.1:8317"
 HEADER_LIMIT = 16 * 1024
 IDLE_TIMEOUT = 15  # seconds to send the CONNECT request
 
@@ -56,10 +66,14 @@ def tailscale_ip() -> str | None:
 
 
 class Proxy:
-    def __init__(self, token: str, allowed: set[str], upstream_port: int = 443):
+    def __init__(self, token: str, allowed: set[str], upstream_port: int = 443,
+                 http_allowed: set[str] | None = None):
         self.token = token
         self.allowed = allowed
         self.upstream_port = upstream_port  # tests point this at a local server
+        # "host:port" of plain-HTTP services on this machine the server may reach,
+        # e.g. a local LLM gateway on 127.0.0.1:8317.
+        self.http_allowed = http_allowed or set()
 
     def authorized(self, header: str | None) -> bool:
         if not header:
@@ -92,7 +106,7 @@ class Proxy:
             return await self.reply(writer, 407, "Proxy Authentication Required",
                                     'Proxy-Authenticate: Basic realm="kiri"\r\n')
         if method.upper() != "CONNECT":
-            return await self.reply(writer, 405, "Method Not Allowed")
+            return await self.forward(reader, writer, peer, lines, method, target)
         host, _, port = target.rpartition(":")
         host = host.strip("[]").lower()
         if port != "443" or host not in self.allowed:
@@ -108,6 +122,34 @@ class Proxy:
         writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
         await writer.drain()
         await asyncio.gather(pipe(reader, up_writer), pipe(up_reader, writer))
+
+    async def forward(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, peer: object,
+                      lines: list[str], method: str, target: str) -> None:
+        """Plain-HTTP forward proxy (absolute-form request), only to `http_allowed`.
+        One request per connection: the upstream is told `Connection: close`."""
+        url = urlsplit(target)
+        try:
+            host, port = (url.hostname or "").lower(), url.port or 80
+        except ValueError:
+            return await self.reply(writer, 400, "Bad Request")
+        if url.scheme != "http" or f"{host}:{port}" not in self.http_allowed:
+            log.warning("%s: refused %s %s", peer, method, target)
+            return await self.reply(writer, 403, "Forbidden")
+        try:
+            up_reader, up_writer = await asyncio.wait_for(asyncio.open_connection(host, port), 15)
+        except (OSError, asyncio.TimeoutError) as e:
+            log.warning("%s: can't reach %s:%s: %s", peer, host, port, e)
+            return await self.reply(writer, 502, "Bad Gateway")
+        log.info("%s -> http://%s:%s%s", peer, host, port, url.path)
+        version = lines[0].rsplit(" ", 1)[-1]
+        path = (url.path or "/") + (f"?{url.query}" if url.query else "")
+        hop = {"proxy-authorization", "proxy-connection", "connection", "keep-alive"}
+        kept = [ln for ln in lines[1:] if ln and ln.split(":", 1)[0].strip().lower() not in hop]
+        up_writer.write("\r\n".join([f"{method} {path} {version}", *kept, "Connection: close", "", ""]).encode("latin-1"))
+        await up_writer.drain()
+        to_upstream = asyncio.create_task(pipe(reader, up_writer))  # request body
+        await pipe(up_reader, writer)  # response, until the upstream closes
+        to_upstream.cancel()
 
     @staticmethod
     async def reply(writer: asyncio.StreamWriter, code: int, text: str, extra: str = "") -> None:
@@ -165,8 +207,11 @@ def main() -> int:
         log.warning("no Tailscale IPv4 yet; retrying in 15 s (or pass --host)")
         time.sleep(15)
     extra = {h.strip().lower() for h in os.getenv("LLM_PROXY_ALLOW", "").split(",") if h.strip()}
+    http_allowed = {h.strip().lower() for h in os.getenv("LLM_PROXY_HTTP_ALLOW", DEFAULT_HTTP_ALLOW).split(",") if h.strip()}
+    if http_allowed:
+        log.info("plain HTTP forwarding to: %s", ", ".join(sorted(http_allowed)))
     try:
-        asyncio.run(serve(host, args.port, Proxy(token, ALLOWED_HOSTS | extra)))
+        asyncio.run(serve(host, args.port, Proxy(token, ALLOWED_HOSTS | extra, http_allowed=http_allowed)))
     except KeyboardInterrupt:
         pass
     return 0
