@@ -24,6 +24,7 @@ from .__main__ import REPO_ROOT
 LOGIN_PAGE = REPO_ROOT / "frontend" / "login.html"
 
 SAFE_METHODS = {"GET", "HEAD"}
+HEALTH = "/healthz"
 PUBLIC = {("GET", "/login"), ("HEAD", "/login"), ("POST", "/api/login"), ("POST", "/api/logout")}
 ADMIN_ONLY_PREFIXES = ("/notify", "/api/notify", "/users", "/api/users")
 MEMBER_WRITES = {("POST", "/api/refresh")}
@@ -106,6 +107,8 @@ def install_auth(app: FastAPI, auth: Auth) -> None:
     @app.middleware("http")
     async def gate(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
         method, path = request.method.upper(), request.url.path
+        if path == HEALTH and method in SAFE_METHODS:  # Docker / CI: "is it up?", no data
+            return await call_next(request)
         if not auth.users:  # never leave the site open just because nobody has an account yet
             return _deny(request, 503, NO_USERS)
         if method not in SAFE_METHODS and not same_origin(request, auth.trusted_proxies):

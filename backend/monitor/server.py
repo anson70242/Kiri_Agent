@@ -135,6 +135,11 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
     async def users_page() -> FileResponse:
         return FileResponse(USERS_PAGE)
 
+    @app.get("/healthz")
+    async def healthz() -> dict:
+        """Docker's health check and the CI smoke test; open even when login is on."""
+        return {"ok": True}
+
     @app.get("/api/status")
     async def status() -> dict:
         return snapshot()

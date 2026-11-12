@@ -49,11 +49,11 @@ jobs:
       - name: Build image
         run: docker build -t kiri-agent:ci .
 
-      - name: Smoke test (container starts and serves /api/status)
+      - name: Smoke test (container starts and serves /healthz)
         run: |
           docker run -d --name kiri-ci -p 127.0.0.1:8770:8770 kiri-agent:ci
           for i in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:8770/api/status > /dev/null; then
+            if curl -fsS http://127.0.0.1:8770/healthz > /dev/null; then
               echo "dashboard is up"; exit 0
             fi
             sleep 1

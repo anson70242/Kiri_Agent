@@ -28,7 +28,7 @@ USER app
 
 EXPOSE 8770
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD ["/app/.venv/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8770/api/status', timeout=4)"]
+    CMD ["/app/.venv/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8770/healthz', timeout=4)"]
 
 # 0.0.0.0 inside the container; docker-compose.yml decides what the host exposes.
 CMD ["/app/.venv/bin/python", "-m", "backend.monitor.server", "--host", "0.0.0.0", "--port", "8770"]

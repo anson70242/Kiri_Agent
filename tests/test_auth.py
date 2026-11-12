@@ -256,6 +256,18 @@ def test_no_users_yet_means_closed_with_instructions(tmp_path):
     assert client.get("/login").status_code == 503
 
 
+def test_healthz_answers_without_login_and_says_nothing_else(tmp_path, monkeypatch):
+    # Docker's health check and the CI smoke test: the server is up, even with no account yet.
+    for d in ("a", "b"):
+        (tmp_path / d).mkdir()
+    closed = TestClient(create_app(write_config(tmp_path / "a")))
+    assert closed.get("/healthz").json() == {"ok": True}
+    client = make_client(tmp_path / "b", monkeypatch)
+    r = client.get("/healthz")
+    assert r.status_code == 200 and r.json() == {"ok": True}
+    assert client.post("/healthz", follow_redirects=False).status_code == 303  # writes still need login
+
+
 def test_auth_off_without_config_section_and_in_dev_mode(tmp_path):
     open_client = TestClient(create_app(write_config(tmp_path, auth=False)))
     assert open_client.get("/api/status").status_code == 200
