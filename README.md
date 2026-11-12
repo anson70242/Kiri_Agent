@@ -240,6 +240,20 @@ moves. Missing lines are asked again, then kept in Japanese. Output
 switches 中 / 日 / 双语 in the subtitle panel, and offers SRT downloads. A 5 h stream is
 about 120k tokens. By hand: `uv run -m backend.translate <video>`.
 
+## Local preview
+
+Check page changes without deploying:
+
+```sh
+uv run scripts/pull_archive.py 鹿乃 --minutes 3    # copy an archive from the server (3 min of video)
+uv run -m backend.monitor.server --dev --reload    # http://127.0.0.1:8770
+```
+
+`--dev` shows the pages (and live status) but never downloads, transcribes, analyzes
+or sends Discord messages. HTML changes show on a browser refresh; `--reload` restarts
+the server when backend code changes. `pull_archive.py` streams everything but the raw
+chat over ssh (`--minutes 0`: no video, `--full`: whole video) into `downloads/`.
+
 ## Tests
 
 ```sh

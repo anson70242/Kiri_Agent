@@ -35,6 +35,13 @@ def test_downloads_lists_queue(tmp_path):
     assert (row["name"], row["title"], row["attempts"], row["next_try"]) == ("A", "title v1", 1, 200.0)
 
 
+def test_dev_mode_never_downloads_or_notifies(tmp_path):
+    cfg = write_config(tmp_path, auto=True)  # auto_download on in the config...
+    app = create_app(cfg, dev=True)  # ...but a local preview must not act on it
+    assert TestClient(app).get("/api/downloads").json() == {"enabled": False, "active": [], "queue": []}
+    assert app.state.notifier is None
+
+
 def test_downloads_when_auto_download_is_off(tmp_path):
     cfg = write_config(tmp_path, auto=False)
     body = TestClient(create_app(cfg)).get("/api/downloads").json()
