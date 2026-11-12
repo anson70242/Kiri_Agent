@@ -23,24 +23,24 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 
-# Runs inside the kiri container: writes a tar of the chosen archive to stdout.
+# Runs inside the kiri container (working directory /app, so the deployed backend imports):
+# writes a tar of the chosen archive to stdout.
 REMOTE = r'''
 import os, subprocess, sys, tarfile, tempfile
 from pathlib import Path
+from backend.archive import DOWNLOADING_SUFFIX, SAVING_SUFFIX, Artifact, Downloads
 match, minutes = sys.argv[1], int(sys.argv[2])
-root = Path("/app/downloads")
-found = sorted((p for p in root.glob("*/*/*") if p.is_dir() and match in str(p.relative_to(root))),
-               key=lambda p: (p.parent.name, p.stat().st_mtime), reverse=True)
+found = [a for a in Downloads(Path("/app/downloads")).list() if match in a.ref]  # newest first
 if not found:
     sys.exit(f"no archive matches {match!r}")
-folder = found[0]
-print(f"pulling {folder.relative_to(root)}", file=sys.stderr)
+archive = found[0]
+print(f"pulling {archive.ref}", file=sys.stderr)
 with tarfile.open(fileobj=sys.stdout.buffer, mode="w|") as tar:
-    for f in sorted(folder.iterdir()):
-        if f.suffix == ".part" or f.name.endswith((".live_chat.json", ".chat.json")):
-            continue
-        arc = str(f.relative_to(root))
-        if f.suffix == ".mp4" and minutes >= 0:
+    for f in sorted(archive.folder.iterdir()):
+        if f.suffix in (DOWNLOADING_SUFFIX, SAVING_SUFFIX) or Artifact.RAW_CHAT.matches(f.name):
+            continue  # unfinished downloads and saves; raw chat (the parsed chat comes over)
+        arc = f"{archive.ref}/{f.name}"
+        if Artifact.VIDEO.matches(f.name) and minutes >= 0:
             if minutes == 0:
                 continue
             fd, tmp = tempfile.mkstemp(suffix=".mp4"); os.close(fd)

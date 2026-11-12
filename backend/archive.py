@@ -62,6 +62,7 @@ class Artifact(Enum):
 
 
 DOWNLOADING_SUFFIX = ".part"  # a download in progress (the video, or Twitch raw chat being fetched)
+SAVING_SUFFIX = ".tmp"  # an artifact being saved by a stage: never a download in progress
 
 
 @dataclass(frozen=True)
@@ -273,6 +274,49 @@ class Archive:
             n = 0
         _chat_counts[path] = (entry.mtime_ns, n)
         return n
+
+    # ---- saving ----
+
+    @classmethod
+    def from_file(cls, path: Path, root: Path | None = None) -> Archive:
+        """The archive an artifact file (e.g. a raw chat) belongs to, its artifacts named after
+        that file's stem. Raises ValueError when the name carries no artifact suffix."""
+        artifact = next((a for a in Artifact if a.matches(path.name)), None)
+        if artifact is None:
+            raise ValueError(f"not an artifact file: {path.name}")
+        try:
+            snapshot = _scan(path.parent)
+        except FileNotFoundError:
+            snapshot = _Snapshot((), 0.0)
+        return cls(path.parent, artifact.stem_of(path.name), snapshot, root)
+
+    def save_path(self, artifact: Artifact) -> Path:
+        """The file `save` writes the artifact to: the video stem + the artifact's suffix."""
+        if artifact in (Artifact.VIDEO, Artifact.RAW_CHAT):
+            raise ValueError(f"the {artifact.name.lower()} is downloaded, not saved through the archive")
+        if self.stem is None:
+            raise ValueError(f"no video stem to name a {artifact.name.lower()} after in {self.folder}")
+        return self.folder / (self.stem + artifact.suffixes[0])
+
+    def save(self, artifact: Artifact, content: Any) -> Path:
+        """Write the artifact's content atomically (through `<name>.tmp`, then a rename) and
+        return its file. The archive sees the new file afterwards."""
+        out = self.save_path(artifact)
+        tmp = out.with_name(out.name + SAVING_SUFFIX)
+        tmp.write_text(self._serialize(artifact, content), encoding="utf-8")
+        tmp.replace(out)
+        snapshot = _scan(self.folder)
+        self._entries, self._folder_mtime = snapshot.entries, snapshot.folder_mtime
+        return out
+
+    @staticmethod
+    def _serialize(artifact: Artifact, content: Any) -> str:
+        """An artifact's bytes on disk: the highlight table indented by one space; the lists
+        (chat, transcripts) one compact item per line."""
+        if artifact is Artifact.HIGHLIGHTS:
+            return json.dumps(content, ensure_ascii=False, indent=1)
+        body = ",\n".join("  " + json.dumps(x, ensure_ascii=False) for x in content)
+        return f"[\n{body}\n]\n" if content else "[]\n"
 
 
 # chat file -> (mtime_ns, message count): listing every archive must not re-read every chat

@@ -2,7 +2,7 @@
 
     from backend.analysis import analyze
     analyze(video, complete, streamer="鹿乃まほろ", title="...")
-    # -> "<stem>.highlights.json" next to the video
+    # -> the highlight table artifact next to the video
 
 Passes (AutoKiri's clip_highlight, adapted):
 1. Every 5-minute segment (with 30 s of context each side): transcript + a chat digest
@@ -26,10 +26,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from backend.archive import Archive, ArtifactMissing, Artifact
+
 log = logging.getLogger(__name__)
 
 BOTS = {"nightbot", "streamelements", "moobot", "fossabot", "streamlabs"}
-SUFFIX = ".highlights.json"
 TYPES = "笑点、可爱、感人、高能/神操作、事故、唱歌、重大发表、闲聊"
 
 # A chat completion: messages -> reply text (backend.llm.chat with settings bound).
@@ -177,11 +178,8 @@ def build_segments(
 # ---- the passes ----
 
 def highlights_path(video: Path) -> Path:
-    return video.with_name(video.name.removesuffix(video.suffix) + SUFFIX)
-
-
-def sibling(video: Path, suffix: str) -> Path:
-    return video.with_name(video.name.removesuffix(video.suffix) + suffix)
+    """Where `analyze` writes the highlight table. Kept for callers not yet on the Archive module."""
+    return Archive.from_video(video).save_path(Artifact.HIGHLIGHTS)
 
 
 def analyze(
@@ -191,15 +189,15 @@ def analyze(
     title: str = "",
     settings: AnalysisSettings | None = None,
 ) -> Path:
-    """Analyze a downloaded stream (needs its `.transcript.json`; chat is optional) and
-    write `<stem>.highlights.json` next to the video."""
+    """Analyze a downloaded stream (needs its transcript; chat is optional) and save the
+    highlight table in its archive, next to the video."""
     s = settings or AnalysisSettings()
-    transcript_file = sibling(video, ".transcript.json")
-    if not transcript_file.exists():
-        raise AnalysisError(f"no transcript for {video.name}")
-    transcript = json.loads(transcript_file.read_text(encoding="utf-8"))
-    chat_file = sibling(video, ".chat_parsed.json")
-    chat = json.loads(chat_file.read_text(encoding="utf-8")) if chat_file.exists() else []
+    archive = Archive.from_video(video)
+    try:
+        transcript = archive.read_transcript()
+    except ArtifactMissing:
+        raise AnalysisError(f"no transcript for {video.name}") from None
+    chat = archive.read(Artifact.CHAT) if archive.has(Artifact.CHAT) else []
     if s.limit_seconds:
         transcript = [x for x in transcript if x["start"] < s.limit_seconds]
         chat = [m for m in chat if seconds(m["time"]) < s.limit_seconds]
@@ -236,11 +234,8 @@ def analyze(
             "chat_level": level,
         })
 
-    out = highlights_path(video)
     data = {"streamer": streamer, "title": title, "segment_seconds": s.seg_seconds, "rows": rows}
-    tmp = out.with_name(out.name + ".part")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
-    tmp.replace(out)
+    out = archive.save(Artifact.HIGHLIGHTS, data)
     log.info("analysis done: %s (%d segments)", out.name, len(rows))
     return out
 
