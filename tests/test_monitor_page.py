@@ -133,3 +133,47 @@ def test_gear_sets_auto_upload(page, server):
 
     a = roster(cfg)["youtube:@a"]
     assert (a["upload"], a["upload_sheet"]) == (True, "DUmFabcXYZ123")
+
+
+# ---- 通知 page ----
+
+@pytest.fixture
+def notify_server(tmp_path, monkeypatch):
+    from .test_notify_api import write_config as notify_config
+
+    monkeypatch.setenv("KIRI_T_HOOK", "https://discord.test/hook")
+    monkeypatch.setenv("KIRI_T_QQ_ID", "APP1")
+    monkeypatch.setenv("KIRI_T_QQ_SECRET", "x")
+    cfg = notify_config(tmp_path)
+    app = create_app(cfg)
+    app.state.notifier.qq.groups.register("G1ABCDEF")  # as if the bot was added to a group
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    srv = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, lifespan="off", log_level="warning"))
+    t = threading.Thread(target=srv.run, daemon=True)
+    t.start()
+    while not srv.started:
+        time.sleep(0.02)
+    yield f"http://127.0.0.1:{port}", tmp_path
+    srv.should_exit = True
+    t.join(5)
+
+
+def test_notify_page_names_and_subscribes_a_group(page, notify_server):
+    import json
+
+    url, tmp = notify_server
+    page.goto(url + "/notify")
+    card = page.get_by_role("group", name="QQ 群 G1ABCDEF")
+    expect_text(card, "关闭")
+    card.get_by_label("群名").fill("章鱼烧字幕组")
+    card.get_by_label("开启通知").check()
+    card.get_by_label("A", exact=True).check()
+    card.get_by_label("路灯表已生成").check()
+    card.get_by_role("button", name="保存").click()
+    expect_text(page.locator("body"), "已保存")
+
+    (g,) = json.loads((tmp / "qq_groups.json").read_text(encoding="utf-8"))
+    assert (g["name"], g["enabled"], g["streamers"]) == ("章鱼烧字幕组", True, ["youtube:@a"])
+    assert "analyzed" in g["kinds"] and "live" in g["kinds"]

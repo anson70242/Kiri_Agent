@@ -3,12 +3,17 @@
 Fetches `youtube.com/<channel>/live`. When the channel is live (or has a scheduled
 stream), YouTube serves that stream's watch page, whose embedded
 `ytInitialPlayerResponse` says whether it is live. Otherwise it serves the channel page.
+
+`/live` can serve a scheduled item even while another stream is live: seen with a
+members-only stream running next to a far-future premiere. So whenever `/live` doesn't
+say LIVE, the channel's `/streams` tab is checked for an item with a LIVE badge.
 """
 
 from __future__ import annotations
 
 import html
 import re
+from collections.abc import Iterator
 from typing import Any
 
 from .base import (
@@ -46,9 +51,61 @@ class YouTubeMonitor(PlatformMonitor):
         handle = channel if channel.startswith("@") else f"@{channel}"
         return f"https://www.youtube.com/{handle}/live"
 
+    @classmethod
+    def streams_url(cls, channel: str) -> str:
+        return cls.live_url(channel).removesuffix("/live") + "/streams"
+
     async def _check(self, streamer: Streamer) -> StreamStatus:
         page = await self.fetch_text(self.live_url(streamer.channel), headers=CONSENT_HEADERS)
-        return self.parse_page(streamer, page)
+        status = self.parse_page(streamer, page)
+        if status.state is LiveState.LIVE:
+            return status
+        # A failure here raises (-> UNKNOWN): reporting /live's answer instead could
+        # end a members-only stream that only /streams shows.
+        streams = await self.fetch_text(self.streams_url(streamer.channel), headers=CONSENT_HEADERS)
+        live = self.parse_streams_page(streamer, streams)
+        if live is None:
+            return status
+        live.avatar = status.avatar
+        return live
+
+    @classmethod
+    def parse_streams_page(cls, streamer: Streamer, page: str) -> StreamStatus | None:
+        """The LIVE item on a channel's /streams tab (members-only included), or None.
+        Raises on a page without `ytInitialData` (consent wall, bot check)."""
+        data = extract_json_after(page, "var ytInitialData =")
+        if data is None:
+            raise ValueError("unrecognized YouTube streams page (consent / bot check?)")
+        for kind, item in _video_items(data):
+            if kind == "lockupViewModel":
+                video_id = item.get("contentId")
+                title = (((item.get("metadata") or {}).get("lockupMetadataViewModel") or {}).get("title") or {}).get("content")
+                thumb = (item.get("contentImage") or {}).get("thumbnailViewModel") or {}
+                sources = (thumb.get("image") or {}).get("sources") or []
+                is_live = any(
+                    b.get("badgeStyle") == "THUMBNAIL_OVERLAY_BADGE_STYLE_LIVE"
+                    for b in _find_key(thumb.get("overlays"), "thumbnailBadgeViewModel")
+                )
+            else:  # older videoRenderer layout
+                video_id = item.get("videoId")
+                runs = (item.get("title") or {}).get("runs") or [{}]
+                title = "".join(r.get("text", "") for r in runs) or None
+                sources = (item.get("thumbnail") or {}).get("thumbnails") or []
+                is_live = any(
+                    o.get("style") == "LIVE" for o in _find_key(item.get("thumbnailOverlays"), "thumbnailOverlayTimeStatusRenderer")
+                ) or any(
+                    b.get("style") == "BADGE_STYLE_TYPE_LIVE_NOW" for b in _find_key(item.get("badges"), "metadataBadgeRenderer")
+                )
+            if is_live and video_id:
+                return StreamStatus(
+                    streamer,
+                    LiveState.LIVE,
+                    title=title,
+                    url=f"https://www.youtube.com/watch?v={video_id}",
+                    stream_id=video_id,
+                    thumbnail=max(sources, key=lambda s: s.get("width") or 0).get("url") if sources else None,
+                )
+        return None
 
     @classmethod
     def parse_page(cls, streamer: Streamer, page: str) -> StreamStatus:
@@ -97,3 +154,32 @@ class YouTubeMonitor(PlatformMonitor):
             started_at=parse_iso(broadcast.get("startTimestamp")),
             # Concurrent viewer count isn't in the page; needs the Data API.
         )
+
+
+def _find_key(obj: Any, key: str) -> Iterator[dict[str, Any]]:
+    """Every dict value stored under `key`, anywhere inside `obj`."""
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if k == key and isinstance(v, dict):
+                yield v
+            else:
+                yield from _find_key(v, key)
+    elif isinstance(obj, list):
+        for v in obj:
+            yield from _find_key(v, key)
+
+
+def _video_items(data: dict[str, Any]) -> Iterator[tuple[str, dict[str, Any]]]:
+    """Video items on a channel tab, in page order, in either the new or old layout."""
+    def walk(obj: Any) -> Iterator[tuple[str, dict[str, Any]]]:
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                if k in ("lockupViewModel", "videoRenderer", "gridVideoRenderer") and isinstance(v, dict):
+                    yield ("lockupViewModel" if k == "lockupViewModel" else "videoRenderer"), v
+                else:
+                    yield from walk(v)
+        elif isinstance(obj, list):
+            for v in obj:
+                yield from walk(v)
+
+    return walk(data)

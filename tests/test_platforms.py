@@ -87,6 +87,122 @@ def test_youtube_check_turns_errors_into_unknown():
     asyncio.run(go())
 
 
+# The /streams tab lists a channel's streams as "lockup" items (trimmed from the real
+# page). /live can resolve to a scheduled item even while a members-only stream is
+# live (seen 2026-11-12 on @wakuse_ito), so a LIVE badge here must win.
+
+def yt_lockup(video_id, title, *, live=False, members=False, upcoming=False):
+    badge = (
+        {"text": "LIVE", "badgeStyle": "THUMBNAIL_OVERLAY_BADGE_STYLE_LIVE"} if live
+        else {"text": "Upcoming", "badgeStyle": "THUMBNAIL_OVERLAY_BADGE_STYLE_DEFAULT"} if upcoming
+        else {"text": "2:31:32", "badgeStyle": "THUMBNAIL_OVERLAY_BADGE_STYLE_DEFAULT"}
+    )
+    rows = [{"badges": [{"badgeViewModel": {"badgeText": "Members only", "badgeStyle": "BADGE_MEMBERS_ONLY"}}]}] if members else []
+    return {"richItemRenderer": {"content": {"lockupViewModel": {
+        "contentId": video_id,
+        "contentType": "LOCKUP_CONTENT_TYPE_VIDEO",
+        "contentImage": {"thumbnailViewModel": {
+            "image": {"sources": [{"url": f"https://i.ytimg.com/vi/{video_id}/hq720.jpg?a=1&b=2", "width": 720}]},
+            "overlays": [{"thumbnailBottomOverlayViewModel": {"badges": [{"thumbnailBadgeViewModel": badge}]}}],
+        }},
+        "metadata": {"lockupMetadataViewModel": {
+            "title": {"content": title},
+            "metadata": {"contentMetadataViewModel": {"metadataRows": rows}},
+        }},
+    }}}}
+
+
+def yt_streams_page(*items):
+    data = {"contents": {"twoColumnBrowseResultsRenderer": {"tabs": [
+        {"tabRenderer": {"title": "Home"}},
+        {"tabRenderer": {"title": "Live", "content": {"richGridRenderer": {"contents": list(items)}}}},
+    ]}}}
+    return (
+        '<link rel="canonical" href="https://www.youtube.com/channel/UCxyz">'
+        f"<script>var ytInitialData = {json.dumps(data, ensure_ascii=False)};</script>"
+    )
+
+
+MEMBERS_TITLE = "【 メン限 】11月のいとっこちゃん作戦会議【 惑世いと┆#vtuber 】"
+WAKUSE_STREAMS = yt_streams_page(
+    yt_lockup("DhreCl4ocKc", "weekly schedule", upcoming=True),
+    yt_lockup("wDoutWmF4uY", "【💿News! 】とっておきの3つめのCDが販売されました♪", upcoming=True),
+    yt_lockup("DggkYPYfAtk", MEMBERS_TITLE, live=True, members=True),
+    yt_lockup("yKlo9BkZVrg", "【 歌枠 】寒くなってきたねえ"),
+)
+
+
+def test_youtube_streams_tab_finds_members_only_live_among_upcoming():
+    st = YouTubeMonitor.parse_streams_page(YT, WAKUSE_STREAMS)
+    assert st.state is LiveState.LIVE
+    assert st.stream_id == "DggkYPYfAtk"
+    assert st.title == MEMBERS_TITLE
+    assert st.url == "https://www.youtube.com/watch?v=DggkYPYfAtk"
+    assert st.thumbnail == "https://i.ytimg.com/vi/DggkYPYfAtk/hq720.jpg?a=1&b=2"
+
+
+def test_youtube_streams_tab_without_live_finds_nothing():
+    page = yt_streams_page(yt_lockup("u1", "schedule", upcoming=True), yt_lockup("v1", "archive"))
+    assert YouTubeMonitor.parse_streams_page(YT, page) is None
+
+
+def test_youtube_streams_tab_unrecognized_is_an_error():
+    with pytest.raises(ValueError):
+        YouTubeMonitor.parse_streams_page(YT, "<html>Sign in to confirm you’re not a bot</html>")
+
+
+def check_youtube(live_page, streams):
+    """Run YouTubeMonitor.check with /live and /streams served by the given fakes."""
+    def handler(req):
+        if req.url.path.endswith("/live"):
+            return httpx.Response(200, text=live_page)
+        if req.url.path.endswith("/streams"):
+            return streams if isinstance(streams, httpx.Response) else httpx.Response(200, text=streams)
+        return httpx.Response(404)
+
+    async def go():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await YouTubeMonitor(client).check(YT)
+
+    return asyncio.run(go())
+
+
+def test_youtube_members_only_live_wins_over_upcoming_on_live_tab():
+    # /live serves the far-future premiere; the members-only stream is live meanwhile.
+    st = check_youtube(yt_watch_page(is_upcoming=True, video_id="wDoutWmF4uY"), WAKUSE_STREAMS)
+    assert st.state is LiveState.LIVE
+    assert st.stream_id == "DggkYPYfAtk"
+    assert st.title == MEMBERS_TITLE
+    assert st.thumbnail == "https://i.ytimg.com/vi/DggkYPYfAtk/hq720.jpg?a=1&b=2"
+    assert st.avatar == "https://yt3.ggpht.com/av=s176-c-k"
+
+
+def test_youtube_members_only_live_when_live_tab_shows_channel_page():
+    st = check_youtube(YT_CHANNEL_PAGE, WAKUSE_STREAMS)
+    assert st.state is LiveState.LIVE
+    assert st.stream_id == "DggkYPYfAtk"
+    assert st.avatar == "https://yt3.googleusercontent.com/av=s176-c-k"
+
+
+def test_youtube_upcoming_stays_upcoming_when_streams_tab_has_no_live():
+    page = yt_streams_page(yt_lockup("abc123", "歌枠", upcoming=True))
+    st = check_youtube(yt_watch_page(is_upcoming=True), page)
+    assert st.state is LiveState.UPCOMING
+    assert st.stream_id == "abc123"
+
+
+def test_youtube_public_live_does_not_need_streams_tab():
+    st = check_youtube(yt_watch_page(is_live=True), httpx.Response(503))
+    assert st.state is LiveState.LIVE
+    assert st.stream_id == "abc123"
+
+
+@pytest.mark.parametrize("streams", [httpx.Response(503), "<html>bot check</html>"])
+def test_youtube_failed_streams_tab_is_unknown_not_offline(streams):
+    st = check_youtube(YT_CHANNEL_PAGE, streams)
+    assert st.state is LiveState.UNKNOWN
+
+
 @pytest.mark.parametrize("channel,url", [
     ("@foo", "https://www.youtube.com/@foo/live"),
     ("foo", "https://www.youtube.com/@foo/live"),

@@ -113,3 +113,30 @@ def test_through_live_notifier_survives_outage():
 
     sent = asyncio.run(go())
     assert len(sent) == 4
+
+
+@pytest.mark.parametrize("kind, footer", [
+    (EventKind.LIVE, "切片小助手 开播通知"),
+    (EventKind.OFFLINE, "切片小助手 开播通知"),
+    (EventKind.DOWNLOADED, "切片小助手 自动下载"),
+    (EventKind.TRANSCRIBE_FAILED, "切片小助手 自动下载"),
+    (EventKind.ANALYZED, "切片小助手 自动路灯"),
+    (EventKind.UPLOADED, "切片小助手 自动路灯"),
+    (EventKind.UPLOAD_FAILED, "切片小助手 自动路灯"),
+])
+def test_footer_says_what_sent_it(kind, footer):
+    n, sent = fake_discord(httpx.Response(204))
+    send(n, StreamEvent(kind, live(), T0 + timedelta(hours=1), detail="x"))
+    assert sent[0]["embeds"][0]["footer"]["text"] == footer
+
+
+def test_alert_is_a_plain_message():
+    n, sent = fake_discord(httpx.Response(204))
+
+    async def go():
+        await n.alert("QQ 机器人已离线 12 分钟")
+        await n.aclose()
+
+    asyncio.run(go())
+    assert sent[0]["content"] == "⚠️ QQ 机器人已离线 12 分钟"
+    assert sent[0]["allowed_mentions"] == {"parse": []}

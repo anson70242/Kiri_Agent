@@ -10,14 +10,14 @@
 | 步骤 | 做什么 | 状态 |
 | --- | --- | --- |
 | [直播监控](#直播监控) | 轮询 YouTube / Twitch 频道；在网页上管理主播 | 完成 |
-| [开播提醒](#开播提醒) | 开播、下播时发 Discord 消息 | 完成 |
+| [开播通知](#开播通知) | 开播、下播和处理结果发到 Discord 和 QQ 群（官方机器人） | 完成 |
 | [下载器](#下载器) | 用 yt-dlp 和 Twitch GQL 下载录播和弹幕；会员 / 订阅限定靠 cookie | 完成 |
 | 弹幕清洗 | 原始弹幕 → `{"time","user","msg"}` 一行一条 | 完成 |
 | [自动下载](#自动下载) | 下播 → 下载录播、删除最旧的、Discord 报告 | 完成 |
 | [字幕转写](#字幕转写) | 录播 → `<stem>.transcript.json`（GPU 上的 faster-whisper） | 完成 |
 | [路灯表分析](#路灯表分析) | 5 分钟话题日志、弹幕密度、全场评分、高能点 → 路灯表 | 完成 |
 | [中文字幕](#中文字幕) | 日文字幕 → `<stem>.zh.transcript.json`，显示在影片上，可下载 SRT | 完成 |
-| [网页](#网页) | 直播状态 / 录播 / 路灯表三个页面；路灯表可下载成排好版的 Excel | 完成 |
+| [网页](#网页) | 直播状态 / 录播 / 路灯表 / 通知四个页面；路灯表可下载成排好版的 Excel | 完成 |
 | [上传腾讯文档](#上传腾讯文档) | 路灯表 → 腾讯文档表格里的一个子表（带格式），按主播设定、自动上传 | 完成 |
 | Google Sheets | 同样的上传，换成 Google Sheets | 计划中 |
 
@@ -79,9 +79,9 @@ uv run -m backend.monitor.server       # 网页：http://127.0.0.1:8770
 新增平台：写一个 `backend/monitor/<platform>.py`，里面放一个 `PlatformMonitor` 子类，
 设 `platform = "<name>"` 并实现 `_check()`，再在 [`__init__.py`](backend/monitor/__init__.py) 里 import。
 
-## 开播提醒
+## 开播通知
 
-主播从未开播 / 待机变成直播时，监控（网页服务器和 `uv run -m backend.monitor` 都会）发一条 Discord 消息。
+主播从未开播 / 待机变成直播时，监控（网页服务器和 `uv run -m backend.monitor` 都会）发一条 Discord 消息（设了 QQ 机器人的话，也发到订阅的 QQ 群，见下面）。
 第一次启动时（还没有 `data/notify_state.json`），已经在播的主播不会提醒（`notify.on_startup: true` 可以改）；
 之后才加进来的主播，就算已经在播也会提醒。同一场直播不会提醒两次。
 
@@ -105,6 +105,28 @@ uv run -m backend.monitor.server       # 网页：http://127.0.0.1:8770
 
 - [base.py](backend/notify/base.py)：`Notifier` 基类，`LiveNotifier` 的触发规则。
 - [discord.py](backend/notify/discord.py)：`DiscordNotifier`，带标题、封面、头像的 webhook embed。
+  Discord 收所有消息，包括各种失败和提醒（例如 QQ 机器人离线）。页脚：开播 / 下播是「切片小助手 开播通知」，
+  下载、转写、翻译是「切片小助手 自动下载」，路灯表分析和上传是「切片小助手 自动路灯」。
+
+### QQ 群（官方机器人）
+
+用 QQ 开放平台（q.qq.com）的官方机器人发到 QQ 群，每个群各自订阅主播和通知类型（在「通知」页面设定）。
+
+1. 在 q.qq.com 建一个机器人，「开发设置」里事件用 WebSocket；把 AppID / AppSecret 填进服务器的 `.env`：
+   `QQ_BOT_APP_ID`、`QQ_BOT_SECRET`，再 `docker compose up -d --force-recreate kiri`。
+   kiri 会一直连着 QQ（机器人显示在线），不需要公网网址。
+2. 把机器人拉进群（未认证的机器人只能进你当群主的群），或在群里 @机器人：群会自动出现在「通知」页面，
+   机器人也会在群里回复本群的订阅现况。新群默认关闭、不订阅任何主播。
+3. 在「通知」页面给群取名，勾选主播和通知类型（默认开播、下播、录播已下载、上传完成），打开通知、保存。
+
+消息是 Markdown：开播第二行是直播封面（腾讯下载不到 YouTube 的图，所以由我们下载后传进机器人的素材库，
+最多 100 张，满了删掉我们最旧的），附可点击的直播链接；上传完成附子表链接。一个群发送失败（例如群里关了
+机器人主动发言）只记在「最近记录」里，不影响其他群。机器人被移出群或群里关闭主动发言时，该群停发，
+Discord 收到一次提醒；机器人连续 10 分钟连不上也提醒一次。群设定存在 `data/qq_groups.json`，
+发送记录（最近 50 条）存在 `data/notify_log.json`。
+
+- [qq.py](backend/notify/qq.py)：消息格式、发给哪些群、封面上传、`QQGroups`。
+- [qq_gateway.py](backend/notify/qq_gateway.py)：和 QQ 的 WebSocket 连线、群的登记、断线重连。
 
 新增通知渠道：写一个 `Notifier` 子类，设 `name = "<channel>"` 并实现 `send()`，
 在 [`backend/notify/__init__.py`](backend/notify/__init__.py) 里 import，再加一个 `notify.<channel>` 设定。
@@ -217,7 +239,7 @@ GTX 1660 上大约 13 倍速（4 小时的直播约 20 分钟）。失败重试 
 
 ## 网页
 
-`uv run -m backend.monitor.server`（服务器上的通过 Tailscale 打开，见[部署](#部署)）。三个页面：
+`uv run -m backend.monitor.server`（服务器上的通过 Tailscale 打开，见[部署](#部署)）。四个页面：
 
 - **直播状态**（[monitor.html](frontend/monitor.html)）：谁在直播 / 待机 / 未开播，带封面和标签搜索。
   「＋ 新增主播」加主播；每张卡片的齿轮 ⚙ 可以设定自动下载、保留录播数、自动上传到腾讯文档和目标表格，
@@ -227,14 +249,16 @@ GTX 1660 上大约 13 倍速（4 小时的直播约 20 分钟）。失败重试 
   SRT（中 / 日）、路灯表（Excel），或打包成一个 zip（不含原始弹幕）。
 - **路灯表**（[highlights.html](frontend/highlights.html)）：每场的路灯表，可按分数、弹幕热度、
   「只看有切片」筛选，话题日志可以展开。
+- **通知**（[notify.html](frontend/notify.html)）：QQ 机器人和 Discord 的状态与测试按钮；每个 QQ 群的名字、
+  开关、订阅的主播和通知类型；最近 50 条发送记录。
 
 Excel 路灯表（[sheet.py](backend/sheet.py)）打开就能读：表头冻结；内容摘要和切片标题两栏较宽、自动换行、
 靠左对齐，其他栏置中；分数有颜色，有 🏆 的行标黄；最后留一栏空白的「剪辑」给团队填。
 手动导入腾讯文档或 Google Sheets 时，这些格式都会保留。
 
 API：`/api/status`、`/api/streamers`（GET / POST / PATCH / DELETE）、`/api/downloads`、
-`/api/archives/*`、`/api/highlights/*`（见 [server.py](backend/monitor/server.py) 和
-[archives.py](backend/monitor/archives.py)）。
+`/api/archives/*`、`/api/highlights/*`、`/api/notify*`（见 [server.py](backend/monitor/server.py)、
+[archives.py](backend/monitor/archives.py) 和 [notify_api.py](backend/monitor/notify_api.py)）。
 
 ## 上传腾讯文档
 
@@ -301,7 +325,7 @@ docker compose up -d --build     # 在本地跑容器（需要 .env）
 
 `config.json` 放所有可以提交的设定：`monitor`、`notify`、`llm`、`analysis`、`translate`、`asr`、
 `upload`、`download`。密钥放在 `.env`（见 [.env.example](.env.example)）：LLM key、`DISCORD_WEBHOOK_URL`、
-`TWITCH_OAUTH`、`LLM_PROXY` / `LLM_PROXY_TOKEN`、`TENCENT_DOCS_MCP_TOKEN`。网页上改的东西都存在 `data/`
+`TWITCH_OAUTH`、`LLM_PROXY` / `LLM_PROXY_TOKEN`、`TENCENT_DOCS_MCP_TOKEN`、`QQ_BOT_APP_ID` / `QQ_BOT_SECRET`。网页上改的东西都存在 `data/`
 （主播名单、队列、提醒状态），部署不会动它。
 
 ## 授权

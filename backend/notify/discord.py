@@ -19,6 +19,10 @@ DEFAULT_COLOR = 0xE11D48
 OFFLINE_COLOR = 0x6B7280
 DOWNLOADED_COLOR = 0x16A34A
 FAILED_COLOR = 0xDC2626
+FOOTER_LIVE = "切片小助手 开播通知"
+FOOTER_DOWNLOAD = "切片小助手 自动下载"
+FOOTER_HIGHLIGHTS = "切片小助手 自动路灯"  # the 路灯表: analysis and upload
+HIGHLIGHT_KINDS = {EventKind.ANALYZED, EventKind.ANALYZE_FAILED, EventKind.UPLOADED, EventKind.UPLOAD_FAILED}
 # Pipeline events (backend.downloader.auto): icon and message text.
 PIPELINE_TEXT = {
     EventKind.DOWNLOADED: ("📥", "回放已下载"),
@@ -56,7 +60,7 @@ class DiscordNotifier(Notifier):
             "title": (status.title or ("直播中" if live else "直播已结束"))[:256],
             "color": PLATFORM_COLORS.get(s.platform, DEFAULT_COLOR) if live else OFFLINE_COLOR,
             "author": {"name": f"{s.name} · {s.platform}"},
-            "footer": {"text": "Kiri_Agent 开播提醒"},
+            "footer": {"text": FOOTER_LIVE},
         }
         if status.url:
             embed["url"] = status.url
@@ -101,7 +105,7 @@ class DiscordNotifier(Notifier):
             "title": (status.title or "直播回放")[:256],
             "color": DOWNLOADED_COLOR if ok else FAILED_COLOR,
             "author": {"name": f"{s.name} · {s.platform}"},
-            "footer": {"text": "Kiri_Agent 自动下载"},
+            "footer": {"text": FOOTER_HIGHLIGHTS if event.kind in HIGHLIGHT_KINDS else FOOTER_DOWNLOAD},
         }
         if status.url:
             embed["url"] = status.url
@@ -134,6 +138,11 @@ class DiscordNotifier(Notifier):
             resp.raise_for_status()
             return
         raise RuntimeError("Discord kept rate-limiting the webhook")
+
+    async def alert(self, text: str) -> None:
+        """A plain warning for whoever runs this (e.g. the QQ bot is offline)."""
+        resp = await self.client.post(self.webhook_url, json={"content": f"⚠️ {text}", "allowed_mentions": {"parse": []}})
+        resp.raise_for_status()
 
     async def aclose(self) -> None:
         await self.client.aclose()

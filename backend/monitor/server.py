@@ -22,10 +22,12 @@ from pydantic import BaseModel, Field
 
 from backend.downloader import load_settings
 from backend.downloader.auto import attach
+from backend.notify.qq_gateway import QQGateway
 
 from . import StreamMonitor
 from .__main__ import REPO_ROOT, load_config
 from .archives import create_router
+from .notify_api import create_notify_router
 from .base import LiveState, Streamer
 from .roster import RosterError, entry_id, load_roster
 
@@ -66,15 +68,24 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
     else:
         print("Notify: off (set DISCORD_WEBHOOK_URL in .env to enable)")
     print(f"Auto-download: {len(auto.keep)} streamer(s)" if auto else "Auto-download: off")
+    # The QQ bot's event connection: keeps it online and learns which groups it is in.
+    gateway = QQGateway(
+        notifier.qq.settings, notifier.qq.groups, alert=notifier.alert,
+        names=lambda: {entry_id(e): e.get("name") or e["channel"] for e in roster.entries},
+    ) if notifier and notifier.qq else None
 
     @contextlib.asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         task = asyncio.create_task(mon.run(interval))
         auto_task = asyncio.create_task(auto.run()) if auto else None
+        qq_task = asyncio.create_task(gateway.run()) if gateway else None
         yield
         task.cancel()
         if auto_task:
             auto_task.cancel()
+        if qq_task:
+            qq_task.cancel()
+            await gateway.aclose()
         await mon.aclose()
         if notifier:
             await notifier.aclose()
@@ -83,6 +94,7 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
     app.state.notifier = notifier
     app.state.auto = auto
     app.include_router(create_router(load_settings(config)[0].output_dir))
+    app.include_router(create_notify_router(notifier, roster, gateway))
 
     def snapshot() -> dict:
         rows = []

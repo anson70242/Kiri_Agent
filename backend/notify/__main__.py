@@ -45,7 +45,7 @@ async def main() -> int:
             sample = StreamStatus(
                 Streamer(name="测试主播", platform="youtube", channel="@test"),
                 LiveState.LIVE,
-                title="这是一条测试通知（Kiri_Agent 开播提醒）",
+                title="这是一条测试通知（切片小助手 开播通知）",
                 url="https://www.youtube.com/",
                 started_at=datetime.now(timezone.utc) - timedelta(hours=1, minutes=23),
             )

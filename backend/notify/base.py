@@ -21,6 +21,8 @@ from typing import ClassVar
 
 from backend.monitor import LiveState, StreamStatus
 
+from .history import NotifyHistory
+
 log = logging.getLogger(__name__)
 
 
@@ -54,6 +56,7 @@ class Notifier(ABC):
 
     name: ClassVar[str]
     registry: ClassVar[dict[str, type[Notifier]]] = {}
+    logs_itself: ClassVar[bool] = False  # records its own deliveries in the history (QQ: per group)
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
@@ -100,8 +103,11 @@ class LiveNotifier:
         state_file: Path | None = None,
         max_attempts: int = 5,
         retry_base_delay: float = 2.0,
+        history: NotifyHistory | None = None,
     ):
         self.notifiers = list(notifiers)
+        self.history = history or NotifyHistory()  # what was sent, for the 通知 page
+        self.qq = next((n for n in self.notifiers if n.name == "qq"), None)
         self.notify_on_startup = notify_on_startup
         self.notify_offline = notify_offline
         self.offline_grace = offline_grace
@@ -121,6 +127,7 @@ class LiveNotifier:
         self.on_ended: list[Callable[[StreamEvent], None]] = []
         self._queue: asyncio.Queue[StreamEvent] | None = None
         self._worker: asyncio.Task[None] | None = None
+        self._alerts: set[asyncio.Task[None]] = set()
 
     # ---- state rules ----
 
@@ -201,25 +208,50 @@ class LiveNotifier:
 
     async def _deliver(self, notifier: Notifier, event: StreamEvent) -> None:
         name = event.status.streamer.name
+        summary = f"{event.kind}: {name} {event.status.title or ''}".strip()
+        record = not notifier.logs_itself
         for attempt in range(1, self.max_attempts + 1):
             try:
                 await notifier.send(event)
                 log.info("%s: notified %s %s", notifier.name, name, event.kind)
+                if record:
+                    self.history.add(notifier.name, notifier.name, summary, True)
                 return
             except asyncio.CancelledError:
                 raise
             except PermanentNotifyError as e:
                 log.error("%s: %s %s not delivered (permanent): %s", notifier.name, name, event.kind, e)
+                if record:
+                    self.history.add(notifier.name, notifier.name, summary, False, str(e))
                 return
             except Exception as e:  # noqa: BLE001
                 if attempt == self.max_attempts:
                     log.error("%s: %s %s not delivered after %d tries: %s",
                               notifier.name, name, event.kind, attempt, e)
+                    if record:
+                        self.history.add(notifier.name, notifier.name, summary, False, str(e))
                     return
                 delay = min(60.0, self.retry_base_delay * 2 ** (attempt - 1))
                 log.warning("%s: %s %s failed (%s), retry %d in %.0fs",
                             notifier.name, name, event.kind, e, attempt, delay)
                 await asyncio.sleep(delay)
+
+    def alert(self, text: str) -> None:
+        """A warning for whoever runs this, on every channel that takes alerts (Discord).
+        Doesn't wait; call it from inside the event loop."""
+        for n in self.notifiers:
+            if callable(getattr(n, "alert", None)):
+                task = asyncio.get_running_loop().create_task(self._alert(n, text))
+                self._alerts.add(task)
+                task.add_done_callback(self._alerts.discard)
+
+    async def _alert(self, notifier: Notifier, text: str) -> None:
+        try:
+            await notifier.alert(text)  # type: ignore[attr-defined]
+            self.history.add(notifier.name, "提醒", text, True)
+        except Exception as e:  # noqa: BLE001
+            log.error("%s: alert not delivered: %s", notifier.name, e)
+            self.history.add(notifier.name, "提醒", text, False, str(e))
 
     async def notify(self, event: StreamEvent) -> None:
         """Send one event now (bypassing the rules) and wait until delivered."""
@@ -237,6 +269,8 @@ class LiveNotifier:
         for t in self._pending_end.values():
             t.cancel()
         self._pending_end.clear()
+        if self._alerts:
+            await asyncio.wait(self._alerts, timeout=timeout)
         try:
             await asyncio.wait_for(self.drain(), timeout)
         except TimeoutError:

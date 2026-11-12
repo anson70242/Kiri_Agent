@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Kiri_Agent</title>
+<title>切片小助手</title>
 <style>
   :root { /* 天青 Azure: white top bar, soft blue gradient background */
     --bg: linear-gradient(160deg, #eef5ff 0%, #f3faff 50%, #f5f7ff 100%) fixed;
@@ -137,11 +137,12 @@
 <body>
 <nav class="topbar">
   <div class="topbar-inner">
-    <a class="brand" href="/">Kiri_Agent</a>
+    <a class="brand" href="/">切片小助手</a>
     <div class="nav">
       <a href="/" class="active">直播状态</a>
       <a href="/archives">录播</a>
       <a href="/highlights">路灯表</a>
+      <a href="/notify">通知</a>
     </div>
   </div>
 </nav>
@@ -151,7 +152,7 @@
     <div class="summary" id="summary"></div>
     <div class="spacer"></div>
     <span class="meta" id="meta">加载中…</span>
-    <button id="notify" hidden>开启开播提醒</button>
+    <button id="notify" hidden>开启开播通知</button>
     <button id="refresh">立即刷新</button>
     <button id="add">＋ 新增主播</button>
   </header>
@@ -415,7 +416,7 @@ function render(data) {
     `<span class="chip" style="background:var(--live-bg);color:var(--live)">直播中 ${live}</span>` +
     `<span class="chip" style="background:var(--up-bg);color:var(--up)">待机 ${count("upcoming")}</span>` +
     `<span class="chip" style="background:var(--off-bg);color:var(--off)">共 ${rows.length}</span>`;
-  document.title = live ? `(${live}) Kiri_Agent` : "Kiri_Agent";
+  document.title = live ? `(${live}) 切片小助手` : "切片小助手";
   document.getElementById("meta").textContent = data.last_refresh
     ? `后端每 ${data.interval} 秒检测 · 上次 ${clock(data.last_refresh)}` : "首次检测中…";
 
