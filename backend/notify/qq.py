@@ -42,11 +42,11 @@ log = logging.getLogger(__name__)
 TOKEN_URL = "https://bots.qq.com/app/getAppAccessToken"
 API = "https://api.sgroup.qq.com"
 LOCAL_TZ = timezone(timedelta(hours=8))  # the group lives in China / Hong Kong time
-DEFAULT_KINDS = ["live", "offline", "downloaded", "uploaded"]
+DEFAULT_KINDS = ["live", "offline", "ready", "uploaded"]  # editors start once everything is ready
 MEDIA_PREFIX = "kiri-"
 LIBRARY_FULL = 40035007
 
-FOOTER_LIVE = "切片小助手 开播通知"
+FOOTER_LIVE = "切片小助手 直播通知"
 FOOTER_DOWNLOAD = "切片小助手 自动下载"
 FOOTER_HIGHLIGHTS = "切片小助手 自动路灯"
 # Pipeline events: icon, text, footer (the same words as the Discord messages).
@@ -59,10 +59,12 @@ PIPELINE = {
     EventKind.ANALYZE_FAILED: ("❗", "路灯表分析失败", FOOTER_HIGHLIGHTS),
     EventKind.UPLOADED: ("📤", "路灯表已上传腾讯文档", FOOTER_HIGHLIGHTS),
     EventKind.UPLOAD_FAILED: ("❗", "路灯表上传腾讯文档失败", FOOTER_HIGHLIGHTS),
+    EventKind.READY: ("✅", "全部处理完成", FOOTER_DOWNLOAD),
 }
 KIND_LABELS = {"live": "开播", "offline": "下播", "downloaded": "录播已下载", "uploaded": "上传完成",
                "analyzed": "路灯表已生成", "download_failed": "下载失败", "transcribe_failed": "转写失败",
-               "translate_failed": "翻译失败", "analyze_failed": "分析失败", "upload_failed": "上传失败"}
+               "translate_failed": "翻译失败", "analyze_failed": "分析失败", "upload_failed": "上传失败",
+               "ready": "全部处理完成"}
 
 
 class QQError(Exception):
@@ -82,7 +84,8 @@ class QQSettings:
 class QQGroups:
     """The groups the bot knows (data/qq_groups.json), keyed by group openid.
 
-    A group: {openid, name, enabled, streamers: [streamer id], kinds: [event kind],
+    A group: {openid, name, enabled, streamers: [streamer name: a person, every platform;
+    older saves hold channel ids, still honoured], kinds: [event kind],
     status: "active" | "removed" (bot kicked) | "muted" (proactive messages turned off),
     added_at}. New groups start switched off with no streamers.
     """
@@ -132,10 +135,10 @@ class QQGroups:
         self.save()
 
     def targets(self, event: StreamEvent) -> list[dict[str, Any]]:
-        sid, kind = event.status.streamer.id, str(event.kind)
+        s, kind = event.status.streamer, str(event.kind)
         return [dict(g) for g in self._groups.values()
-                if g.get("enabled") and g.get("status") == "active"
-                and sid in g.get("streamers", []) and kind in g.get("kinds", [])]
+                if g.get("enabled") and g.get("status") == "active" and kind in g.get("kinds", [])
+                and (s.name in g.get("streamers", []) or s.id in g.get("streamers", []))]
 
 
 # ---- messages ----

@@ -113,7 +113,7 @@ def test_live_goes_to_subscribed_groups_with_the_cover_on_the_second_line(tmp_pa
     assert any(line.startswith("👀 1,234 人观看 · 开始于 ") for line in lines)  # local time (UTC+8)
     assert "开始于 16:00" in body["markdown"]["content"]  # T0 is 08:00 UTC
     assert "[https://x/v1](https://x/v1)" in lines
-    assert lines[-1] == "切片小助手 开播通知"
+    assert lines[-1] == "切片小助手 直播通知"
     assert fake.uploads == 1
 
 
@@ -141,7 +141,7 @@ def test_ended_and_pipeline_messages(tmp_path):
     send(n, StreamEvent(EventKind.DOWNLOADED, status, detail="6.2 GB"))  # not subscribed
 
     off, up, an = fake.texts("G1")
-    assert off == "⚫ **A** 下播了\ntitle v1\n⏱ 直播时长 3 小时 20 分\n切片小助手 开播通知"
+    assert off == "⚫ **A** 下播了\ntitle v1\n⏱ 直播时长 3 小时 20 分\n切片小助手 直播通知"
     assert up == ("📤 **A** 路灯表已上传腾讯文档\ntitle v1\n"
                   "[https://docs.qq.com/sheet/S1?tab=t1](https://docs.qq.com/sheet/S1?tab=t1)\n切片小助手 自动路灯")
     assert an.endswith("00:30:00 ★9 名场面\n切片小助手 自动路灯")
@@ -231,3 +231,15 @@ def test_deliveries_are_logged_and_alerts_go_to_discord(tmp_path):
     (alert_entry, live_entry) = NotifyHistory(tmp_path / "log.json").entries()  # newest first, kept on disk
     assert live_entry["channel"] == "discord" and live_entry["ok"] and "A" in live_entry["summary"]
     assert alert_entry["target"] == "提醒"
+
+
+
+def test_groups_subscribe_to_people_on_every_platform(tmp_path):
+    from backend.monitor import Streamer
+
+    fake = FakeQQ()
+    n = notifier(tmp_path, fake, {**SUBSCRIBED, "streamers": ["A"]},
+                 {**SUBSCRIBED, "openid": "G2", "streamers": ["youtube:@a"]})  # saved before: a channel id
+    send(n, StreamEvent(EventKind.OFFLINE, live(A)))
+    send(n, StreamEvent(EventKind.OFFLINE, live(Streamer("A", "twitch", "a_tw"))))
+    assert [g for g, _ in fake.messages] == ["G1", "G2", "G1"]

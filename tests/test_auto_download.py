@@ -148,7 +148,7 @@ def test_transcription_failures_give_up_with_message(tmp_path):
         clock.t += 900
 
     assert ad.load() == []
-    assert [e.kind for e in sent] == [EventKind.DOWNLOADED, EventKind.TRANSCRIBE_FAILED]
+    assert [e.kind for e in sent] == [EventKind.DOWNLOADED, EventKind.TRANSCRIBE_FAILED, EventKind.READY]  # then: everything over
     assert "CUDA OOM" in sent[1].detail
 
 
@@ -175,7 +175,7 @@ def test_transcription_done_moves_job_to_analysis_and_reports_top_segments(tmp_p
 
     assert ad.load() == []
     assert seen == [(tmp_path / "v.mp4", "A", "title v1")]
-    assert [e.kind for e in sent] == [EventKind.DOWNLOADED, EventKind.ANALYZED]
+    assert [e.kind for e in sent] == [EventKind.DOWNLOADED, EventKind.ANALYZED, EventKind.READY]  # then: everything over
     detail = sent[1].detail
     # top 5 by score, best first
     assert [line.split()[0] for line in detail.splitlines()[:5]] == ["00:30:00", "00:05:00", "00:20:00", "00:15:00", "00:10:00"]
@@ -207,7 +207,7 @@ def test_after_transcription_analysis_and_translation_run_side_by_side(tmp_path)
     ad.finish(an_job, ad.attempt(an_job))
 
     assert ad.load() == [] and translated == [tmp_path / "v.mp4"]
-    assert [e.kind for e in sent] == [EventKind.DOWNLOADED, EventKind.ANALYZED]
+    assert [e.kind for e in sent] == [EventKind.DOWNLOADED, EventKind.ANALYZED, EventKind.READY]  # then: everything over
 
 
 def test_translation_failures_give_up_with_message(tmp_path):
@@ -225,7 +225,7 @@ def test_translation_failures_give_up_with_message(tmp_path):
         clock.t += 900
 
     assert ad.load() == []
-    assert [e.kind for e in sent] == [EventKind.DOWNLOADED, EventKind.TRANSLATE_FAILED]
+    assert [e.kind for e in sent] == [EventKind.DOWNLOADED, EventKind.TRANSLATE_FAILED, EventKind.READY]  # then: everything over
 
 
 def test_analysis_failures_give_up_with_message(tmp_path):
@@ -243,7 +243,7 @@ def test_analysis_failures_give_up_with_message(tmp_path):
         clock.t += 900
 
     assert ad.load() == []
-    assert [e.kind for e in sent] == [EventKind.DOWNLOADED, EventKind.ANALYZE_FAILED]
+    assert [e.kind for e in sent] == [EventKind.DOWNLOADED, EventKind.ANALYZE_FAILED, EventKind.READY]  # then: everything over
     assert "valid JSON" in sent[1].detail
 
 
@@ -280,21 +280,21 @@ def test_analyzed_table_is_uploaded_for_streamers_with_upload_on(tmp_path):
 
     assert ad.load() == []
     assert calls == [(tmp_path / "v.highlights.json", "SHEET1", "A", "title v1")]
-    assert [e.kind for e in sent] == [EventKind.DOWNLOADED, EventKind.ANALYZED, EventKind.UPLOADED]
+    assert [e.kind for e in sent] == [EventKind.DOWNLOADED, EventKind.ANALYZED, EventKind.UPLOADED, EventKind.READY]  # then: everything over
     assert "https://docs.qq.com/sheet/SHEET1?tab=t1" in sent[2].detail
 
 
 def test_no_upload_when_the_streamer_has_it_off(tmp_path):
     ad, _, sent = analyzed_to(tmp_path, lambda *a: "url", {B.id: "SHEET1"})  # only B uploads
     assert ad.load() == []
-    assert [e.kind for e in sent] == [EventKind.DOWNLOADED, EventKind.ANALYZED]
+    assert [e.kind for e in sent] == [EventKind.DOWNLOADED, EventKind.ANALYZED, EventKind.READY]  # then: everything over
 
 
 def test_no_upload_without_credentials(tmp_path):
     # upload on in the gear, but no Tencent Docs token in .env yet: skipped quietly.
     ad, _, sent = analyzed_to(tmp_path, None, {A.id: "SHEET1"})
     assert ad.load() == []
-    assert [e.kind for e in sent] == [EventKind.DOWNLOADED, EventKind.ANALYZED]
+    assert [e.kind for e in sent] == [EventKind.DOWNLOADED, EventKind.ANALYZED, EventKind.READY]  # then: everything over
 
 
 def test_upload_failures_give_up_with_message(tmp_path):
@@ -308,7 +308,7 @@ def test_upload_failures_give_up_with_message(tmp_path):
         clock.t += 900
 
     assert ad.load() == []
-    assert [e.kind for e in sent] == [EventKind.DOWNLOADED, EventKind.ANALYZED, EventKind.UPLOAD_FAILED]
+    assert [e.kind for e in sent] == [EventKind.DOWNLOADED, EventKind.ANALYZED, EventKind.UPLOAD_FAILED, EventKind.READY]  # then: everything over
     assert "400006" in sent[2].detail
 
 
@@ -605,3 +605,96 @@ def test_load_auto_uploads_only_with_credentials(tmp_path, monkeypatch):
     for name in names.values():
         monkeypatch.setenv(name, "x")
     assert load_auto(cfg).upload is not None
+
+
+def test_downloaded_message_links_to_the_archive_page(tmp_path):
+    ad, _, sent = make(tmp_path)
+    ad.site_url = "https://kiri.example/"  # SITE_URL in .env
+    ad.on_ended(ended())
+    folder = tmp_path / "dl" / "A" / "20261110" / "歌枠 (Vol.2)!"
+    folder.mkdir(parents=True)
+    video = folder / "v.mp4"
+    video.write_bytes(b"x")
+    info = VideoInfo("youtube", "v1", "u", "t", "@a", "A", "20261110")
+    ad.finish(ad.next_due(), Outcome("done", result=DownloadResult(info, folder, video=video)))
+
+    event, ready = sent  # downloaded, then (no other stage) ready
+    # the same encoding as the page's encodeURIComponent(folder), so its detail view opens
+    assert event.detail.splitlines()[-1] == \
+        "https://kiri.example/archives#A%2F20261110%2F%E6%AD%8C%E6%9E%A0%20(Vol.2)!"
+
+
+def test_no_site_url_no_link(tmp_path):
+    ad, _, sent = make(tmp_path)
+    ad.on_ended(ended())
+    ad.finish(ad.next_due(), downloaded(tmp_path))
+    assert "http" not in sent[0].detail
+
+
+
+def run_pipeline(tmp_path, translate_ok=True, site_url=""):
+    """A stream through download -> transcribe -> analyze + translate; returns the events sent."""
+    folder = tmp_path / "dl" / "A" / "20261110" / "歌枠"
+    folder.mkdir(parents=True)
+    video = folder / "v.mp4"
+    video.write_bytes(b"x")
+    (folder / "v.chat_parsed.json").write_text("[]", encoding="utf-8")
+
+    def transcribe(v):
+        (folder / "v.transcript.json").write_text("[]", encoding="utf-8")
+
+    def analyze(v, streamer, title):
+        out = folder / "v.highlights.json"
+        out.write_text(json.dumps({"rows": []}), encoding="utf-8")
+        return out
+
+    def translate(v):
+        if not translate_ok:
+            raise RuntimeError("LLM down")
+        (folder / "v.zh.transcript.json").write_text("[]", encoding="utf-8")
+
+    ad, clock, sent = make(tmp_path, transcribe=transcribe, analyze=analyze, translate=translate)
+    ad.site_url = site_url
+    ad.on_ended(ended())
+    info = VideoInfo("youtube", "v1", "u", "t", "@a", "A", "20261110")
+    ad.finish(ad.next_due(), Outcome("done", result=DownloadResult(info, folder, video=video, chat=folder / "v.chat_parsed.json")))
+    for _ in range(10):
+        job = ad.next_due()
+        if job is None:
+            clock.t += 900
+            job = ad.next_due()
+            if job is None:
+                break
+        ad.finish(job, ad.attempt(job))
+    return sent
+
+
+def test_ready_once_every_stage_is_over_with_the_download_link(tmp_path):
+    sent = run_pipeline(tmp_path, site_url="https://kiri.example")
+    kinds = [e.kind for e in sent]
+    assert kinds.count(EventKind.READY) == 1 and kinds[-1] is EventKind.READY
+    detail = sent[-1].detail
+    assert "影片 ✅" in detail and "日文字幕 ✅" in detail and "中文字幕 ✅" in detail and "路灯表 ✅" in detail
+    assert "https://kiri.example/api/archives/zip?folder=A%2F20261110%2F%E6%AD%8C%E6%9E%A0" in detail.splitlines()
+    assert "https://kiri.example/archives#A%2F20261110%2F%E6%AD%8C%E6%9E%A0" in detail.splitlines()
+
+
+def test_ready_still_comes_when_a_stage_gave_up(tmp_path):
+    sent = run_pipeline(tmp_path, translate_ok=False)
+    kinds = [e.kind for e in sent]
+    assert EventKind.TRANSLATE_FAILED in kinds and kinds[-1] is EventKind.READY
+    assert "中文字幕 ❌" in sent[-1].detail and "路灯表 ✅" in sent[-1].detail
+    assert "http" not in sent[-1].detail  # no SITE_URL: no links
+
+
+def test_no_ready_when_the_download_failed(tmp_path):
+    def broken(*a, **kw):
+        raise DownloadError("video unavailable")
+
+    ad, clock, sent = make(tmp_path)
+    ad.on_ended(ended())
+    for _ in range(3):
+        job = ad.next_due()
+        ad.finish(job, Outcome("error", "video unavailable"))
+        clock.t += 900
+    assert [e.kind for e in sent] == [EventKind.DOWNLOAD_FAILED]

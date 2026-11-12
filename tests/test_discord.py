@@ -116,13 +116,14 @@ def test_through_live_notifier_survives_outage():
 
 
 @pytest.mark.parametrize("kind, footer", [
-    (EventKind.LIVE, "切片小助手 开播通知"),
-    (EventKind.OFFLINE, "切片小助手 开播通知"),
+    (EventKind.LIVE, "切片小助手 直播通知"),
+    (EventKind.OFFLINE, "切片小助手 直播通知"),
     (EventKind.DOWNLOADED, "切片小助手 自动下载"),
     (EventKind.TRANSCRIBE_FAILED, "切片小助手 自动下载"),
     (EventKind.ANALYZED, "切片小助手 自动路灯"),
     (EventKind.UPLOADED, "切片小助手 自动路灯"),
     (EventKind.UPLOAD_FAILED, "切片小助手 自动路灯"),
+    (EventKind.READY, "切片小助手 自动下载"),
 ])
 def test_footer_says_what_sent_it(kind, footer):
     n, sent = fake_discord(httpx.Response(204))

@@ -33,12 +33,14 @@ import dataclasses
 import functools
 import json
 import logging
+import os
 import shutil
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import quote
 
 from backend.analysis import AnalysisSettings, analyze, highlights_path
 from backend.asr import ASRSettings, transcribe
@@ -139,6 +141,7 @@ class AutoDownloader:
         self.max_errors = max_errors
         self.default_keep = default_keep
         self.uploads: dict[str, str] = {}  # streamer id -> Tencent Docs spreadsheet id (the gear)
+        self.site_url = ""  # the dashboard's address (SITE_URL in .env): links in messages
         self.notify = notify
         self.clock = clock
         # One worker per stage, so a long transcription never holds up downloads.
@@ -352,7 +355,14 @@ class AutoDownloader:
         )
 
     def finish(self, job: Job, outcome: Outcome) -> None:
-        """Record an attempt's outcome; send a message when the job is over."""
+        """Record an attempt's outcome and send its message. Once nothing is left for the
+        stream (every stage done or given up), report it ready with what it has."""
+        self._finish(job, outcome)
+        video = job.video or (str(outcome.result.video) if outcome.result and outcome.result.video else None)
+        if video and not any(j.stream_key == job.stream_key for j in self.load()):
+            self._send(EventKind.READY, job, ready_detail(Path(video), self.site_url, self.settings.output_dir))
+
+    def _finish(self, job: Job, outcome: Outcome) -> None:
         jobs = self.load()  # reload: on_ended may have added jobs meanwhile
         current = next((j for j in jobs if j.key == job.key), job)
         rest = [j for j in jobs if j.key != job.key]
@@ -398,7 +408,10 @@ class AutoDownloader:
             return
         if outcome.kind == "done":
             log.info("auto-download done: %s %s", name, outcome.result and outcome.result.video)
-            self._send(EventKind.DOWNLOADED, job, success_detail(outcome))
+            detail = success_detail(outcome)
+            if self.site_url and outcome.result:
+                detail += "\n" + archive_link(self.site_url, self.settings.output_dir, outcome.result.output_dir)
+            self._send(EventKind.DOWNLOADED, job, detail)
             video = outcome.result.video if outcome.result else None
             if self.transcribe and video:
                 current.video = str(video)
@@ -493,6 +506,32 @@ class AutoDownloader:
         return removed
 
 
+def ready_detail(video: Path, site_url: str, output_dir: Path) -> str:
+    """What a finished stream has (✅ / ❌), and with SITE_URL the 全部下载 zip and its page."""
+    folder, stem = video.parent, video.stem
+    have = [("影片", video.exists()), ("弹幕", (folder / f"{stem}.chat_parsed.json").exists()),
+            ("日文字幕", (folder / f"{stem}.transcript.json").exists()),
+            ("中文字幕", (folder / f"{stem}.zh.transcript.json").exists()),
+            ("路灯表", (folder / f"{stem}.highlights.json").exists())]
+    lines = [" · ".join(f"{name} {'✅' if ok else '❌'}" for name, ok in have)]
+    if site_url:
+        rel = folder.resolve().relative_to(output_dir.resolve()).as_posix()
+        lines += ["全部下载（影片、弹幕、中日字幕 SRT）：",
+                  f"{site_url.rstrip('/')}/api/archives/zip?folder={quote(rel, safe='')}",
+                  "录播页面：", archive_link(site_url, output_dir, folder)]
+    return "\n".join(lines)
+
+
+def archive_link(site_url: str, output_dir: Path, folder: Path) -> str:
+    """The archive's page on the dashboard (plays it, has the downloads). The folder is
+    escaped like the page's encodeURIComponent, so its detail view opens."""
+    rel = folder.resolve().relative_to(output_dir.resolve()).as_posix()
+    return f"{site_url.rstrip('/')}/archives#{quote(rel, safe=SAFE_URI_CHARS)}"
+
+
+SAFE_URI_CHARS = "!'()*"  # with A-Z a-z 0-9 - _ . ~: what encodeURIComponent leaves alone
+
+
 def success_detail(outcome: Outcome) -> str:
     result = outcome.result
     assert result is not None
@@ -574,6 +613,7 @@ def load_auto(config: Path) -> AutoDownloader | None:
         upload=load_uploader(config) if analyzer else None,  # uploads the analysis
     )
     ad.uploads = roster.upload_map()
+    ad.site_url = os.getenv("SITE_URL", "").strip().rstrip("/")
     return ad
 
 

@@ -37,6 +37,7 @@ class EventKind(StrEnum):
     TRANSLATE_FAILED = "translate_failed"  # Chinese subtitles gave up
     UPLOADED = "uploaded"  # 路灯表 uploaded to Tencent Docs (detail: the sheet link)
     UPLOAD_FAILED = "upload_failed"  # Tencent Docs upload gave up
+    READY = "ready"  # every stage of a stream is over (detail: what's done, the download links)
 
 
 @dataclass

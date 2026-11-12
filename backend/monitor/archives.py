@@ -294,22 +294,19 @@ def create_router(output_dir: Path,
 
     @router.get("/api/archives/zip")
     def zip_download(folder: str, request: Request) -> StreamingResponse:
-        """Everything of one archive except the raw chat, zipped on the fly (no temp file)."""
+        """What editors use, zipped on the fly (no temp file): the video, the cleaned chat,
+        and the Chinese and Japanese subtitles as SRT (made from the transcripts)."""
         path = resolve_folder(folder, request)
-        files = sorted(f for f in path.iterdir() if f.is_file() and f.suffix != ".part"
-                       and not f.name.endswith(RAW_CHAT_SUFFIXES))
+        entries = [f for f in path.iterdir() if f.is_file()]
+        files = sorted(f for f in entries if f.suffix == ".mp4" or f.name.endswith(CHAT_SUFFIX))
         extra: dict[str, bytes] = {}
-        if table := highlights_file(path):
-            try:
-                xlsx_name = table.name.removesuffix(HIGHLIGHTS_SUFFIX) + ".highlights.xlsx"
-                extra[xlsx_name] = highlights_xlsx(json.loads(table.read_text(encoding="utf-8")))
-            except ValueError:
-                pass
-        if zh := transcript_file(files, "zh"):
-            try:
-                extra[zh.name.removesuffix(ZH_SUFFIX) + ".zh.srt"] = srt(json.loads(zh.read_text(encoding="utf-8"))).encode()
-            except ValueError:
-                pass
+        for lang, suffix in (("zh", ZH_SUFFIX), ("ja", TRANSCRIPT_SUFFIX)):
+            if t := transcript_file(entries, lang):
+                try:
+                    extra[f"{t.name.removesuffix(suffix)}.{lang}.srt"] = srt(
+                        json.loads(t.read_text(encoding="utf-8"))).encode()
+                except ValueError:
+                    pass
         return StreamingResponse(stream_zip(files, extra), media_type="application/zip",
                                  headers={"Content-Disposition": attachment(path.name + ".zip")})
 

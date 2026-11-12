@@ -171,5 +171,5 @@ def test_notify_page_names_and_subscribes_a_group(page, notify_server):
     expect_text(page.locator("body"), "已保存")
 
     (g,) = json.loads((tmp / "qq_groups.json").read_text(encoding="utf-8"))
-    assert (g["name"], g["enabled"], g["streamers"]) == ("章鱼烧字幕组", True, ["youtube:@a"])
+    assert (g["name"], g["enabled"], g["streamers"]) == ("章鱼烧字幕组", True, ["A"])
     assert "analyzed" in g["kinds"] and "live" in g["kinds"]

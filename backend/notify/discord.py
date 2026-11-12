@@ -19,7 +19,7 @@ DEFAULT_COLOR = 0xE11D48
 OFFLINE_COLOR = 0x6B7280
 DOWNLOADED_COLOR = 0x16A34A
 FAILED_COLOR = 0xDC2626
-FOOTER_LIVE = "切片小助手 开播通知"
+FOOTER_LIVE = "切片小助手 直播通知"
 FOOTER_DOWNLOAD = "切片小助手 自动下载"
 FOOTER_HIGHLIGHTS = "切片小助手 自动路灯"  # the 路灯表: analysis and upload
 HIGHLIGHT_KINDS = {EventKind.ANALYZED, EventKind.ANALYZE_FAILED, EventKind.UPLOADED, EventKind.UPLOAD_FAILED}
@@ -33,6 +33,7 @@ PIPELINE_TEXT = {
     EventKind.TRANSLATE_FAILED: ("❗", "中文字幕翻译失败"),
     EventKind.UPLOADED: ("📤", "路灯表已上传腾讯文档"),
     EventKind.UPLOAD_FAILED: ("❗", "路灯表上传腾讯文档失败"),
+    EventKind.READY: ("✅", "全部处理完成"),
 }
 
 
@@ -100,7 +101,7 @@ class DiscordNotifier(Notifier):
     def download_payload(self, event: StreamEvent) -> dict[str, Any]:
         status = event.status
         s = status.streamer
-        ok = event.kind in (EventKind.DOWNLOADED, EventKind.ANALYZED, EventKind.UPLOADED)
+        ok = event.kind in (EventKind.DOWNLOADED, EventKind.ANALYZED, EventKind.UPLOADED, EventKind.READY)
         embed: dict[str, Any] = {
             "title": (status.title or "直播回放")[:256],
             "color": DOWNLOADED_COLOR if ok else FAILED_COLOR,

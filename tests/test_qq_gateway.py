@@ -46,7 +46,8 @@ def test_a_mention_registers_the_group_and_replies_with_its_subscriptions(tmp_pa
     assert "本群已订阅：（还没有）" in body["markdown"]["content"]
 
     groups.update("G1", streamers=["youtube:@a", "twitch:b"], enabled=True)
-    dispatch(gw, "GROUP_AT_MESSAGE_CREATE", {"group_openid": "G1", "id": "MSG2", "content": ""})
+    dispatch(gw, "GROUP_AT_MESSAGE_CREATE", {"group_openid": "G1", "id": "MSG2", "content": "",
+                                             "author": {"member_role": "owner"}})
     text = fake.messages[-1][1]["markdown"]["content"]
     assert "本群已订阅：A、B" in text and "开播" in text
 
@@ -162,3 +163,19 @@ def fake_gateway(fake: FakeQQ) -> None:
 
     fake.handle = handle
 
+
+
+def test_after_registering_only_owner_and_admins_get_an_answer(tmp_path):
+    fake = FakeQQ()
+    gw, groups, _ = gateway(tmp_path, fake)
+    member = {"member_role": "member"}
+
+    dispatch(gw, "GROUP_AT_MESSAGE_CREATE", {"group_openid": "G1", "id": "M1", "author": member})
+    assert len(fake.messages) == 1  # first time: whoever it was, the group is registered and told
+
+    dispatch(gw, "GROUP_AT_MESSAGE_CREATE", {"group_openid": "G1", "id": "M2", "author": member})
+    assert len(fake.messages) == 1  # a member @-ing it again: ignored, no spam
+
+    for role, msg_id in (("owner", "M3"), ("admin", "M4")):
+        dispatch(gw, "GROUP_AT_MESSAGE_CREATE", {"group_openid": "G1", "id": msg_id, "author": {"member_role": role}})
+    assert [b["msg_id"] for _, b in fake.messages] == ["M1", "M3", "M4"]

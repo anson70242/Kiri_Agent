@@ -139,16 +139,16 @@ def test_highlights_xlsx(client):
     assert client.get("/api/highlights/xlsx", params={"folder": "柊優花/20261106/雑談"}).status_code == 404
 
 
-def test_zip_has_everything_but_raw_chat(client):
+def test_zip_has_what_editors_use(client):
+    # The video, the cleaned chat, and subtitles as SRT in both languages; nothing else.
     r = client.get("/api/archives/zip", params={"folder": FOLDER})
     assert r.status_code == 200 and "attachment" in r.headers["content-disposition"]
-    names = zipfile.ZipFile(io.BytesIO(r.content)).namelist()
-    assert sorted(names) == sorted([
-        f"{STEM}.mp4", f"{STEM}.chat_parsed.json", f"{STEM}.transcript.json",
-        f"{STEM}.highlights.json", f"{STEM}.highlights.xlsx",
-        f"{STEM}.zh.transcript.json", f"{STEM}.zh.srt",
+    z = zipfile.ZipFile(io.BytesIO(r.content))
+    assert sorted(z.namelist()) == sorted([
+        f"{STEM}.mp4", f"{STEM}.chat_parsed.json", f"{STEM}.zh.srt", f"{STEM}.ja.srt",
     ])
-    assert zipfile.ZipFile(io.BytesIO(r.content)).read(f"{STEM}.mp4") == b"0123456789"
+    assert z.read(f"{STEM}.mp4") == b"0123456789"
+    assert "やっほー" in z.read(f"{STEM}.ja.srt").decode() and "哈喽" in z.read(f"{STEM}.zh.srt").decode()
     assert client.get("/api/archives/zip", params={"folder": "../.."}).status_code == 404
 
 

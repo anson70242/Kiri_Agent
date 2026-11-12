@@ -3,7 +3,8 @@ which groups it is in.
 
 QQ has no "list my groups" API: a group's openid only arrives in events. So:
 - GROUP_ADD_ROBOT (bot added) / GROUP_AT_MESSAGE_CREATE (bot @-mentioned): register the
-  group (new ones start switched off) and reply with what it is subscribed to.
+  group (new ones start switched off) and reply with what it is subscribed to. After the
+  first time, only the group owner / admins get that reply (no spam from every member).
 - GROUP_DEL_ROBOT (bot removed) -> "removed"; GROUP_MSG_REJECT (proactive messages
   turned off) -> "muted"; both stop deliveries and raise one alert (Discord).
   GROUP_MSG_RECEIVE (turned back on) -> "active".
@@ -72,6 +73,9 @@ class QQGateway:
             return
         if t in ("GROUP_ADD_ROBOT", "GROUP_AT_MESSAGE_CREATE"):
             g, new = self.groups.register(group)
+            role = (d.get("author") or {}).get("member_role")
+            if t == "GROUP_AT_MESSAGE_CREATE" and not new and role not in ("owner", "admin"):
+                return  # anyone may @ the bot; only the owner / admins get the status again
             log.info("qq: group %s %s", g.get("name") or group, "registered" if new else "mentioned")
             reply = {"msg_id": d.get("id")} if t == "GROUP_AT_MESSAGE_CREATE" else {"event_id": payload.get("id")}
             try:

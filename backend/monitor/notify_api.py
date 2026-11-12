@@ -2,7 +2,7 @@
 
     GET    /notify                      the page
     GET    /api/notify                  everything the page shows
-    PATCH  /api/notify/groups?id=<openid>   {name?, enabled?, streamers?, kinds?}
+    PATCH  /api/notify/groups?id=<openid>   {name?, enabled?, streamers? (people's names), kinds?}
     DELETE /api/notify/groups?id=<openid>
     POST   /api/notify/test             {target: "discord" | <group openid>}
 """
@@ -52,6 +52,15 @@ def create_notify_router(notifier: LiveNotifier | None, roster: Roster, gateway:
     def page() -> FileResponse:
         return FileResponse(PAGE)
 
+    def people() -> list[str]:
+        """Streamer names, one per person (柊優花's YouTube and Twitch are one)."""
+        return list(dict.fromkeys(e.get("name") or e["channel"] for e in roster.entries))
+
+    def as_people(group: dict[str, Any]) -> dict[str, Any]:
+        """Older saves hold channel ids: show them as the person's name."""
+        by_id = {entry_id(e): e.get("name") or e["channel"] for e in roster.entries}
+        return {**group, "streamers": list(dict.fromkeys(by_id.get(s, s) for s in group.get("streamers") or []))}
+
     @router.get("/api/notify")
     def status() -> dict[str, Any]:
         return {
@@ -60,9 +69,8 @@ def create_notify_router(notifier: LiveNotifier | None, roster: Roster, gateway:
                    "online": bool(gateway and gateway.online),
                    "bot_name": gateway.bot_name if gateway else "",
                    "last_error": gateway.last_error if gateway else ""},
-            "groups": qq.groups.all() if qq else [],
-            "streamers": [{"id": entry_id(e), "name": e.get("name") or e["channel"], "platform": e["platform"]}
-                          for e in roster.entries],
+            "groups": [as_people(g) for g in qq.groups.all()] if qq else [],
+            "streamers": [{"id": name, "name": name} for name in people()],
             "kinds": [{"id": str(k), "label": KIND_LABELS.get(str(k), str(k))} for k in EventKind],
             "log": notifier.history.entries() if notifier else [],
         }
@@ -75,11 +83,11 @@ def create_notify_router(notifier: LiveNotifier | None, roster: Roster, gateway:
         known_kinds = {str(k) for k in EventKind}
         if body.kinds is not None and not set(body.kinds) <= known_kinds:
             raise HTTPException(422, f"不认识的通知类型：{', '.join(sorted(set(body.kinds) - known_kinds))}")
-        known = {entry_id(e) for e in roster.entries}
-        if body.streamers is not None and not set(body.streamers) <= known:
+        if body.streamers is not None and not set(body.streamers) <= set(people()):
             raise HTTPException(422, "名单里没有这个主播")
         name = body.name.strip()[:40] if body.name is not None else None
-        return store.update(id, name=name, enabled=body.enabled, streamers=body.streamers, kinds=body.kinds)
+        return as_people(store.update(id, name=name, enabled=body.enabled, streamers=body.streamers,
+                                      kinds=body.kinds))
 
     @router.delete("/api/notify/groups")
     def delete_group(id: str) -> dict[str, Any]:
