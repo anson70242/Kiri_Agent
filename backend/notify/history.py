@@ -13,7 +13,7 @@ from backend.state_file import StateFile
 log = logging.getLogger(__name__)
 
 
-def decode_entries(raw: Any) -> list[dict[str, Any]]:
+def decode_history(raw: Any) -> list[dict[str, Any]]:
     """The history file's JSON -> entries; raises if it isn't a list of entries."""
     if not isinstance(raw, list) or not all(isinstance(e, dict) for e in raw):
         raise ValueError("expected a list of entries")
@@ -27,7 +27,7 @@ class NotifyHistory:
         self.path, self.keep = path, keep
         self._lock = threading.Lock()
         # Runtime state: a damaged file is set aside as a backup (the owner is alerted).
-        self._store = StateFile(path, default=list, policy="recover", decode=decode_entries) if path else None
+        self._store = StateFile(path, default=list, policy="recover", decode=decode_history) if path else None
         self._entries: list[dict[str, Any]] = self._store.load()[:keep] if self._store else []
 
     def add(self, channel: str, target: str, summary: str, ok: bool, error: str = "") -> None:

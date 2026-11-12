@@ -43,7 +43,7 @@ class PendingChat:
         return cls(**d | {"info": VideoInfo(**d["info"]), "output_dir": Path(d["output_dir"])})
 
 
-def decode_entries(raw: Any) -> list[PendingChat]:
+def decode_pending_chats(raw: Any) -> list[PendingChat]:
     """The chat retry queue file's JSON -> entries; raises if it isn't a list of entries."""
     if not isinstance(raw, list):
         raise ValueError(f"expected a list of queued chats, got {type(raw).__name__}")
@@ -67,7 +67,7 @@ class PendingChats:
     ):
         self.path = path
         # Runtime state: a damaged queue is set aside as a backup (the owner is alerted).
-        self._store = StateFile(path, default=list, policy="recover", decode=decode_entries,
+        self._store = StateFile(path, default=list, policy="recover", decode=decode_pending_chats,
                                 encode=lambda entries: [e.to_dict() for e in entries])
         self.interval = interval
         self.give_up = give_up

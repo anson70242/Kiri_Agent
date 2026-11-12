@@ -31,7 +31,7 @@ def entry_id(e: dict[str, Any]) -> str:
     return f"{e['platform']}:{e['channel']}"
 
 
-def decode_entries(raw: Any) -> list[dict[str, Any]]:
+def decode_streamers(raw: Any) -> list[dict[str, Any]]:
     """The file's entries; raises on anything that isn't a list of streamers."""
     if not isinstance(raw, list):
         raise ValueError(f"expected a list of streamers, got {type(raw).__name__}")
@@ -44,7 +44,7 @@ def decode_entries(raw: Any) -> list[dict[str, Any]]:
 class Roster:
     def __init__(self, path: Path, seed: list[dict[str, Any]]):
         self._file: StateFile[list[dict[str, Any]] | None] = StateFile(
-            path, default=lambda: None, policy="strict", decode=decode_entries)
+            path, default=lambda: None, policy="strict", decode=decode_streamers)
         entries = self._file.load()
         if entries is None:  # no file yet: seed it from the config
             self.entries: list[dict[str, Any]] = [dict(e) for e in seed]
