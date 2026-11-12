@@ -122,15 +122,16 @@ class StateFile(Generic[T]):
         self.decode = decode
         self.encode = encode
         self.on_incident = on_incident
-        self._stamp: tuple[int, int] | None = None  # the file as last loaded or saved
+        self._stamp: tuple[int, int] | None = None  # the file as last loaded, tried or saved
+        self.damaged: str | None = None  # strict: why the file could not be read when last tried
 
     def load(self) -> T:
         """The file's value; default() if it doesn't exist. Damaged: see the policy."""
-        stamp = self._disk_stamp()
+        self._stamp = self._disk_stamp()
         try:
             text = self.path.read_text(encoding="utf-8")
         except FileNotFoundError:
-            self._stamp = None
+            self._stamp, self.damaged = None, None
             return self.default()
         except (OSError, ValueError) as e:  # unreadable, or not UTF-8
             return self._damaged(e)
@@ -138,8 +139,14 @@ class StateFile(Generic[T]):
             value = self.decode(json.loads(text))
         except Exception as e:  # noqa: BLE001 - not JSON, or not the records the caller expects
             return self._damaged(e)
-        self._stamp = stamp
+        self.damaged = None
         return value
+
+    def reload(self, current: T) -> T:
+        """The file's value when it changed on disk since this object last loaded, tried or
+        saved it (another process rewrote it); else `current`, without reading the file. A
+        damaged file is tried once until it changes again. Damaged: see the policy."""
+        return self.load() if self.changed() else current
 
     def save(self, value: T) -> None:
         """Write atomically: never a half-written file, even if the process dies."""
@@ -151,11 +158,11 @@ class StateFile(Generic[T]):
         except BaseException:
             tmp.unlink(missing_ok=True)
             raise
-        self._stamp = self._disk_stamp()
+        self._stamp, self.damaged = self._disk_stamp(), None
 
     def changed(self) -> bool:
-        """Whether the file on disk is no longer the one this object last loaded or saved
-        (another process rewrote it): the cue to load() again."""
+        """Whether the file on disk is no longer the one this object last loaded, tried to
+        load or saved (another process rewrote it): the cue to load() again."""
         return self._disk_stamp() != self._stamp
 
     def _disk_stamp(self) -> tuple[int, int] | None:
@@ -168,6 +175,7 @@ class StateFile(Generic[T]):
     def _damaged(self, error: Exception) -> T:
         reason = f"{type(error).__name__}: {error}"
         if self.policy == "strict":
+            self.damaged = reason
             raise StateFileError(self.path, reason) from error
         backup = self._backup_name()
         self.path.rename(backup)

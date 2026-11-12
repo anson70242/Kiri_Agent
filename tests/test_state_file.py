@@ -162,3 +162,16 @@ def test_changed_tells_when_someone_else_rewrote_the_file(tmp_path):
     assert mine.load() == [Item("a", 1)] and not mine.changed()
     mine.save([Item("a", 1), Item("bb", 22)])
     assert not mine.changed() and theirs.changed()
+
+
+def test_reload_reads_a_damaged_strict_file_once_until_it_changes(tmp_path):
+    path = tmp_path / "users.json"
+    mine, theirs = items(path, policy="strict"), items(path, policy="strict")
+    good = mine.load()
+    path.write_text("[{", encoding="utf-8")  # damaged by someone else
+
+    with pytest.raises(StateFileError):
+        mine.reload(good)
+    assert mine.damaged and mine.reload(good) is good  # not tried again while unchanged
+    theirs.save([Item("a", 1)])  # repaired
+    assert mine.reload(good) == [Item("a", 1)] and mine.damaged is None

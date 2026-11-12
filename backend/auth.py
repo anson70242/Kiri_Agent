@@ -149,7 +149,6 @@ class UserStore:
         self.file: StateFile[list[dict[str, Any]]] = StateFile(path, default=list, policy="strict",
                                                                 decode=decode_users)
         self._users = self.file.load()
-        self._damaged: str | None = None  # why the file on disk can't be read now
 
     @property
     def path(self) -> Path:
@@ -157,24 +156,28 @@ class UserStore:
 
     @property
     def users(self) -> list[dict[str, Any]]:
-        if self.file.changed():
-            try:
-                self._users, self._damaged = self.file.load(), None
-            except StateFileError as e:
-                if self._damaged is None:
-                    log.error("%s is damaged (%s); keeping the %d user(s) read before", e.path, e.reason,
-                              len(self._users))
-                    report(Incident(e.path, None, e.reason))
-                self._damaged = e.reason
+        self.refresh()
         return self._users
+
+    def refresh(self) -> None:
+        """Re-read the file if it changed on disk. Damaged: keep the users read before, and
+        log and report it once until it is repaired."""
+        was_damaged = self.file.damaged is not None
+        try:
+            self._users = self.file.reload(self._users)
+        except StateFileError as e:
+            if not was_damaged:
+                log.error("%s is damaged (%s); keeping the %d user(s) read before", e.path, e.reason,
+                          len(self._users))
+                report(Incident(e.path, None, e.reason))
 
     def _save(self) -> None:
         self.file.save(self._users)
 
     def _check_writable(self) -> None:
         """Never overwrite a damaged users file: a person repairs it (or restores a backup)."""
-        self.users  # noqa: B018 - re-reads the file if it changed
-        if self._damaged is not None:
+        self.refresh()
+        if self.file.damaged is not None:
             raise AuthError(503, f"{self.path.name} 已损坏，修复之前不能修改账号")
 
     def __bool__(self) -> bool:
@@ -272,8 +275,7 @@ class SessionStore:
         self.clock = clock
 
     def _load(self) -> dict[str, dict[str, Any]]:
-        if self.file.changed():
-            self._sessions = self.file.load()
+        self._sessions = self.file.reload(self._sessions)
         return self._sessions
 
     def _save(self) -> None:
