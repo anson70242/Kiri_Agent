@@ -152,6 +152,55 @@ def test_transcription_failures_give_up_with_message(tmp_path):
     assert "CUDA OOM" in sent[1].detail
 
 
+def test_transcription_done_moves_job_to_analysis_and_reports_top_segments(tmp_path):
+    def fake_analyze(video, streamer, title):
+        out = video.with_name("v.highlights.json")
+        rows = [{"start": f"00:{i * 5:02d}:00", "score": s, "topics": [f"话题{i}"],
+                 "top_pick": {"title": f"切片{i}"} if s >= 7 else None}
+                for i, s in enumerate([3, 9, 6, 7, 8, 5, 10])]
+        out.write_text(json.dumps({"rows": rows}, ensure_ascii=False), encoding="utf-8")
+        seen.append((video, streamer, title))
+        return out
+
+    seen = []
+    ad, _, sent = make(tmp_path, transcribe=lambda v: None, analyze=fake_analyze)
+    ad.on_ended(ended())
+    ad.finish(ad.next_due(), downloaded(tmp_path))
+    job = ad.next_due()
+    ad.finish(job, ad.attempt(job))  # transcribed
+
+    (job,) = ad.load()
+    assert job.stage == "analyze"
+    ad.finish(job, ad.attempt(job))
+
+    assert ad.load() == []
+    assert seen == [(tmp_path / "v.mp4", "A", "title v1")]
+    assert [e.kind for e in sent] == [EventKind.DOWNLOADED, EventKind.ANALYZED]
+    detail = sent[1].detail
+    # top 5 by score, best first
+    assert [line.split()[0] for line in detail.splitlines()[:5]] == ["00:30:00", "00:05:00", "00:20:00", "00:15:00", "00:10:00"]
+    assert "切片6" in detail and "★10" in detail
+
+
+def test_analysis_failures_give_up_with_message(tmp_path):
+    def boom(video, streamer, title):
+        raise RuntimeError("LLM did not return valid JSON")
+
+    ad, clock, sent = make(tmp_path, transcribe=lambda v: None, analyze=boom)
+    ad.on_ended(ended())
+    ad.finish(ad.next_due(), downloaded(tmp_path))
+    job = ad.next_due()
+    ad.finish(job, ad.attempt(job))
+    for _ in range(3):
+        job = ad.next_due()
+        ad.finish(job, ad.attempt(job))
+        clock.t += 900
+
+    assert ad.load() == []
+    assert [e.kind for e in sent] == [EventKind.DOWNLOADED, EventKind.ANALYZE_FAILED]
+    assert "valid JSON" in sent[1].detail
+
+
 def test_downloads_keep_going_while_a_transcription_runs(tmp_path, monkeypatch):
     release = threading.Event()
     downloaded_b = threading.Event()
@@ -363,6 +412,25 @@ def test_load_auto_from_config(tmp_path):
     assert load_auto(cfg) is None
 
 
+def test_load_auto_with_analysis(tmp_path, monkeypatch):
+    streamers = {"streamers": [{"name": "A", "platform": "youtube", "channel": "@a", "auto_download": True}]}
+    llm = {"base_url": "http://127.0.0.1:8317/v1", "api_key_env": "AGY_API_KEY", "model": "m", "proxy": False}
+    asr = {"url": "http://whisper:8000"}  # analysis needs a transcript
+    cfg = tmp_path / "config.json"
+
+    monkeypatch.setenv("AGY_API_KEY", "sk-test")
+    cfg.write_text(json.dumps({"monitor": streamers, "asr": asr, "llm": llm, "analysis": {"min_score": 6}}), encoding="utf-8")
+    assert load_auto(cfg).analyze is not None
+
+    cfg.write_text(json.dumps({"monitor": streamers, "asr": asr, "llm": llm}), encoding="utf-8")
+    assert load_auto(cfg).analyze is None  # no "analysis" section: off
+
+    no_key = llm | {"api_key_env": "KIRI_TEST_NO_SUCH_KEY"}  # (the repo .env gets loaded, so not AGY_API_KEY)
+    cfg.write_text(json.dumps({"monitor": streamers, "asr": asr, "llm": no_key, "analysis": {}}), encoding="utf-8")
+    ad = load_auto(cfg)  # LLM not usable: analysis off, the rest still runs
+    assert ad is not None and ad.analyze is None
+
+
 def test_load_auto_with_asr(tmp_path):
     cfg = tmp_path / "config.json"
     cfg.write_text(json.dumps({
@@ -382,6 +450,10 @@ def test_discord_download_payloads():
     assert "失败" in bad["content"] and bad["allowed_mentions"] == {"parse": []}
     asr = d.build_payload(StreamEvent(EventKind.TRANSCRIBE_FAILED, live(), detail="whisper down"))
     assert "字幕转写失败" in asr["content"] and asr["embeds"][0]["description"] == "whisper down"
+    done = d.build_payload(StreamEvent(EventKind.ANALYZED, live(), detail="00:05:00 ★9 切片"))
+    assert "路灯表" in done["content"] and done["embeds"][0]["description"] == "00:05:00 ★9 切片"
+    bad = d.build_payload(StreamEvent(EventKind.ANALYZE_FAILED, live(), detail="LLM down"))
+    assert "分析失败" in bad["content"]
     asyncio.run(d.aclose())
 
 

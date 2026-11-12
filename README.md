@@ -17,7 +17,7 @@ Tencent Docs) so a team can split up the clipping work. A human still makes the 
 | [Auto download](#auto-download) | Stream ends → archive downloaded, old ones pruned, Discord report | done |
 | Chat density | Messages per minute, spikes, Super Chats → candidate highlight times | planned |
 | [Transcription](#transcription) | Downloaded VOD → `<stem>.transcript.json` via faster-whisper on the GPU | done |
-| Segment analysis | 5-minute segments, LLM summary + score per segment | planned |
+| [Segment analysis](#analysis-路灯表) | 5-minute topic logs, whole-stream scoring, highlights → `<stem>.highlights.json` | done |
 | Highlight report | Ranked timeline for editors | planned |
 | Sheet upload | Push the report to Google Sheets / Tencent Docs (docs.qq.com) | planned |
 
@@ -209,6 +209,25 @@ About 13× realtime on a GTX 1660 (a 4 h stream in ~20 min). Failures are retrie
 `download.auto.max_errors` times, then Discord gets a "字幕转写失败" message. Configure
 with the `asr` section of `config.json` (`url`, `language`, `vad`; remove it to skip
 transcription). By hand: `uv run -m backend.asr <video> --url http://...:8000`.
+
+## Analysis (路灯表)
+
+After transcription the job moves to an "analyze" stage ([analysis.py](backend/analysis.py),
+prompts adapted from AutoKiri's clip_highlight). Uses the `llm` settings (see LLM proxy).
+
+1. Every 5-minute segment (plus 30 s context each side): transcript + a chat digest (count,
+   density vs. the stream average, top reactions, Super Chats, up to 150 sampled messages;
+   bots and waiting-room chat excluded) → a topic log, usually 3 entries of 1–3 minutes.
+2. One call over the whole stream: all topic logs + chat density → a 1–10 score per segment,
+   relative within the stream; segments from `analysis.min_score` (7) also get highlights
+   and a best clip (🏆).
+3. `<stem>.highlights.json`, one row per segment: `start`, `end`, `topics`, `timeline`,
+   `highlights`, `top_pick`, `score`, `reason`, `chat_count`, `chat_ratio`, `chat_level`
+   (高/中/低: top 20% / bottom 30% of segments by density).
+
+Discord then gets the top 5 segments. A 5 h stream takes about 3 minutes with
+`gemini-3-flash`. By hand: `uv run -m backend.analysis <video> --streamer NAME --title T`
+(`--no-proxy` when running on the proxy machine itself).
 
 ## Tests
 

@@ -38,7 +38,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from backend.analysis import AnalysisSettings, analyze
 from backend.asr import ASRSettings, transcribe
+from backend.llm import LLMError, chat, load_llm
 from backend.monitor import StreamMonitor, Streamer, StreamStatus
 from backend.notify import EventKind, LiveNotifier, StreamEvent, load_notifier
 
@@ -49,7 +51,7 @@ from .pending import PendingChats
 log = logging.getLogger(__name__)
 
 NOT_READY = ("is_live", "is_upcoming", "post_live")
-STAGES = ("download", "transcribe")
+STAGES = ("download", "transcribe", "analyze")
 AUTH_HINTS = ("member", "sign in", "cookie", "login", "subscriber", "private")
 
 
@@ -61,7 +63,7 @@ class Job:
     attempts: int = 0
     errors: int = 0  # failures other than "not ready yet"
     last_error: str = ""
-    stage: Literal["download", "transcribe"] = "download"
+    stage: Literal["download", "transcribe", "analyze"] = "download"
     video: str | None = None  # set once downloaded
 
     @property
@@ -106,8 +108,10 @@ class AutoDownloader:
         notify: Callable[[StreamEvent], None] | None = None,
         clock: Callable[[], float] = time.time,
         transcribe: Callable[[Path], Any] | None = None,  # video -> transcript; None: skip
+        analyze: Callable[[Path, str, str], Path] | None = None,  # (video, streamer, title) -> table
     ):
         self.transcribe = transcribe
+        self.analyze = analyze
         self.settings = settings
         self.streamers = list(streamers)
         self.keep = keep
@@ -117,7 +121,7 @@ class AutoDownloader:
         self.max_errors = max_errors
         self.notify = notify
         self.clock = clock
-        # Two workers, one per stage, so a long transcription never holds up downloads.
+        # One worker per stage, so a long transcription never holds up downloads.
         self._wake = {stage: asyncio.Event() for stage in STAGES}
         self._active: dict[str, dict[str, Any] | None] = dict.fromkeys(STAGES)  # job + progress
 
@@ -220,6 +224,8 @@ class AutoDownloader:
         """One try at the job's current stage (blocking)."""
         if job.stage == "transcribe":
             return self.attempt_transcribe(job)
+        if job.stage == "analyze":
+            return self.attempt_analyze(job)
         s = job.status
         try:
             dl = downloader_for(s.url or "", self.settings, self.streamers)
@@ -258,6 +264,21 @@ class AutoDownloader:
             self._active["transcribe"] = None
         return Outcome("done")
 
+    def attempt_analyze(self, job: Job) -> Outcome:
+        s = job.status
+        self._active["analyze"] = {
+            "name": s.streamer.name, "platform": s.streamer.platform, "title": s.title, "url": s.url,
+            "started": self.clock(), "stage": "analyze",
+            "percent": None, "downloaded": 0, "total": None, "speed": None, "eta": None}
+        try:
+            assert self.analyze and job.video
+            out = self.analyze(Path(job.video), s.streamer.name, s.title or "")
+        except Exception as e:  # noqa: BLE001 - LLM down, bad JSON, missing transcript: all retried
+            return Outcome("error", str(e) or type(e).__name__)
+        finally:
+            self._active["analyze"] = None
+        return Outcome("done", str(out))
+
     def _on_progress(self, d: dict[str, Any]) -> None:
         """yt-dlp progress hook (runs in the download thread)."""
         active = self._active["download"]
@@ -283,21 +304,25 @@ class AutoDownloader:
         current.last_error = outcome.message
 
         name = job.status.streamer.name
+        if outcome.kind == "done" and current.stage == "analyze":
+            log.info("analyzed: %s %s", name, outcome.message)
+            self.save(rest)
+            self._send(EventKind.ANALYZED, job, top_segments_detail(Path(outcome.message)))
+            return
         if outcome.kind == "done" and current.stage == "transcribe":
             log.info("transcribed: %s %s", name, current.video)
-            self.save(rest)
+            if self.analyze:
+                self.advance(current, rest, "analyze", now)
+            else:
+                self.save(rest)
             return
         if outcome.kind == "done":
             log.info("auto-download done: %s %s", name, outcome.result and outcome.result.video)
             self._send(EventKind.DOWNLOADED, job, success_detail(outcome))
             video = outcome.result.video if outcome.result else None
             if self.transcribe and video:
-                # Next stage: same job, fresh retry counters.
-                current.stage, current.video = "transcribe", str(video)
-                current.attempts, current.errors, current.last_error = 0, 0, ""
-                current.next_try = now
-                self.save(rest + [current])
-                self._wake["transcribe"].set()
+                current.video = str(video)
+                self.advance(current, rest, "transcribe", now)
             else:
                 self.save(rest)
             return
@@ -319,11 +344,23 @@ class AutoDownloader:
                     self._send(EventKind.TRANSCRIBE_FAILED, job,
                                f"影片已下载，但试了 {current.attempts} 次字幕转写仍失败：\n"
                                f"```{current.last_error[:1500]}```")
+                elif current.stage == "analyze":
+                    self._send(EventKind.ANALYZE_FAILED, job,
+                               f"影片和字幕都好了，但试了 {current.attempts} 次路灯表分析仍失败：\n"
+                               f"```{current.last_error[:1500]}```")
                 else:
                     self._send(EventKind.DOWNLOAD_FAILED, job, failure_detail(current))
                 return
         current.next_try = now + self.retry_interval
         self.save(rest + [current])
+
+    def advance(self, job: Job, rest: list[Job], stage: str, now: float) -> None:
+        """Move a job to its next stage with fresh retry counters, and wake that worker."""
+        job.stage = stage  # type: ignore[assignment]
+        job.attempts, job.errors, job.last_error = 0, 0, ""
+        job.next_try = now
+        self.save(rest + [job])
+        self._wake[stage].set()
 
     def _send(self, kind: EventKind, job: Job, detail: str) -> None:
         if self.notify:
@@ -386,6 +423,20 @@ def success_detail(outcome: Outcome) -> str:
     return "\n".join(lines)
 
 
+def top_segments_detail(table: Path, n: int = 5) -> str:
+    """Discord text for a finished 路灯表: the best `n` segments."""
+    try:
+        rows = json.loads(table.read_text(encoding="utf-8")).get("rows") or []
+    except (OSError, ValueError) as e:
+        return f"路灯表已生成，但读不到：{e}"
+    best = sorted((r for r in rows if isinstance(r.get("score"), int)), key=lambda r: -r["score"])[:n]
+    lines = []
+    for r in best:
+        pick = (r.get("top_pick") or {}).get("title") or " / ".join(r.get("topics") or [])
+        lines.append(f"{r['start']} ★{r['score']} {pick}")
+    return "\n".join(lines) or "路灯表已生成（没有打分的段落）"
+
+
 def failure_detail(job: Job) -> str:
     text = f"试了 {job.attempts} 次仍失败：\n```{job.last_error[:1500]}```"
     if any(h in job.last_error.lower() for h in AUTH_HINTS):
@@ -431,7 +482,33 @@ def load_auto(config: Path) -> AutoDownloader | None:
         give_up=float(auto.get("give_up_hours", 12)) * 3600,
         max_errors=int(auto.get("max_errors", 3)),
         transcribe=transcriber,
+        analyze=load_analyzer(config, cfg) if transcriber else None,
     )
+
+
+def load_analyzer(config: Path, cfg: dict[str, Any]) -> Callable[[Path, str, str], Path] | None:
+    """`analysis` section + a usable `llm` section -> (video, streamer, title) -> 路灯表.
+    A broken LLM setup turns analysis off (logged) instead of stopping the service."""
+    a = cfg.get("analysis")
+    if a is None or (isinstance(a, dict) and a.get("enabled") is False):
+        return None
+    a = a if isinstance(a, dict) else {}
+    try:
+        llm = load_llm(config)
+    except LLMError as e:
+        log.warning("analysis disabled: %s", e)
+        return None
+    settings = AnalysisSettings(
+        seg_seconds=int(a.get("segment_minutes", 5) * 60),
+        context_seconds=int(a.get("context_seconds", 30)),
+        min_score=int(a.get("min_score", 7)),
+    )
+    complete = functools.partial(chat, llm, response_format={"type": "json_object"})
+
+    def run(video: Path, streamer: str, title: str) -> Path:
+        return analyze(video, complete, streamer=streamer, title=title, settings=settings)
+
+    return run
 
 
 def attach(config: Path, mon: StreamMonitor) -> tuple[LiveNotifier | None, AutoDownloader | None]:

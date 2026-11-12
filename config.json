@@ -33,9 +33,10 @@
   "llm": {
     "base_url": "http://127.0.0.1:8317/v1",
     "api_key_env": "AGY_API_KEY",
-    "model": "gemini-3.8-flash-high",
+    "model": "gemini-3-flash",
     "proxy": true
   },
+  "analysis": { "segment_minutes": 5, "context_seconds": 30, "min_score": 7 },
   "asr": { "url": "http://whisper:8000", "language": "ja", "vad": true },
   "download": {
     "output_dir": "downloads",

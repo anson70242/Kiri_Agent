@@ -19,6 +19,14 @@ DEFAULT_COLOR = 0xE11D48
 OFFLINE_COLOR = 0x6B7280
 DOWNLOADED_COLOR = 0x16A34A
 FAILED_COLOR = 0xDC2626
+# Pipeline events (backend.downloader.auto): icon and message text.
+PIPELINE_TEXT = {
+    EventKind.DOWNLOADED: ("📥", "回放已下载"),
+    EventKind.DOWNLOAD_FAILED: ("❗", "回放下载失败"),
+    EventKind.TRANSCRIBE_FAILED: ("❗", "字幕转写失败"),
+    EventKind.ANALYZED: ("🚦", "路灯表已生成，精华段落："),
+    EventKind.ANALYZE_FAILED: ("❗", "路灯表分析失败"),
+}
 
 
 def _duration(start: datetime, end: datetime) -> str:
@@ -36,7 +44,7 @@ class DiscordNotifier(Notifier):
         self.client = client or httpx.AsyncClient(timeout=15)
 
     def build_payload(self, event: StreamEvent) -> dict[str, Any]:
-        if event.kind in (EventKind.DOWNLOADED, EventKind.DOWNLOAD_FAILED, EventKind.TRANSCRIBE_FAILED):
+        if event.kind in PIPELINE_TEXT:
             return self.download_payload(event)
         status = event.status
         s = status.streamer
@@ -85,7 +93,7 @@ class DiscordNotifier(Notifier):
     def download_payload(self, event: StreamEvent) -> dict[str, Any]:
         status = event.status
         s = status.streamer
-        ok = event.kind is EventKind.DOWNLOADED
+        ok = event.kind in (EventKind.DOWNLOADED, EventKind.ANALYZED)
         embed: dict[str, Any] = {
             "title": (status.title or "直播回放")[:256],
             "color": DOWNLOADED_COLOR if ok else FAILED_COLOR,
@@ -98,10 +106,9 @@ class DiscordNotifier(Notifier):
             embed["author"]["icon_url"] = status.avatar
         if event.detail:
             embed["description"] = event.detail[:4000]
-        verb = {EventKind.DOWNLOADED: "回放已下载", EventKind.DOWNLOAD_FAILED: "回放下载失败",
-                EventKind.TRANSCRIBE_FAILED: "字幕转写失败"}[event.kind]
+        icon, verb = PIPELINE_TEXT[event.kind]
         return {
-            "content": f"{'📥' if ok else '❗'} **{s.name}** {verb}",
+            "content": f"{icon} **{s.name}** {verb}",
             "embeds": [embed],
             "allowed_mentions": {"parse": []},
         }

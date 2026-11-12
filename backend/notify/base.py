@@ -30,6 +30,8 @@ class EventKind(StrEnum):
     DOWNLOADED = "downloaded"  # archive auto-downloaded (backend.downloader.auto)
     DOWNLOAD_FAILED = "download_failed"  # auto-download gave up
     TRANSCRIBE_FAILED = "transcribe_failed"  # speech-to-text of a downloaded archive gave up
+    ANALYZED = "analyzed"  # 路灯表 ready (detail: the top segments)
+    ANALYZE_FAILED = "analyze_failed"  # 路灯表 analysis gave up
 
 
 @dataclass
