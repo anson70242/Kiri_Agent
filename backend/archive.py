@@ -30,12 +30,15 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
+# platform -> the suffix of the raw chat downloaded from it
+RAW_CHAT_SUFFIX = {"youtube": ".live_chat.json", "twitch": ".chat.json"}
+
 
 class Artifact(Enum):
     """One kind of file of an archive, by its file name suffix(es)."""
 
     VIDEO = (".mp4",)
-    RAW_CHAT = (".live_chat.json", ".chat.json")  # YouTube, Twitch: as downloaded
+    RAW_CHAT = tuple(RAW_CHAT_SUFFIX.values())  # as downloaded, one suffix per platform
     CHAT = (".chat_parsed.json",)  # cleaned chat
     TRANSCRIPT = (".transcript.json",)  # Japanese subtitles (backend.asr)
     CHINESE_TRANSCRIPT = (".zh.transcript.json",)  # Chinese subtitles (backend.translate)
@@ -425,15 +428,21 @@ def name_archive(creator: str, date: str, title: str) -> tuple[Path, str]:
     return Path(safe_name(creator), date, safe_name(title)), safe_name(f"[{date}][{creator}] {title}")
 
 
-RAW_CHAT_SUFFIX = dict(zip(("youtube", "twitch"), Artifact.RAW_CHAT.suffixes))  # platform -> suffix
-
-
-def artifact_name(stem: str, artifact: Artifact, platform: str = "") -> str:
+def artifact_name(stem: str, artifact: Artifact, platform: str | None = None) -> str:
     """The file name of `artifact` in an archive whose files are named after `stem`. Raw chat
-    is named by the `platform` it came from."""
+    is named by the `platform` it came from; raises ValueError without a known one."""
     if artifact is Artifact.RAW_CHAT:
+        if platform not in RAW_CHAT_SUFFIX:
+            raise ValueError(f"a raw chat is named by its platform ({', '.join(RAW_CHAT_SUFFIX)}), "
+                             f"got {platform!r}")
         return stem + RAW_CHAT_SUFFIX[platform]
     return stem + artifact.suffixes[0]
+
+
+def raw_chat_platform(name: str) -> str | None:
+    """The platform a raw chat file came from, by its name's suffix; None for a file name
+    that is not a raw chat."""
+    return next((p for p, suffix in RAW_CHAT_SUFFIX.items() if name.endswith(suffix)), None)
 
 
 class ArchiveNotFound(LookupError):

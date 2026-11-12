@@ -19,7 +19,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from backend.archive import Archive, Artifact
+from backend.archive import Archive, Artifact, raw_chat_platform
 
 log = logging.getLogger(__name__)
 
@@ -129,18 +129,17 @@ def parse_twitch(path: Path) -> list[ChatLine]:
 
 # ---- files ----
 
-# The raw chat's suffix tells the platform: Artifact.RAW_CHAT lists YouTube's, then Twitch's.
-PARSERS = dict(zip(Artifact.RAW_CHAT.suffixes, (parse_youtube, parse_twitch), strict=True))
+PARSERS = {"youtube": parse_youtube, "twitch": parse_twitch}  # platform -> its raw chat's parser
 
 
 def clean_chat(raw: Path) -> Path:
     """Parse a raw chat file (type from its suffix) and save the cleaned chat in its archive,
     named after the raw chat. Raises ValueError for a file that is not a raw chat."""
-    if not Artifact.RAW_CHAT.matches(raw.name):
+    platform = raw_chat_platform(raw.name)
+    if platform is None:
         raise ValueError(f"not a raw chat file: {raw.name}")
     archive = Archive.from_file(raw)
-    parser = next(p for s, p in PARSERS.items() if raw.name.endswith(s))
-    lines = parser(raw)
+    lines = PARSERS[platform](raw)
     out = archive.save(Artifact.CHAT, lines)
     log.info("chat cleaned: %d messages -> %s", len(lines), out.name)
     return out
