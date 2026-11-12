@@ -25,6 +25,11 @@ def client(tmp_path):
     ]
     (done / f"{STEM}.chat_parsed.json").write_text(json.dumps(chat), encoding="utf-8")
     (done / f"{STEM}.transcript.json").write_text('[{"start": 1.0, "end": 2.0, "text": "やっほー"}]', encoding="utf-8")
+    table = {"streamer": "柊優花", "title": "歌枠", "rows": [
+        {"start": "00:00:00", "end": "00:05:00", "score": 8, "top_pick": {"title": "开场"}},
+        {"start": "00:05:00", "end": "00:10:00", "score": 5, "top_pick": None},
+    ]}
+    (done / f"{STEM}.highlights.json").write_text(json.dumps(table, ensure_ascii=False), encoding="utf-8")
     partial = out / "柊優花/20261106/雑談"
     partial.mkdir(parents=True)
     (partial / "[20261106][柊優花] 雑談.mp4.part").write_bytes(b"xx")
@@ -76,6 +81,22 @@ def test_transcript(client):
     r = client.get("/api/archives/transcript", params={"folder": FOLDER})
     assert r.json() == {"segments": [{"start": 1.0, "end": 2.0, "text": "やっほー"}]}
     assert client.get("/api/archives/transcript", params={"folder": "柊優花/20261106/雑談"}).status_code == 404
+
+
+def test_highlights_list_and_table(client):
+    listing = client.get("/api/highlights").json()["tables"]
+    assert [(t["folder"], t["creator"], t["date"], t["title"]) for t in listing] == [(FOLDER, "柊優花", "20261105", "歌枠")]
+    assert (listing[0]["segments"], listing[0]["best_score"], listing[0]["picks"]) == (2, 8, 1)
+
+    table = client.get("/api/highlights/table", params={"folder": FOLDER}).json()
+    assert [r["start"] for r in table["rows"]] == ["00:00:00", "00:05:00"]
+    assert client.get("/api/highlights/table", params={"folder": "柊優花/20261106/雑談"}).status_code == 404
+    assert client.get("/api/highlights/table", params={"folder": "../.."}).status_code == 404
+
+
+def test_highlights_page(client):
+    r = client.get("/highlights")
+    assert r.status_code == 200 and "路灯表" in r.text
 
 
 def test_file_and_range(client):

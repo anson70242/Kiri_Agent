@@ -17,6 +17,8 @@ from .__main__ import REPO_ROOT
 PAGE = REPO_ROOT / "frontend" / "archives.html"
 CHAT_SUFFIX = ".chat_parsed.json"
 TRANSCRIPT_SUFFIX = ".transcript.json"  # backend.asr
+HIGHLIGHTS_SUFFIX = ".highlights.json"  # backend.analysis (路灯表)
+HIGHLIGHTS_PAGE = REPO_ROOT / "frontend" / "highlights.html"
 RAW_CHAT_SUFFIXES = (".live_chat.json", ".chat.json")
 
 # chat_parsed path -> (mtime_ns, message count)
@@ -154,6 +156,47 @@ def create_router(output_dir: Path) -> APIRouter:
             return json.loads(file.read_text(encoding="utf-8"))
         except ValueError:
             raise HTTPException(500, "transcript is not valid JSON")
+
+    # ---- 路灯表 ----
+
+    def highlights_file(path: Path) -> Path | None:
+        return next((f for f in path.iterdir() if f.name.endswith(HIGHLIGHTS_SUFFIX)), None)
+
+    @router.get("/highlights", include_in_schema=False)
+    def highlights_page() -> FileResponse:
+        return FileResponse(HIGHLIGHTS_PAGE)
+
+    @router.get("/api/highlights")
+    def highlights_list() -> dict:
+        """Every archive that has a 路灯表, newest first, with a one-line summary."""
+        tables = []
+        for a in list_archives(root):
+            path = root / a["folder"]
+            file = highlights_file(path)
+            if not file:
+                continue
+            try:
+                rows = json.loads(file.read_text(encoding="utf-8")).get("rows") or []
+            except (OSError, ValueError):
+                continue
+            scores = [r["score"] for r in rows if isinstance(r.get("score"), int)]
+            tables.append({
+                "folder": a["folder"], "creator": a["creator"], "date": a["date"], "title": a["title"],
+                "segments": len(rows),
+                "best_score": max(scores, default=None),
+                "picks": sum(1 for r in rows if r.get("top_pick")),
+            })
+        return {"tables": tables}
+
+    @router.get("/api/highlights/table")
+    def highlights_table(folder: str) -> dict:
+        file = highlights_file(resolve_folder(folder))
+        if not file:
+            raise HTTPException(404, "no 路灯表 for this archive")
+        try:
+            return json.loads(file.read_text(encoding="utf-8"))
+        except ValueError:
+            raise HTTPException(500, "路灯表 is not valid JSON")
 
     @router.get("/api/archives/transcript")
     def transcript(folder: str) -> dict:
