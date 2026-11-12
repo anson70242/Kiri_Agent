@@ -1,6 +1,6 @@
 """Turn a raw chat replay into a short, uniform list for reading and LLM prompts.
 
-Output (`<stem>.chat_parsed.json`, AutoKiri's layout, one message per line):
+Output (the chat artifact, saved by backend.archive in AutoKiri's layout, one message per line):
 
     [
       {"time": "00:12:34", "user": "Bob", "msg": "こんゆかし〜"},
@@ -18,6 +18,8 @@ import json
 import logging
 from pathlib import Path
 from typing import Any
+
+from backend.archive import Archive, Artifact
 
 log = logging.getLogger(__name__)
 
@@ -127,30 +129,28 @@ def parse_twitch(path: Path) -> list[ChatLine]:
 
 # ---- files ----
 
-PARSERS = {".live_chat.json": parse_youtube, ".chat.json": parse_twitch}
-PARSED_SUFFIX = ".chat_parsed.json"
+# The raw chat's suffix tells the platform: Artifact.RAW_CHAT lists YouTube's, then Twitch's.
+PARSERS = dict(zip(Artifact.RAW_CHAT.suffixes, (parse_youtube, parse_twitch), strict=True))
+
+
+def raw_chat_archive(raw: Path) -> Archive:
+    """The archive of a raw chat file, its artifacts named after it. Raises ValueError for
+    a file that is not a raw chat."""
+    if not Artifact.RAW_CHAT.matches(raw.name):
+        raise ValueError(f"not a raw chat file: {raw.name}")
+    return Archive.from_file(raw)
 
 
 def parsed_path(raw: Path) -> Path:
-    """`<stem>.live_chat.json` / `<stem>.chat.json` -> `<stem>.chat_parsed.json`."""
-    for suffix in PARSERS:
-        if raw.name.endswith(suffix):
-            return raw.with_name(raw.name.removesuffix(suffix) + PARSED_SUFFIX)
-    raise ValueError(f"not a raw chat file: {raw.name}")
+    """Where `clean_chat` writes the cleaned chat. Only the tests still ask; ask the Archive module."""
+    return raw_chat_archive(raw).save_path(Artifact.CHAT)
 
 
 def clean_chat(raw: Path) -> Path:
-    """Parse a raw chat file (type from its suffix) and write `<stem>.chat_parsed.json`."""
-    out = parsed_path(raw)
+    """Parse a raw chat file (type from its suffix) and save the cleaned chat in its archive."""
+    archive = raw_chat_archive(raw)
     parser = next(p for s, p in PARSERS.items() if raw.name.endswith(s))
     lines = parser(raw)
-    write_lines(lines, out)
+    out = archive.save(Artifact.CHAT, lines)
     log.info("chat cleaned: %d messages -> %s", len(lines), out.name)
     return out
-
-
-def write_lines(lines: list[ChatLine], out: Path) -> None:
-    body = ",\n".join("  " + json.dumps(line, ensure_ascii=False) for line in lines)
-    tmp = out.with_name(out.name + ".part")
-    tmp.write_text(f"[\n{body}\n]\n" if lines else "[]\n", encoding="utf-8")
-    tmp.replace(out)

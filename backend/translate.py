@@ -1,7 +1,7 @@
 """Chinese subtitles: translate a stream's transcript, keeping every line's timing.
 
     from backend.translate import translate
-    translate(video, complete)   # -> "<stem>.zh.transcript.json" next to the video
+    translate(video, complete)   # -> the Chinese transcript artifact next to the video
 
 The transcript is sent in groups (default 80 lines) with a few lines of context on
 each side. The LLM answers `{"lines": [{"id", "text"}]}`; ids map back 1:1 onto the
@@ -22,9 +22,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from backend.archive import Archive, ArtifactMissing, Artifact
+
 log = logging.getLogger(__name__)
 
-SUFFIX = ".zh.transcript.json"
 Complete = Callable[[list[dict[str, str]]], str]
 
 SYSTEM = """### 角色设定与任务目标
@@ -94,16 +95,18 @@ class TranslateSettings:
 
 
 def zh_path(video: Path) -> Path:
-    return video.with_name(video.name.removesuffix(video.suffix) + SUFFIX)
+    """Where `translate` writes the Chinese transcript. Only the tests still ask; ask the Archive module."""
+    return Archive.from_video(video).save_path(Artifact.ZH_TRANSCRIPT)
 
 
 def translate(video: Path, complete: Complete, settings: TranslateSettings | None = None) -> Path:
-    """Translate `<stem>.transcript.json` and write `<stem>.zh.transcript.json`."""
+    """Translate the transcript of `video`'s archive and save its Chinese transcript."""
     s = settings or TranslateSettings()
-    src = video.with_name(video.name.removesuffix(video.suffix) + ".transcript.json")
-    if not src.exists():
-        raise TranslateError(f"no transcript for {video.name}")
-    lines: list[dict[str, Any]] = json.loads(src.read_text(encoding="utf-8"))
+    archive = Archive.from_video(video)
+    try:
+        lines: list[dict[str, Any]] = archive.read_transcript()
+    except ArtifactMissing:
+        raise TranslateError(f"no transcript for {video.name}") from None
 
     texts: dict[int, str] = {}
     count = len(lines) if not s.limit_seconds else sum(1 for x in lines if x["start"] < s.limit_seconds)
@@ -112,16 +115,11 @@ def translate(video: Path, complete: Complete, settings: TranslateSettings | Non
         texts.update(translate_group(lines, ids, complete, s))
         log.info("translate %s: %d/%d lines", video.name, ids[-1] + 1, count)
 
-    out = zh_path(video)
     zh = [{"start": x["start"], "end": x["end"], "text": texts.get(i, x["text"])} for i, x in enumerate(lines)]
     missing = sum(1 for i in range(count) if i not in texts)
     if missing:
         log.warning("translate %s: %d lines kept in Japanese", video.name, missing)
-    body = ",\n".join("  " + json.dumps(x, ensure_ascii=False) for x in zh)
-    tmp = out.with_name(out.name + ".part")
-    tmp.write_text(f"[\n{body}\n]\n" if zh else "[]\n", encoding="utf-8")
-    tmp.replace(out)
-    return out
+    return archive.save(Artifact.ZH_TRANSCRIPT, zh)
 
 
 def translate_group(lines: list[dict[str, Any]], ids: list[int], complete: Complete,
