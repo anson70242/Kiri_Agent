@@ -247,6 +247,71 @@ def test_analysis_failures_give_up_with_message(tmp_path):
     assert "valid JSON" in sent[1].detail
 
 
+# ---- upload to Tencent Docs (per streamer, from the gear) ----
+
+def analyzed_to(tmp_path, upload, uploads):
+    """An AutoDownloader whose stream A is analyzed; returns it after the analysis finished."""
+    def fake_analyze(video, streamer, title):
+        out = video.with_name("v.highlights.json")
+        out.write_text(json.dumps({"rows": []}), encoding="utf-8")
+        return out
+
+    ad, clock, sent = make(tmp_path, transcribe=lambda v: None, analyze=fake_analyze, upload=upload)
+    ad.uploads = uploads
+    ad.on_ended(ended())
+    ad.finish(ad.next_due(), downloaded(tmp_path))
+    for _ in range(2):  # transcribe, analyze
+        job = ad.next_due()
+        ad.finish(job, ad.attempt(job))
+    return ad, clock, sent
+
+
+def test_analyzed_table_is_uploaded_for_streamers_with_upload_on(tmp_path):
+    calls = []
+
+    def fake_upload(table, file_id, streamer, title):
+        calls.append((table, file_id, streamer, title))
+        return "https://docs.qq.com/sheet/SHEET1?tab=t1"
+
+    ad, _, sent = analyzed_to(tmp_path, fake_upload, {A.id: "SHEET1"})
+    (job,) = ad.load()
+    assert job.stage == "upload"
+    ad.finish(job, ad.attempt(job))
+
+    assert ad.load() == []
+    assert calls == [(tmp_path / "v.highlights.json", "SHEET1", "A", "title v1")]
+    assert [e.kind for e in sent] == [EventKind.DOWNLOADED, EventKind.ANALYZED, EventKind.UPLOADED]
+    assert "https://docs.qq.com/sheet/SHEET1?tab=t1" in sent[2].detail
+
+
+def test_no_upload_when_the_streamer_has_it_off(tmp_path):
+    ad, _, sent = analyzed_to(tmp_path, lambda *a: "url", {B.id: "SHEET1"})  # only B uploads
+    assert ad.load() == []
+    assert [e.kind for e in sent] == [EventKind.DOWNLOADED, EventKind.ANALYZED]
+
+
+def test_no_upload_without_credentials(tmp_path):
+    # upload on in the gear, but no Tencent Docs token in .env yet: skipped quietly.
+    ad, _, sent = analyzed_to(tmp_path, None, {A.id: "SHEET1"})
+    assert ad.load() == []
+    assert [e.kind for e in sent] == [EventKind.DOWNLOADED, EventKind.ANALYZED]
+
+
+def test_upload_failures_give_up_with_message(tmp_path):
+    def boom(table, file_id, streamer, title):
+        raise RuntimeError("Tencent Docs API error 400006: token 过期")
+
+    ad, clock, sent = analyzed_to(tmp_path, boom, {A.id: "SHEET1"})
+    for _ in range(3):
+        job = ad.next_due()
+        ad.finish(job, ad.attempt(job))
+        clock.t += 900
+
+    assert ad.load() == []
+    assert [e.kind for e in sent] == [EventKind.DOWNLOADED, EventKind.ANALYZED, EventKind.UPLOAD_FAILED]
+    assert "400006" in sent[2].detail
+
+
 def test_downloads_keep_going_while_a_transcription_runs(tmp_path, monkeypatch):
     release = threading.Event()
     downloaded_b = threading.Event()
@@ -519,3 +584,24 @@ def test_video_format_caps_height():
     assert TwitchDownloader(s).video_format().startswith("bv*[height<=1080]+ba")
     assert "height" not in TwitchDownloader(DownloadSettings(max_height=None)).video_format()
     assert Path  # keep import used
+
+
+def test_load_auto_uploads_only_with_credentials(tmp_path, monkeypatch):
+    names = {"access_token_env": "KIRI_T_TOKEN", "client_id_env": "KIRI_T_CLIENT", "open_id_env": "KIRI_T_OPEN"}
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({
+        "monitor": {"streamers": [{"name": "A", "platform": "youtube", "channel": "@a", "auto_download": True,
+                                   "upload": True, "upload_sheet": "SHEET1"}]},
+        "upload": {"tencent": names},
+        "asr": {"url": "http://whisper:8000"},  # uploading needs an analysis, which needs both
+        "llm": {"base_url": "http://127.0.0.1:8317/v1", "api_key_env": "KIRI_T_LLM", "model": "m", "proxy": False},
+        "analysis": {},
+    }), encoding="utf-8")
+    monkeypatch.setenv("KIRI_T_LLM", "sk-test")
+    ad = load_auto(cfg)
+    assert ad.upload is None  # no token: uploads are skipped
+    assert ad.uploads == {"youtube:@a": "SHEET1"}
+
+    for name in names.values():
+        monkeypatch.setenv(name, "x")
+    assert load_auto(cfg).upload is not None

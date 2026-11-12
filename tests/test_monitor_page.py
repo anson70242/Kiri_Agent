@@ -116,3 +116,20 @@ def expect_text(locator, text, timeout=5.0):
     while text not in locator.inner_text():
         assert time.time() < end, f"{text!r} never appeared"
         time.sleep(0.05)
+
+
+def test_gear_sets_auto_upload(page, server):
+    url, cfg = server
+    page.goto(url)
+    page.get_by_role("button", name="设置 A").click()
+    dlg = page.get_by_role("dialog")
+    dlg.get_by_label("自动上传到腾讯文档").check()
+    dlg.get_by_role("button", name="保存").click()
+    expect_text(dlg, "先填目标表格")  # stays open: nowhere to upload to
+
+    dlg.get_by_label("腾讯文档表格").fill("https://docs.qq.com/sheet/DUmFabcXYZ123?tab=BB08J2")
+    dlg.get_by_role("button", name="保存").click()
+    dlg.wait_for(state="hidden")
+
+    a = roster(cfg)["youtube:@a"]
+    assert (a["upload"], a["upload_sheet"]) == (True, "DUmFabcXYZ123")

@@ -277,7 +277,7 @@ async function drawDetail(folder) {
     a.chat_file && [fileUrl(a, a.chat_file, true), "弹幕"],
     a.zh_transcript_file && [`/api/archives/srt?folder=${q}&lang=zh`, "中文字幕 (SRT)"],
     a.transcript_file && [`/api/archives/srt?folder=${q}&lang=ja`, "日文字幕 (SRT)"],
-    a.highlights_file && [`/api/highlights/csv?folder=${q}`, "路灯表 (CSV)"],
+    a.highlights_file && [`/api/highlights/xlsx?folder=${q}`, "路灯表 (Excel)"],
   ].filter(Boolean);
   app.innerHTML = `<div class="detail">
     <header>

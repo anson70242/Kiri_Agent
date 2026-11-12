@@ -5,8 +5,6 @@ backend/downloader/base.py VideoInfo.folder). Every path a client sends is resol
 and must stay inside output_dir.
 """
 
-import csv
-import io
 import json
 import shutil
 import zipfile
@@ -17,6 +15,8 @@ from urllib.parse import quote
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, Response, StreamingResponse
 
+from backend.sheet import highlights_xlsx
+
 from .__main__ import REPO_ROOT
 
 PAGE = REPO_ROOT / "frontend" / "archives.html"
@@ -26,6 +26,7 @@ ZH_SUFFIX = ".zh.transcript.json"  # backend.translate (Chinese subtitles)
 HIGHLIGHTS_SUFFIX = ".highlights.json"  # backend.analysis (路灯表)
 HIGHLIGHTS_PAGE = REPO_ROOT / "frontend" / "highlights.html"
 RAW_CHAT_SUFFIXES = (".live_chat.json", ".chat.json")
+XLSX_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 # chat_parsed path -> (mtime_ns, message count)
 _count_cache: dict[Path, tuple[int, int]] = {}
@@ -109,29 +110,6 @@ def srt(segments: list[dict]) -> str:
 def _vtt_time(seconds: float) -> str:
     ms = round(max(0.0, float(seconds)) * 1000)
     return f"{ms // 3_600_000:02d}:{ms // 60_000 % 60:02d}:{ms // 1000 % 60:02d}.{ms % 1000:03d}"
-
-
-CSV_HEADER = ["开始", "结束", "话题分类", "内容摘要（话题日志）", "切片标题 / 高能点", "分数", "弹幕", "剪辑"]
-
-
-def highlights_csv(table: dict) -> str:
-    """路灯表 rows as CSV; multi-line cells (one highlight per line; topic-log entries
-    separated by a blank line)."""
-    out = io.StringIO()
-    w = csv.writer(out)
-    w.writerow(CSV_HEADER)
-    for r in table.get("rows") or []:
-        log = [f"{e.get('start', '')}–{e.get('end', '')} {e.get('title', '')} {e.get('detail', '')}".strip()
-               for e in r.get("timeline") or []]
-        picks = []
-        if tp := r.get("top_pick"):
-            span = f"{tp['start']}–{tp['end']} " if tp.get("start") and tp.get("end") else ""
-            picks.append(f"🏆 {span}{tp.get('title', '')}")
-        picks += [f"{h.get('time', '')} [{h.get('type', '')}] {h.get('title', '')}" for h in r.get("highlights") or []]
-        score = r.get("score")
-        w.writerow([r.get("start", ""), r.get("end", ""), "\n".join(r.get("topics") or []), "\n\n".join(log),
-                    "\n".join(picks), "" if score is None else score, r.get("chat_level", ""), ""])
-    return out.getvalue()
 
 
 def attachment(filename: str) -> str:
@@ -288,9 +266,9 @@ def create_router(output_dir: Path) -> APIRouter:
         except ValueError:
             raise HTTPException(500, "路灯表 is not valid JSON")
 
-    @router.get("/api/highlights/csv")
-    def highlights_csv_download(folder: str) -> Response:
-        """The 路灯表 as CSV (UTF-8 with BOM, so Excel opens it right)."""
+    @router.get("/api/highlights/xlsx")
+    def highlights_xlsx_download(folder: str) -> Response:
+        """The 路灯表 as a formatted Excel sheet."""
         file = highlights_file(resolve_folder(folder))
         if not file:
             raise HTTPException(404, "no 路灯表 for this archive")
@@ -298,8 +276,8 @@ def create_router(output_dir: Path) -> APIRouter:
             table = json.loads(file.read_text(encoding="utf-8"))
         except ValueError:
             raise HTTPException(500, "路灯表 is not valid JSON")
-        name = file.name.removesuffix(HIGHLIGHTS_SUFFIX) + ".highlights.csv"
-        return Response(highlights_csv(table).encode("utf-8-sig"), media_type="text/csv; charset=utf-8",
+        name = file.name.removesuffix(HIGHLIGHTS_SUFFIX) + ".highlights.xlsx"
+        return Response(highlights_xlsx(table), media_type=XLSX_TYPE,
                         headers={"Content-Disposition": attachment(name)})
 
     @router.get("/api/archives/zip")
@@ -311,8 +289,8 @@ def create_router(output_dir: Path) -> APIRouter:
         extra: dict[str, bytes] = {}
         if table := highlights_file(path):
             try:
-                csv_name = table.name.removesuffix(HIGHLIGHTS_SUFFIX) + ".highlights.csv"
-                extra[csv_name] = highlights_csv(json.loads(table.read_text(encoding="utf-8"))).encode("utf-8-sig")
+                xlsx_name = table.name.removesuffix(HIGHLIGHTS_SUFFIX) + ".highlights.xlsx"
+                extra[xlsx_name] = highlights_xlsx(json.loads(table.read_text(encoding="utf-8")))
             except ValueError:
                 pass
         if zh := transcript_file(files, "zh"):

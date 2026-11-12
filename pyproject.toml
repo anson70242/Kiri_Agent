@@ -8,6 +8,7 @@ dependencies = [
     "fastapi>=0.162.2",
     "httpx>=0.28",
     "openai-agents>=0.4",
+    "openpyxl>=3.1.5",
     "python-dotenv>=1.0",
     "uvicorn>=0.54.0",
     "yt-dlp[default,deno]>=2026.11.4.232659.dev0",

@@ -19,7 +19,7 @@ Tencent Docs) so a team can split up the clipping work. A human still makes the 
 | [Transcription](#transcription) | Downloaded VOD → `<stem>.transcript.json` via faster-whisper on the GPU | done |
 | [Segment analysis](#analysis-路灯表) | 5-minute topic logs, whole-stream scoring, highlights → `<stem>.highlights.json` | done |
 | Highlight report | Ranked timeline for editors | planned |
-| Sheet upload | Push the report to Google Sheets / Tencent Docs (docs.qq.com) | planned |
+| [Sheet upload](#upload-to-tencent-docs) | 路灯表 → a new sheet in a Tencent Docs spreadsheet (per streamer, automatic); Google Sheets | partly |
 
 ## Setup
 
@@ -245,6 +245,33 @@ moves. Missing lines are asked again, then kept in Japanese. Output
 switches 中 / 日 / 双语 in the subtitle panel, and offers SRT downloads. A 5 h stream is
 about 120k tokens. By hand: `uv run -m backend.translate <video>`.
 
+## Upload to Tencent Docs
+
+[tencent_docs.py](backend/tencent_docs.py) adds a 路灯表 as a new sheet (tab) of an existing
+docs.qq.com spreadsheet, with the same columns and cell text as the Excel download.
+
+Automatic, per streamer: in the ⚙ gear, tick 自动上传到腾讯文档 and paste the target
+spreadsheet's link. Once the 路灯表 is ready it is uploaded (a pipeline stage after the
+analysis: retried like the others, 📤 / ❗ on Discord). Uploading the same stream again
+replaces its sheet. By hand:
+
+```sh
+uv run -m backend.tencent_docs downloads/<creator>/<YYYYMMDD>/<title>/ --sheet <link or FILE_ID>
+uv run -m backend.tencent_docs <.highlights.json> --sheet <link> --title "20261111 xx"
+```
+
+Credentials (shared by every streamer): `TENCENT_DOCS_ACCESS_TOKEN` /
+`TENCENT_DOCS_CLIENT_ID` / `TENCENT_DOCS_OPEN_ID` in `.env` (Tencent Docs Open Platform;
+registering needs a mainland ID). Without them the upload stage is skipped (logged).
+
+Limits of the v3 API: the sheet is named `<YYYYMMDD> <creator> <title>`, cut to 31
+characters (a re-upload deletes the old sheet first; only when it is the spreadsheet's only
+sheet does the new one get ` (2)`). New sheets
+always land last (no move). Values only: no colours, bold, wrap, column widths or frozen
+header, so open the Excel download for those. At most 10000 cells per sheet (~1200
+segments). The access token expires after about 30 days: then every call fails with
+`API error 400006`; get a new one and update `.env`.
+
 ## Local preview
 
 Check page changes without deploying:
@@ -285,4 +312,4 @@ One-time server setup (Docker, deploy user, SSH key, GitHub secrets, Tailscale):
 
 `config.json` holds everything safe to commit (`monitor`, `notify`, `download`);
 secrets go in `.env` (see [.env.example](.env.example)): LLM endpoint and key,
-`DISCORD_WEBHOOK_URL`, `TWITCH_OAUTH`, `LLM_PROXY` / `LLM_PROXY_TOKEN`.
+`DISCORD_WEBHOOK_URL`, `TWITCH_OAUTH`, `LLM_PROXY` / `LLM_PROXY_TOKEN`, `TENCENT_DOCS_*`.

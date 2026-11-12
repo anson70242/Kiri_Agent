@@ -45,6 +45,8 @@ class StreamerSettings(BaseModel):
 
     auto_download: bool | None = None
     keep: int | None = Field(None, ge=1, le=100)  # archives kept; oldest deleted first
+    upload: bool | None = None  # upload the 路灯表 to Tencent Docs once it is ready
+    upload_sheet: str | None = None  # docs.qq.com/sheet/... link or id; "" clears it
 
 
 def create_app(config: Path, interval: float | None = None, dev: bool = False,
@@ -128,6 +130,7 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
         if auto:
             auto.streamers = roster.streamers()
             auto.keep = roster.keep_map(auto.default_keep)
+            auto.uploads = roster.upload_map()
 
     @app.get("/api/streamers")
     async def list_streamers() -> dict:

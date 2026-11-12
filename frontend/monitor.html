@@ -113,7 +113,9 @@
   .gear { border: 0; background: transparent; padding: 2px 4px; font-size: 15px; line-height: 1; color: var(--muted);
     border-radius: 6px; flex: none; }
   .gear:hover { color: var(--accent); background: var(--off-bg); }
+  .badges { display: flex; gap: 12px; white-space: nowrap; }
   .badge { font-size: 12px; color: var(--accent); }
+  .badge.up { color: #059669; }
   dialog { border: 1px solid var(--border); border-radius: 14px; padding: 20px; width: min(380px, calc(100vw - 32px));
     color: var(--text); background: var(--card); box-shadow: 0 20px 48px rgba(23, 37, 84, .25); }
   dialog::backdrop { background: rgba(23, 37, 84, .25); }
@@ -186,6 +188,9 @@
     <span class="hint">下播后自动下载录播、转写、做路灯表和中文字幕</span>
     <label>保留录播数 <input type="number" name="keep" min="1" max="100"></label>
     <span class="hint">超过就删除最旧的</span>
+    <label class="row"><input type="checkbox" name="upload"> 自动上传到腾讯文档</label>
+    <label>腾讯文档表格 <input name="upload_sheet" placeholder="https://docs.qq.com/sheet/…"></label>
+    <span class="hint">路灯表做好后上传成这份表格里的一个子表；同一场再传会覆盖</span>
     <div class="msg" role="alert"></div>
     <div class="actions">
       <button type="button" class="danger left" name="delete">删除主播</button>
@@ -237,8 +242,11 @@ function card(s) {
     <div class="tags">
       <span class="chip state"><span class="dot"></span>${LABEL[s.state] || s.state}</span>
       <span class="platform ${esc(s.platform)}">${esc(s.platform)}</span>
-      ${settings[key(s)]?.auto_download ? `<span class="badge">⬇ 自动下载</span>` : ""}
     </div>
+    ${settings[key(s)]?.auto_download || settings[key(s)]?.upload ? `<div class="badges">
+      ${settings[key(s)]?.auto_download ? `<span class="badge">⬇ 自动下载</span>` : ""}
+      ${settings[key(s)]?.upload ? `<span class="badge up">⬆ 自动上传</span>` : ""}
+    </div>` : ""}
     ${title ? `<div class="title">${title}</div>` : ""}
     ${sub ? `<div class="sub">${sub}</div>` : ""}
     ${s.error ? `<div class="err">${esc(s.error)}</div>` : ""}
@@ -482,7 +490,8 @@ const gearDlg = document.getElementById("gear-dlg");
 let gearId = null;
 const idUrl = () => `/api/streamers?id=${encodeURIComponent(gearId)}`;
 const gear = wire(gearDlg, f => send("PATCH", idUrl(),
-  { auto_download: f.auto_download.checked, keep: f.keep.value ? +f.keep.value : null }));
+  { auto_download: f.auto_download.checked, keep: f.keep.value ? +f.keep.value : null,
+    upload: f.upload.checked, upload_sheet: f.upload_sheet.value }));
 document.getElementById("grid").addEventListener("click", e => {
   const b = e.target.closest(".gear");
   if (!b) return;
@@ -493,6 +502,8 @@ document.getElementById("grid").addEventListener("click", e => {
   gear.form.auto_download.checked = !!s.auto_download;
   gear.form.keep.value = s.keep ?? "";
   gear.form.keep.placeholder = "默认 6";
+  gear.form.upload.checked = !!s.upload;
+  gear.form.upload_sheet.value = s.upload_sheet ? `https://docs.qq.com/sheet/${s.upload_sheet}` : "";
   gear.msg.textContent = "";
   gearDlg.showModal();
 });

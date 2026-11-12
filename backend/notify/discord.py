@@ -27,6 +27,8 @@ PIPELINE_TEXT = {
     EventKind.ANALYZED: ("🚦", "路灯表已生成，精华段落："),
     EventKind.ANALYZE_FAILED: ("❗", "路灯表分析失败"),
     EventKind.TRANSLATE_FAILED: ("❗", "中文字幕翻译失败"),
+    EventKind.UPLOADED: ("📤", "路灯表已上传腾讯文档"),
+    EventKind.UPLOAD_FAILED: ("❗", "路灯表上传腾讯文档失败"),
 }
 
 
@@ -94,7 +96,7 @@ class DiscordNotifier(Notifier):
     def download_payload(self, event: StreamEvent) -> dict[str, Any]:
         status = event.status
         s = status.streamer
-        ok = event.kind in (EventKind.DOWNLOADED, EventKind.ANALYZED)
+        ok = event.kind in (EventKind.DOWNLOADED, EventKind.ANALYZED, EventKind.UPLOADED)
         embed: dict[str, Any] = {
             "title": (status.title or "直播回放")[:256],
             "color": DOWNLOADED_COLOR if ok else FAILED_COLOR,

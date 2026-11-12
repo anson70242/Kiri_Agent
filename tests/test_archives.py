@@ -1,10 +1,10 @@
 """Archives router: listing, chat, file serving, and path traversal."""
 
-import csv
 import io
 import json
 import zipfile
 
+import openpyxl
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -107,17 +107,36 @@ def test_listing_says_which_archives_have_a_table(client):
     assert newest["highlights_file"] is None
 
 
-def test_highlights_csv(client):
-    r = client.get("/api/highlights/csv", params={"folder": FOLDER})
-    assert r.status_code == 200 and r.headers["content-type"].startswith("text/csv")
+def test_highlights_xlsx(client):
+    r = client.get("/api/highlights/xlsx", params={"folder": FOLDER})
+    assert r.status_code == 200 and "spreadsheetml" in r.headers["content-type"]
     assert "attachment" in r.headers["content-disposition"]
-    text = r.content.decode("utf-8-sig")  # BOM, so Excel opens it as UTF-8
-    rows = list(csv.reader(io.StringIO(text)))
+    ws = openpyxl.load_workbook(io.BytesIO(r.content)).active
+    rows = [[c.value for c in row] for row in ws.iter_rows()]
     assert rows[0] == ["开始", "结束", "话题分类", "内容摘要（话题日志）", "切片标题 / 高能点", "分数", "弹幕", "剪辑"]
     assert rows[1][:2] == ["00:00:00", "00:05:00"]
-    assert rows[1][4] == "🏆 开场" and rows[1][5] == "8"
     assert rows[1][3] == "00:00–02:00 开场 打招呼\n\n02:00–05:00 杂谈 聊天"  # blank line between entries
-    assert client.get("/api/highlights/csv", params={"folder": "柊優花/20261106/雑談"}).status_code == 404
+    assert rows[1][4] == "🏆 开场" and rows[1][5] == 8  # a number, so it sorts and filters
+    # Readable as opened: header stays put, long cells wrap, picks stand out.
+    assert ws.freeze_panes == "A2"
+    assert ws["D2"].alignment.wrap_text
+    # The long-text columns are the wide ones; 内容摘要 the widest (~50 CJK characters a line).
+    widths = {c: ws.column_dimensions[c].width for c in "ABCDEFGH"}
+    assert widths["D"] >= 100 and 60 <= widths["E"] < widths["D"]
+    assert max(w for c, w in widths.items() if c not in "DE") < widths["E"]
+    assert ws["A2"].fill.fgColor.rgb.endswith("FFFBEB")  # row with a pick
+    assert ws["A3"].fill.fill_type is None  # row without
+    # Every cell vertically centred. Horizontally: headers A-G centred; data A-G centred
+    # except the long text (内容摘要 D, 切片标题 E), which reads better left-aligned; 剪辑 (H) as is.
+    for row in ws.iter_rows(min_row=1, max_row=3):
+        for c in row:
+            assert c.alignment.vertical == "center", c.coordinate
+            want = None if c.column_letter == "H" else \
+                "left" if c.row > 1 and c.column_letter in "DE" else "center"
+            assert c.alignment.horizontal == want, c.coordinate
+            if c.row > 1:
+                assert c.alignment.wrap_text, c.coordinate  # multi-line cells keep wrapping
+    assert client.get("/api/highlights/xlsx", params={"folder": "柊優花/20261106/雑談"}).status_code == 404
 
 
 def test_zip_has_everything_but_raw_chat(client):
@@ -126,7 +145,7 @@ def test_zip_has_everything_but_raw_chat(client):
     names = zipfile.ZipFile(io.BytesIO(r.content)).namelist()
     assert sorted(names) == sorted([
         f"{STEM}.mp4", f"{STEM}.chat_parsed.json", f"{STEM}.transcript.json",
-        f"{STEM}.highlights.json", f"{STEM}.highlights.csv",
+        f"{STEM}.highlights.json", f"{STEM}.highlights.xlsx",
         f"{STEM}.zh.transcript.json", f"{STEM}.zh.srt",
     ])
     assert zipfile.ZipFile(io.BytesIO(r.content)).read(f"{STEM}.mp4") == b"0123456789"

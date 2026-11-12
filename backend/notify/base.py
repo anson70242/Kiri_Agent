@@ -33,6 +33,8 @@ class EventKind(StrEnum):
     ANALYZED = "analyzed"  # 路灯表 ready (detail: the top segments)
     ANALYZE_FAILED = "analyze_failed"  # 路灯表 analysis gave up
     TRANSLATE_FAILED = "translate_failed"  # Chinese subtitles gave up
+    UPLOADED = "uploaded"  # 路灯表 uploaded to Tencent Docs (detail: the sheet link)
+    UPLOAD_FAILED = "upload_failed"  # Tencent Docs upload gave up
 
 
 @dataclass

@@ -114,3 +114,26 @@ def test_delete_stops_monitoring_but_keeps_archives(tmp_path):
     assert names(app_for(cfg)) == ["B"]
     assert archive.exists()
     assert client.delete("/api/streamers", params={"id": "youtube:@a"}).status_code == 404
+
+
+def test_gear_sets_auto_upload_from_a_sheet_link(tmp_path):
+    cfg = write_config(tmp_path)
+    client = app_for(cfg)
+    link = "https://docs.qq.com/sheet/DUmFabcXYZ123?tab=BB08J2"
+
+    r = client.patch("/api/streamers", params={"id": "youtube:@a"}, json={"upload": True, "upload_sheet": link})
+
+    assert r.status_code == 200
+    a = app_for(cfg).get("/api/streamers").json()["streamers"][0]
+    assert (a["upload"], a["upload_sheet"]) == (True, "DUmFabcXYZ123")
+    assert client.app.state.auto.uploads == {"youtube:@a": "DUmFabcXYZ123"}
+
+
+def test_gear_rejects_a_bad_sheet_and_upload_without_one(tmp_path):
+    client = app_for(write_config(tmp_path))
+    patch = lambda **body: client.patch("/api/streamers", params={"id": "youtube:@a"}, json=body)  # noqa: E731
+    assert patch(upload_sheet="https://docs.qq.com/doc/DUmFabcXYZ123").status_code == 422  # a doc, not a sheet
+    assert patch(upload=True).status_code == 422  # nowhere to upload to
+    assert patch(upload_sheet="DUmFabcXYZ123", upload=True).status_code == 200
+    assert patch(upload=False).status_code == 200
+    assert client.app.state.auto.uploads == {}

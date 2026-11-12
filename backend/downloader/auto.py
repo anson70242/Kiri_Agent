@@ -29,6 +29,7 @@ Rules:
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import functools
 import json
 import logging
@@ -39,9 +40,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from backend.analysis import AnalysisSettings, analyze
+from backend.analysis import AnalysisSettings, analyze, highlights_path
 from backend.asr import ASRSettings, transcribe
 from backend.llm import LLMError, chat, load_llm
+from backend.tencent_docs import (
+    TencentDocsError, archive_date, load_credentials, sheet_title, upload_table)
 from backend.translate import TranslateSettings
 from backend.translate import translate as translate_transcript
 from backend.monitor import StreamMonitor, Streamer, StreamStatus
@@ -55,7 +58,7 @@ from .pending import PendingChats
 log = logging.getLogger(__name__)
 
 NOT_READY = ("is_live", "is_upcoming", "post_live")
-STAGES = ("download", "transcribe", "analyze", "translate")
+STAGES = ("download", "transcribe", "analyze", "translate", "upload")
 AUTH_HINTS = ("member", "sign in", "cookie", "login", "subscriber", "private")
 
 
@@ -67,7 +70,7 @@ class Job:
     attempts: int = 0
     errors: int = 0  # failures other than "not ready yet"
     last_error: str = ""
-    stage: Literal["download", "transcribe", "analyze", "translate"] = "download"
+    stage: Literal["download", "transcribe", "analyze", "translate", "upload"] = "download"
     video: str | None = None  # set once downloaded
 
     @property
@@ -120,7 +123,10 @@ class AutoDownloader:
         transcribe: Callable[[Path], Any] | None = None,  # video -> transcript; None: skip
         analyze: Callable[[Path, str, str], Path] | None = None,  # (video, streamer, title) -> table
         translate: Callable[[Path], Any] | None = None,  # video -> Chinese subtitles; None: skip
+        # (路灯表, spreadsheet id, streamer, title) -> sheet link; None: no credentials, skip
+        upload: Callable[[Path, str, str, str], str] | None = None,
     ):
+        self.upload = upload
         self.transcribe = transcribe
         self.analyze = analyze
         self.translate = translate
@@ -132,6 +138,7 @@ class AutoDownloader:
         self.give_up = give_up
         self.max_errors = max_errors
         self.default_keep = default_keep
+        self.uploads: dict[str, str] = {}  # streamer id -> Tencent Docs spreadsheet id (the gear)
         self.notify = notify
         self.clock = clock
         # One worker per stage, so a long transcription never holds up downloads.
@@ -241,6 +248,8 @@ class AutoDownloader:
             return self.attempt_analyze(job)
         if job.stage == "translate":
             return self.attempt_translate(job)
+        if job.stage == "upload":
+            return self.attempt_upload(job)
         s = job.status
         try:
             dl = downloader_for(s.url or "", self.settings, self.streamers)
@@ -309,6 +318,24 @@ class AutoDownloader:
             self._active["translate"] = None
         return Outcome("done")
 
+    def attempt_upload(self, job: Job) -> Outcome:
+        s = job.status
+        self._active["upload"] = {
+            "name": s.streamer.name, "platform": s.streamer.platform, "title": s.title, "url": s.url,
+            "started": self.clock(), "stage": "upload",
+            "percent": None, "downloaded": 0, "total": None, "speed": None, "eta": None}
+        try:
+            assert self.upload and job.video
+            sheet = self.uploads.get(s.streamer.id)
+            if not sheet:
+                return Outcome("done", "")  # switched off in the gear meanwhile
+            link = self.upload(highlights_path(Path(job.video)), sheet, s.streamer.name, s.title or "")
+        except Exception as e:  # noqa: BLE001 - API errors, timeouts, expired token: all retried
+            return Outcome("error", str(e) or type(e).__name__)
+        finally:
+            self._active["upload"] = None
+        return Outcome("done", link)
+
     def _on_progress(self, d: dict[str, Any]) -> None:
         """yt-dlp progress hook (runs in the download thread)."""
         active = self._active["download"]
@@ -336,8 +363,20 @@ class AutoDownloader:
         name = job.status.streamer.name
         if outcome.kind == "done" and current.stage == "analyze":
             log.info("analyzed: %s %s", name, outcome.message)
-            self.save(rest)
             self._send(EventKind.ANALYZED, job, top_segments_detail(Path(outcome.message)))
+            if job.status.streamer.id not in self.uploads:
+                self.save(rest)
+            elif not self.upload:
+                log.warning("upload to Tencent Docs is on for %s, but no credentials in .env: skipped", name)
+                self.save(rest)
+            else:
+                self.advance(current, rest, "upload", now)
+            return
+        if outcome.kind == "done" and current.stage == "upload":
+            self.save(rest)
+            if outcome.message:
+                log.info("uploaded: %s %s", name, outcome.message)
+                self._send(EventKind.UPLOADED, job, outcome.message)
             return
         if outcome.kind == "done" and current.stage == "translate":
             log.info("translated: %s %s", name, current.video)
@@ -388,6 +427,10 @@ class AutoDownloader:
                 elif current.stage == "translate":
                     self._send(EventKind.TRANSLATE_FAILED, job,
                                f"字幕已转写，但试了 {current.attempts} 次中文翻译仍失败：\n"
+                               f"```{current.last_error[:1500]}```")
+                elif current.stage == "upload":
+                    self._send(EventKind.UPLOAD_FAILED, job,
+                               f"路灯表已生成，但试了 {current.attempts} 次上传腾讯文档仍失败：\n"
                                f"```{current.last_error[:1500]}```")
                 elif current.stage == "analyze":
                     self._send(EventKind.ANALYZE_FAILED, job,
@@ -501,7 +544,8 @@ def load_auto(config: Path) -> AutoDownloader | None:
         return None
     default_keep = int(auto.get("keep", 6))
     # Built even when nobody auto-downloads yet: the dashboard's gear can turn it on.
-    keep = load_roster(config).keep_map(default_keep)
+    roster = load_roster(config)
+    keep = roster.keep_map(default_keep)
     settings, streamers = load_settings(config)
     state = Path(auto.get("state_file") or "data/download_queue.json")
     asr_cfg = cfg.get("asr") or {}
@@ -514,7 +558,8 @@ def load_auto(config: Path) -> AutoDownloader | None:
             ffmpeg=settings.ffmpeg or "ffmpeg",
         )
         transcriber = functools.partial(transcribe, settings=asr)
-    return AutoDownloader(
+    analyzer = load_analyzer(config, cfg) if transcriber else None
+    ad = AutoDownloader(
         settings,
         streamers,
         keep,
@@ -524,9 +569,31 @@ def load_auto(config: Path) -> AutoDownloader | None:
         max_errors=int(auto.get("max_errors", 3)),
         default_keep=default_keep,
         transcribe=transcriber,
-        analyze=load_analyzer(config, cfg) if transcriber else None,
+        analyze=analyzer,
         translate=load_translator(config, cfg) if transcriber else None,
+        upload=load_uploader(config) if analyzer else None,  # uploads the analysis
     )
+    ad.uploads = roster.upload_map()
+    return ad
+
+
+def load_uploader(config: Path) -> Callable[[Path, str, str, str], str] | None:
+    """Tencent Docs credentials in .env -> (路灯表, spreadsheet id, streamer, title) -> sheet link.
+    Without credentials uploads are off (logged); which streamers upload is the gear's call."""
+    try:
+        creds = load_credentials(config)
+    except TencentDocsError as e:
+        log.info("Tencent Docs upload off: %s", e)
+        return None
+
+    def run(table: Path, file_id: str, streamer: str, title: str) -> str:
+        data = json.loads(table.read_text(encoding="utf-8"))
+        data.setdefault("streamer", streamer)
+        data.setdefault("title", title)
+        return upload_table(data, dataclasses.replace(creds, file_id=file_id),
+                            sheet_title=sheet_title(data, archive_date(table)))
+
+    return run
 
 
 def load_translator(config: Path, cfg: dict[str, Any]) -> Callable[[Path], Path] | None:

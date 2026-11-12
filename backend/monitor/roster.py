@@ -1,4 +1,5 @@
-"""The streamer list: who is monitored, and per-streamer settings (auto_download, keep).
+"""The streamer list: who is monitored, and per-streamer settings (the dashboard's gear):
+auto_download, keep, upload (to Tencent Docs) and upload_sheet (the spreadsheet id).
 
 config.json is replaced on every deploy, so the list the dashboard edits lives in
 its own file (`monitor.streamers_file`, default `data/streamers.json` next to the
@@ -10,6 +11,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+
+from backend.tencent_docs import parse_file_id
 
 from .base import PlatformMonitor, Streamer
 
@@ -60,7 +63,15 @@ class Roster:
         entry = self.find(sid)
         if entry is None:
             raise RosterError(404, "没有这个主播")
-        entry.update({k: v for k, v in settings.items() if v is not None})
+        new = entry | {k: v for k, v in settings.items() if v is not None}
+        if "upload_sheet" in settings and settings["upload_sheet"] is not None:
+            text = settings["upload_sheet"].strip()
+            new["upload_sheet"] = parse_file_id(text) if text else ""
+            if new["upload_sheet"] is None:
+                raise RosterError(422, "不是腾讯文档表格的链接（应为 docs.qq.com/sheet/…）")
+        if new.get("upload") and not new.get("upload_sheet"):
+            raise RosterError(422, "开启自动上传前先填目标表格")
+        entry.update(new)
         return entry
 
     def remove(self, sid: str) -> None:
@@ -74,11 +85,16 @@ class Roster:
         """Streamer id -> archives to keep, for the auto-downloading streamers only."""
         return {entry_id(e): int(e.get("keep") or default) for e in self.entries if e.get("auto_download")}
 
+    def upload_map(self) -> dict[str, str]:
+        """Streamer id -> Tencent Docs spreadsheet id, for the streamers that auto-upload."""
+        return {entry_id(e): e["upload_sheet"] for e in self.entries if e.get("upload") and e.get("upload_sheet")}
+
     def streamers(self) -> list[Streamer]:
         return [Streamer(e.get("name") or e["channel"], e["platform"], e["channel"]) for e in self.entries]
 
     def to_dicts(self) -> list[dict[str, Any]]:
-        return [{"id": entry_id(e), **e, "auto_download": bool(e.get("auto_download"))} for e in self.entries]
+        return [{"id": entry_id(e), **e, "auto_download": bool(e.get("auto_download")),
+                 "upload": bool(e.get("upload")), "upload_sheet": e.get("upload_sheet") or ""} for e in self.entries]
 
 
 def load_roster(config: Path) -> Roster:
