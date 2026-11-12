@@ -41,6 +41,8 @@ from typing import Any, Literal
 from backend.analysis import AnalysisSettings, analyze
 from backend.asr import ASRSettings, transcribe
 from backend.llm import LLMError, chat, load_llm
+from backend.translate import TranslateSettings
+from backend.translate import translate as translate_transcript
 from backend.monitor import StreamMonitor, Streamer, StreamStatus
 from backend.notify import EventKind, LiveNotifier, StreamEvent, load_notifier
 
@@ -51,7 +53,7 @@ from .pending import PendingChats
 log = logging.getLogger(__name__)
 
 NOT_READY = ("is_live", "is_upcoming", "post_live")
-STAGES = ("download", "transcribe", "analyze")
+STAGES = ("download", "transcribe", "analyze", "translate")
 AUTH_HINTS = ("member", "sign in", "cookie", "login", "subscriber", "private")
 
 
@@ -63,12 +65,17 @@ class Job:
     attempts: int = 0
     errors: int = 0  # failures other than "not ready yet"
     last_error: str = ""
-    stage: Literal["download", "transcribe", "analyze"] = "download"
+    stage: Literal["download", "transcribe", "analyze", "translate"] = "download"
     video: str | None = None  # set once downloaded
 
     @property
-    def key(self) -> str:
+    def stream_key(self) -> str:
+        """One broadcast (a stream can have an analysis and a translation job at once)."""
         return f"{self.status.streamer.id}|{self.status.stream_id or self.status.url}"
+
+    @property
+    def key(self) -> str:
+        return f"{self.stream_key}|{self.stage}"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -109,9 +116,11 @@ class AutoDownloader:
         clock: Callable[[], float] = time.time,
         transcribe: Callable[[Path], Any] | None = None,  # video -> transcript; None: skip
         analyze: Callable[[Path, str, str], Path] | None = None,  # (video, streamer, title) -> table
+        translate: Callable[[Path], Any] | None = None,  # video -> Chinese subtitles; None: skip
     ):
         self.transcribe = transcribe
         self.analyze = analyze
+        self.translate = translate
         self.settings = settings
         self.streamers = list(streamers)
         self.keep = keep
@@ -151,7 +160,7 @@ class AutoDownloader:
         jobs = self.load()
         now = self.clock()
         job = Job(status, queued_at=now, next_try=now)
-        if any(j.key == job.key for j in jobs):
+        if any(j.stream_key == job.stream_key for j in jobs):
             return
         jobs.append(job)
         self.save(jobs)
@@ -226,6 +235,8 @@ class AutoDownloader:
             return self.attempt_transcribe(job)
         if job.stage == "analyze":
             return self.attempt_analyze(job)
+        if job.stage == "translate":
+            return self.attempt_translate(job)
         s = job.status
         try:
             dl = downloader_for(s.url or "", self.settings, self.streamers)
@@ -279,6 +290,21 @@ class AutoDownloader:
             self._active["analyze"] = None
         return Outcome("done", str(out))
 
+    def attempt_translate(self, job: Job) -> Outcome:
+        s = job.status
+        self._active["translate"] = {
+            "name": s.streamer.name, "platform": s.streamer.platform, "title": s.title, "url": s.url,
+            "started": self.clock(), "stage": "translate",
+            "percent": None, "downloaded": 0, "total": None, "speed": None, "eta": None}
+        try:
+            assert self.translate and job.video
+            self.translate(Path(job.video))
+        except Exception as e:  # noqa: BLE001 - LLM down, missing transcript: all retried
+            return Outcome("error", str(e) or type(e).__name__)
+        finally:
+            self._active["translate"] = None
+        return Outcome("done")
+
     def _on_progress(self, d: dict[str, Any]) -> None:
         """yt-dlp progress hook (runs in the download thread)."""
         active = self._active["download"]
@@ -309,12 +335,23 @@ class AutoDownloader:
             self.save(rest)
             self._send(EventKind.ANALYZED, job, top_segments_detail(Path(outcome.message)))
             return
+        if outcome.kind == "done" and current.stage == "translate":
+            log.info("translated: %s %s", name, current.video)
+            self.save(rest)
+            return
         if outcome.kind == "done" and current.stage == "transcribe":
             log.info("transcribed: %s %s", name, current.video)
-            if self.analyze:
-                self.advance(current, rest, "analyze", now)
-            else:
-                self.save(rest)
+            # Analysis and translation both only need the transcript: one job each, side by side.
+            follow = [stage for stage, fn in (("analyze", self.analyze), ("translate", self.translate)) if fn]
+            jobs = []
+            for stage in follow:
+                j = Job.from_dict(current.to_dict())
+                j.stage = stage  # type: ignore[assignment]
+                j.attempts, j.errors, j.last_error, j.next_try = 0, 0, "", now
+                jobs.append(j)
+            self.save(rest + jobs)
+            for stage in follow:
+                self._wake[stage].set()
             return
         if outcome.kind == "done":
             log.info("auto-download done: %s %s", name, outcome.result and outcome.result.video)
@@ -343,6 +380,10 @@ class AutoDownloader:
                 if current.stage == "transcribe":
                     self._send(EventKind.TRANSCRIBE_FAILED, job,
                                f"影片已下载，但试了 {current.attempts} 次字幕转写仍失败：\n"
+                               f"```{current.last_error[:1500]}```")
+                elif current.stage == "translate":
+                    self._send(EventKind.TRANSLATE_FAILED, job,
+                               f"字幕已转写，但试了 {current.attempts} 次中文翻译仍失败：\n"
                                f"```{current.last_error[:1500]}```")
                 elif current.stage == "analyze":
                     self._send(EventKind.ANALYZE_FAILED, job,
@@ -483,7 +524,24 @@ def load_auto(config: Path) -> AutoDownloader | None:
         max_errors=int(auto.get("max_errors", 3)),
         transcribe=transcriber,
         analyze=load_analyzer(config, cfg) if transcriber else None,
+        translate=load_translator(config, cfg) if transcriber else None,
     )
+
+
+def load_translator(config: Path, cfg: dict[str, Any]) -> Callable[[Path], Path] | None:
+    """`translate` section + a usable `llm` section -> video -> Chinese subtitles."""
+    t = cfg.get("translate")
+    if t is None or (isinstance(t, dict) and t.get("enabled") is False):
+        return None
+    t = t if isinstance(t, dict) else {}
+    try:
+        llm = load_llm(config)
+    except LLMError as e:
+        log.warning("translation disabled: %s", e)
+        return None
+    settings = TranslateSettings(group=int(t.get("group", 80)), context=int(t.get("context", 5)))
+    complete = functools.partial(chat, llm, response_format={"type": "json_object"})
+    return functools.partial(translate_transcript, complete=complete, settings=settings)
 
 
 def load_analyzer(config: Path, cfg: dict[str, Any]) -> Callable[[Path, str, str], Path] | None:

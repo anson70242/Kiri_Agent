@@ -229,6 +229,17 @@ Discord then gets the top 5 segments. A 5 h stream takes about 3 minutes with
 `gemini-3-flash`. By hand: `uv run -m backend.analysis <video> --streamer NAME --title T`
 (`--no-proxy` when running on the proxy machine itself).
 
+## Chinese subtitles
+
+Runs side by side with the analysis once the transcript exists ([translate.py](backend/translate.py),
+AutoKiri's translator prompt without its streamer-specific parts). The transcript goes
+to the LLM in groups (`translate.group`, 80 lines) with `translate.context` (5) lines of
+context each side; the reply `{"lines": [{"id", "text"}]}` maps back 1:1, so timing never
+moves. Missing lines are asked again, then kept in Japanese. Output
+`<stem>.zh.transcript.json`; the archives page shows it on the video (default track),
+switches 中 / 日 / 双语 in the subtitle panel, and offers SRT downloads. A 5 h stream is
+about 120k tokens. By hand: `uv run -m backend.translate <video>`.
+
 ## Tests
 
 ```sh

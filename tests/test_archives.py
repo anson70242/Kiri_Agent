@@ -34,6 +34,7 @@ def client(tmp_path):
     ]}
     (done / f"{STEM}.highlights.json").write_text(json.dumps(table, ensure_ascii=False), encoding="utf-8")
     (done / f"{STEM}.live_chat.json").write_text("{}", encoding="utf-8")  # raw chat: not in the zip
+    (done / f"{STEM}.zh.transcript.json").write_text('[{"start": 1.0, "end": 2.0, "text": "哈喽"}]', encoding="utf-8")
     partial = out / "柊優花/20261106/雑談"
     partial.mkdir(parents=True)
     (partial / "[20261106][柊優花] 雑談.mp4.part").write_bytes(b"xx")
@@ -123,9 +124,27 @@ def test_zip_has_everything_but_raw_chat(client):
     assert sorted(names) == sorted([
         f"{STEM}.mp4", f"{STEM}.chat_parsed.json", f"{STEM}.transcript.json",
         f"{STEM}.highlights.json", f"{STEM}.highlights.csv",
+        f"{STEM}.zh.transcript.json", f"{STEM}.zh.srt",
     ])
     assert zipfile.ZipFile(io.BytesIO(r.content)).read(f"{STEM}.mp4") == b"0123456789"
     assert client.get("/api/archives/zip", params={"folder": "../.."}).status_code == 404
+
+
+def test_chinese_subtitles(client):
+    newest, done = client.get("/api/archives").json()["archives"]
+    assert done["transcript_file"] == f"{STEM}.transcript.json"  # not the .zh one
+    assert done["zh_transcript_file"] == f"{STEM}.zh.transcript.json"
+    assert newest["zh_transcript_file"] is None
+
+    q = {"folder": FOLDER}
+    assert client.get("/api/archives/transcript", params=q).json()["segments"][0]["text"] == "やっほー"
+    assert client.get("/api/archives/transcript", params=q | {"lang": "zh"}).json()["segments"][0]["text"] == "哈喽"
+    assert "哈喽" in client.get("/api/archives/subtitles.vtt", params=q | {"lang": "zh"}).text
+
+    r = client.get("/api/archives/srt", params=q | {"lang": "zh"})
+    assert "attachment" in r.headers["content-disposition"]
+    assert r.text == "1\n00:00:01,000 --> 00:00:02,000\n哈喽\n\n"
+    assert client.get("/api/archives/srt", params={"folder": "柊優花/20261106/雑談", "lang": "zh"}).status_code == 404
 
 
 def test_highlights_page(client):

@@ -84,6 +84,10 @@
   .links a { font-size: 13px; color: var(--accent); text-decoration: none; border: 1px solid var(--border);
     border-radius: 8px; padding: 4px 10px; }
   .links a:hover { border-color: var(--accent); }
+  .langs { display: inline-flex; gap: 2px; margin-left: 4px; }
+  .langs button { padding: 0 8px; font-size: 12px; border-radius: 6px; }
+  .langs button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .msg .ja { color: var(--muted); font-size: 12px; }
   .links a.all { background: var(--accent); color: #fff; border-color: var(--accent); }
   .density { margin-top: 12px; }
   .density h3, .chat h3 { font-size: 13px; color: var(--muted); margin: 0 0 6px; font-weight: 600;
@@ -151,7 +155,7 @@ function badges(a) {
   return (a.downloading ? `<span class="chip dl">下载中</span>` : "")
     + (a.has_chat ? `<span class="chip ch">有弹幕 ${a.chat_count.toLocaleString()}</span>`
                   : `<span class="chip nochat">无弹幕</span>`)
-    + (a.transcript_file ? `<span class="chip ch">有字幕</span>` : "")
+    + (a.zh_transcript_file ? `<span class="chip ch">中文字幕</span>` : a.transcript_file ? `<span class="chip ch">日文字幕</span>` : "")
     + (a.highlights_file ? `<span class="chip hl">有路灯表</span>` : "");
 }
 
@@ -266,7 +270,8 @@ async function drawDetail(folder) {
   const links = [
     a.video && [fileUrl(a, a.video, true), "视频"],
     a.chat_file && [fileUrl(a, a.chat_file, true), "弹幕"],
-    a.transcript_file && [fileUrl(a, a.transcript_file, true), "字幕"],
+    a.zh_transcript_file && [`/api/archives/srt?folder=${q}&lang=zh`, "中文字幕 (SRT)"],
+    a.transcript_file && [`/api/archives/srt?folder=${q}&lang=ja`, "日文字幕 (SRT)"],
     a.highlights_file && [`/api/highlights/csv?folder=${q}`, "路灯表 (CSV)"],
   ].filter(Boolean);
   app.innerHTML = `<div class="detail">
@@ -281,8 +286,9 @@ async function drawDetail(folder) {
     <div class="layout">
       <div class="leftcol">
       <div class="panel">
-        ${a.video && !a.downloading ? `<video id="video" controls preload="metadata" src="${fileUrl(a, a.video)}">${a.transcript_file
-            ? `<track kind="subtitles" srclang="ja" label="日本語" default src="/api/archives/subtitles.vtt?folder=${encodeURIComponent(a.folder)}">` : ""}</video>`
+        ${a.video && !a.downloading ? `<video id="video" controls preload="metadata" src="${fileUrl(a, a.video)}">${
+            a.zh_transcript_file ? `<track kind="subtitles" srclang="zh" label="中文" default src="/api/archives/subtitles.vtt?folder=${q}&lang=zh">` : ""}${
+            a.transcript_file ? `<track kind="subtitles" srclang="ja" label="日本語" ${a.zh_transcript_file ? "" : "default"} src="/api/archives/subtitles.vtt?folder=${q}">` : ""}</video>`
           : `<div class="novideo">${a.downloading ? "下载中，完成后可播放" : "没有视频文件"}</div>`}
         <div class="links">${links.map(([href, label]) => `<a href="${href}" download>⬇ ${label}</a>`).join("")}
           ${a.downloading ? "" : `<a class="all" href="/api/archives/zip?folder=${q}" download>⬇ 全部下载 (zip)</a>`}
@@ -291,6 +297,8 @@ async function drawDetail(folder) {
           <canvas id="chart"></canvas></div>
       </div>
       <div class="panel subs"><h3>字幕 <span class="meta" id="submeta"></span>
+          <span class="langs" id="langs" hidden>${["zh", "ja", "both"].map(l =>
+            `<button data-lang="${l}">${{ zh: "中", ja: "日", both: "双语" }[l]}</button>`).join("")}</span>
           <label><input type="checkbox" id="subfollow" checked>跟随播放</label></h3>
         <div class="msgs" id="subs"><div class="empty">${a.transcript_file ? "加载中…" : "还没有字幕"}</div></div></div>
       </div>
@@ -377,25 +385,50 @@ async function drawDetail(folder) {
 async function showTranscript(a, folder) {
   if (!a.transcript_file) return;
   const box = document.getElementById("subs");
-  let segs;
-  try {
-    const r = await fetch(`/api/archives/transcript?folder=${encodeURIComponent(a.folder)}`);
+  const get = async lang => {
+    const r = await fetch(`/api/archives/transcript?folder=${encodeURIComponent(a.folder)}&lang=${lang}`);
     if (!r.ok) throw new Error(r.status);
-    segs = (await r.json()).segments;
+    return (await r.json()).segments;
+  };
+  let segs, zh = null;
+  try {
+    [segs, zh] = await Promise.all([get("ja"), a.zh_transcript_file ? get("zh") : null]);
   } catch (e) {
     box.innerHTML = `<div class="empty">字幕加载失败</div>`;
     return;
   }
   if (location.hash.slice(1) !== encodeURIComponent(folder)) return;  // navigated away
   document.getElementById("submeta").textContent = `${segs.length.toLocaleString()} 句`;
-  box.innerHTML = segs.map((s, i) => `<div class="msg" data-i="${i}"><span class="t">${hms(s.start)}</span>${esc(s.text)}</div>`).join("")
-    || `<div class="empty">字幕是空的</div>`;
+
+  // 中 / 日 / 双语 (only when a translation exists); lines share the same timing 1:1.
+  let lang = "ja";
+  try { lang = zh ? (localStorage.getItem("kiri.archives.sublang") || "zh") : "ja"; } catch { lang = zh ? "zh" : "ja"; }
+  const langs = document.getElementById("langs");
+  function draw() {
+    const line = i => lang === "zh" ? esc(zh[i]?.text ?? segs[i].text)
+      : lang === "both" ? `${esc(zh[i]?.text ?? "")}<div class="ja">${esc(segs[i].text)}</div>` : esc(segs[i].text);
+    box.innerHTML = segs.map((s, i) => `<div class="msg" data-i="${i}"><span class="t">${hms(s.start)}</span>${line(i)}</div>`).join("")
+      || `<div class="empty">字幕是空的</div>`;
+    langs.querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.lang === lang));
+    cur = -1;
+  }
+  if (zh) {
+    langs.hidden = false;
+    langs.onclick = e => {
+      const b = e.target.closest("button");
+      if (!b) return;
+      lang = b.dataset.lang;
+      try { localStorage.setItem("kiri.archives.sublang", lang); } catch {}
+      draw();
+    };
+  }
+  let cur = -1;
+  draw();
   const video = document.getElementById("video");
   box.onclick = e => {
     const t = e.target.closest(".t");
     if (t && video) { video.currentTime = segs[+t.parentElement.dataset.i].start; video.play().catch(() => {}); }
   };
-  let cur = -1;
   if (video) video.addEventListener("timeupdate", () => {
     const t = video.currentTime;
     let lo = 0, hi = segs.length - 1, idx = -1;

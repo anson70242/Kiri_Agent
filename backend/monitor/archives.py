@@ -10,7 +10,7 @@ import io
 import json
 import shutil
 import zipfile
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 from urllib.parse import quote
 
@@ -22,6 +22,7 @@ from .__main__ import REPO_ROOT
 PAGE = REPO_ROOT / "frontend" / "archives.html"
 CHAT_SUFFIX = ".chat_parsed.json"
 TRANSCRIPT_SUFFIX = ".transcript.json"  # backend.asr
+ZH_SUFFIX = ".zh.transcript.json"  # backend.translate (Chinese subtitles)
 HIGHLIGHTS_SUFFIX = ".highlights.json"  # backend.analysis (路灯表)
 HIGHLIGHTS_PAGE = REPO_ROOT / "frontend" / "highlights.html"
 RAW_CHAT_SUFFIXES = (".live_chat.json", ".chat.json")
@@ -70,7 +71,7 @@ def _archive(root: Path, folder: Path) -> dict:
     video = _video_file(files)
     chat = next((f for f in files if f.name.endswith(CHAT_SUFFIX)), None)
     raw_chat = next((f for f in files if f.name.endswith(RAW_CHAT_SUFFIXES)), None)
-    transcript = next((f for f in files if f.name.endswith(TRANSCRIPT_SUFFIX)), None)
+    transcript = transcript_file(files, "ja")
     creator, date, title = folder.relative_to(root).parts
     return {
         "creator": creator,
@@ -85,10 +86,24 @@ def _archive(root: Path, folder: Path) -> dict:
         "raw_chat_file": raw_chat.name if raw_chat else None,
         "chat_count": _chat_count(chat) if chat else 0,
         "transcript_file": transcript.name if transcript else None,
+        "zh_transcript_file": f.name if (f := transcript_file(files, "zh")) else None,
         "highlights_file": next((f.name for f in files if f.name.endswith(HIGHLIGHTS_SUFFIX)), None),
         "size": sum(f.stat().st_size for f in files),
         "mtime": max((f.stat().st_mtime for f in files), default=folder.stat().st_mtime),
     }
+
+
+def transcript_file(files: Iterable[Path], lang: str) -> Path | None:
+    """The Japanese (`.transcript.json`) or Chinese (`.zh.transcript.json`) transcript."""
+    if lang == "zh":
+        return next((f for f in files if f.name.endswith(ZH_SUFFIX)), None)
+    return next((f for f in files if f.name.endswith(TRANSCRIPT_SUFFIX) and not f.name.endswith(ZH_SUFFIX)), None)
+
+
+def srt(segments: list[dict]) -> str:
+    def t(s: float) -> str:
+        return _vtt_time(s).replace(".", ",")
+    return "".join(f"{i}\n{t(s['start'])} --> {t(s['end'])}\n{s['text']}\n\n" for i, s in enumerate(segments, 1))
 
 
 def _vtt_time(seconds: float) -> str:
@@ -221,9 +236,9 @@ def create_router(output_dir: Path) -> APIRouter:
             density[minute] += 1
         return {"messages": messages, "density": density}
 
-    def load_transcript(folder: str) -> list[dict]:
+    def load_transcript(folder: str, lang: str = "ja") -> list[dict]:
         path = resolve_folder(folder)
-        file = next((f for f in path.iterdir() if f.name.endswith(TRANSCRIPT_SUFFIX)), None)
+        file = transcript_file(path.iterdir(), lang)
         if not file:
             raise HTTPException(404, "no transcript")
         try:
@@ -299,19 +314,31 @@ def create_router(output_dir: Path) -> APIRouter:
                 extra[csv_name] = highlights_csv(json.loads(table.read_text(encoding="utf-8"))).encode("utf-8-sig")
             except ValueError:
                 pass
+        if zh := transcript_file(files, "zh"):
+            try:
+                extra[zh.name.removesuffix(ZH_SUFFIX) + ".zh.srt"] = srt(json.loads(zh.read_text(encoding="utf-8"))).encode()
+            except ValueError:
+                pass
         return StreamingResponse(stream_zip(files, extra), media_type="application/zip",
                                  headers={"Content-Disposition": attachment(path.name + ".zip")})
 
     @router.get("/api/archives/transcript")
-    def transcript(folder: str) -> dict:
-        return {"segments": load_transcript(folder)}
+    def transcript(folder: str, lang: str = "ja") -> dict:
+        return {"segments": load_transcript(folder, lang)}
+
+    @router.get("/api/archives/srt")
+    def srt_download(folder: str, lang: str = "ja") -> Response:
+        """Subtitles as an .srt file (`lang` ja or zh)."""
+        name = resolve_folder(folder).name + (".zh.srt" if lang == "zh" else ".ja.srt")
+        return Response(srt(load_transcript(folder, lang)), media_type="application/x-subrip; charset=utf-8",
+                        headers={"Content-Disposition": attachment(name)})
 
     @router.get("/api/archives/subtitles.vtt")
-    def subtitles(folder: str) -> Response:
-        """The transcript as WebVTT, for <track> on the video."""
+    def subtitles(folder: str, lang: str = "ja") -> Response:
+        """The transcript (`lang` ja or zh) as WebVTT, for <track> on the video."""
         cues = "".join(
             f"\n{_vtt_time(s['start'])} --> {_vtt_time(s['end'])}\n{s['text']}\n"
-            for s in load_transcript(folder)
+            for s in load_transcript(folder, lang)
         )
         return Response("WEBVTT\n" + cues, media_type="text/vtt; charset=utf-8")
 

@@ -37,6 +37,7 @@
     "proxy": true
   },
   "analysis": { "segment_minutes": 5, "context_seconds": 30, "min_score": 7 },
+  "translate": { "group": 80, "context": 5 },
   "asr": { "url": "http://whisper:8000", "language": "ja", "vad": true },
   "download": {
     "output_dir": "downloads",

@@ -182,6 +182,52 @@ def test_transcription_done_moves_job_to_analysis_and_reports_top_segments(tmp_p
     assert "切片6" in detail and "★10" in detail
 
 
+def test_after_transcription_analysis_and_translation_run_side_by_side(tmp_path):
+    translated = []
+
+    def fake_analyze(video, streamer, title):
+        out = video.with_name("v.highlights.json")
+        out.write_text(json.dumps({"rows": []}), encoding="utf-8")
+        return out
+
+    ad, _, sent = make(tmp_path, transcribe=lambda v: None, analyze=fake_analyze, translate=translated.append)
+    ad.on_ended(ended())
+    ad.finish(ad.next_due(), downloaded(tmp_path))
+    job = ad.next_due()
+    ad.finish(job, ad.attempt(job))  # transcribed
+
+    assert sorted(j.stage for j in ad.load()) == ["analyze", "translate"]
+    ad.on_ended(ended())  # the same broadcast again: still not queued twice
+    assert len(ad.load()) == 2
+
+    tr_job = ad.next_due("translate")
+    an_job = ad.next_due("analyze")
+    ad.finish(tr_job, ad.attempt(tr_job))
+    assert [j.stage for j in ad.load()] == ["analyze"]  # translation done, analysis untouched
+    ad.finish(an_job, ad.attempt(an_job))
+
+    assert ad.load() == [] and translated == [tmp_path / "v.mp4"]
+    assert [e.kind for e in sent] == [EventKind.DOWNLOADED, EventKind.ANALYZED]
+
+
+def test_translation_failures_give_up_with_message(tmp_path):
+    def boom(video):
+        raise RuntimeError("LLM returned no usable translation")
+
+    ad, clock, sent = make(tmp_path, transcribe=lambda v: None, translate=boom)
+    ad.on_ended(ended())
+    ad.finish(ad.next_due(), downloaded(tmp_path))
+    job = ad.next_due()
+    ad.finish(job, ad.attempt(job))  # transcribed -> translate only (no analysis configured)
+    for _ in range(3):
+        job = ad.next_due()
+        ad.finish(job, ad.attempt(job))
+        clock.t += 900
+
+    assert ad.load() == []
+    assert [e.kind for e in sent] == [EventKind.DOWNLOADED, EventKind.TRANSLATE_FAILED]
+
+
 def test_analysis_failures_give_up_with_message(tmp_path):
     def boom(video, streamer, title):
         raise RuntimeError("LLM did not return valid JSON")
@@ -422,8 +468,11 @@ def test_load_auto_with_analysis(tmp_path, monkeypatch):
     cfg.write_text(json.dumps({"monitor": streamers, "asr": asr, "llm": llm, "analysis": {"min_score": 6}}), encoding="utf-8")
     assert load_auto(cfg).analyze is not None
 
-    cfg.write_text(json.dumps({"monitor": streamers, "asr": asr, "llm": llm}), encoding="utf-8")
-    assert load_auto(cfg).analyze is None  # no "analysis" section: off
+    assert load_auto(cfg).translate is None  # no "translate" section: off
+
+    cfg.write_text(json.dumps({"monitor": streamers, "asr": asr, "llm": llm, "translate": {"group": 60}}), encoding="utf-8")
+    ad = load_auto(cfg)
+    assert ad.translate is not None and ad.analyze is None  # no "analysis" section: off
 
     no_key = llm | {"api_key_env": "KIRI_TEST_NO_SUCH_KEY"}  # (the repo .env gets loaded, so not AGY_API_KEY)
     cfg.write_text(json.dumps({"monitor": streamers, "asr": asr, "llm": no_key, "analysis": {}}), encoding="utf-8")

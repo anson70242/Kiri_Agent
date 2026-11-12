@@ -26,6 +26,7 @@ PIPELINE_TEXT = {
     EventKind.TRANSCRIBE_FAILED: ("❗", "字幕转写失败"),
     EventKind.ANALYZED: ("🚦", "路灯表已生成，精华段落："),
     EventKind.ANALYZE_FAILED: ("❗", "路灯表分析失败"),
+    EventKind.TRANSLATE_FAILED: ("❗", "中文字幕翻译失败"),
 }
 
 
