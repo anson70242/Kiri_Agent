@@ -98,6 +98,14 @@ def _scan(folder: Path) -> _Snapshot:
     return _Snapshot(tuple(sorted(entries, key=lambda e: e.name)), folder_mtime)
 
 
+def _scan_if_there(folder: Path) -> _Snapshot:
+    """`_scan`, but a folder that does not exist yet is empty."""
+    try:
+        return _scan(folder)
+    except FileNotFoundError:
+        return _Snapshot((), 0.0)
+
+
 def _largest_video(entries: tuple[_Entry, ...]) -> _Entry | None:
     """The finished video: the largest `.mp4` (yt-dlp may leave format fragments around)."""
     mp4s = [e for e in entries if Artifact.VIDEO.matches(e.name)]
@@ -147,11 +155,7 @@ class Archive:
     def from_video(cls, video: Path, root: Path | None = None) -> Archive:
         """The archive `video` belongs to (neither need exist yet); artifacts are named after
         it without its extension, whatever the format (`x.mkv` -> `x.transcript.json`)."""
-        try:
-            snapshot = _scan(video.parent)
-        except FileNotFoundError:
-            snapshot = _Snapshot((), 0.0)
-        return cls(video.parent, video.stem, snapshot, root)
+        return cls(video.parent, video.stem, _scan_if_there(video.parent), root)
 
     # ---- where it is ----
 
@@ -299,11 +303,7 @@ class Archive:
         artifact = next((a for a in Artifact if a.matches(path.name)), None)
         if artifact is None:
             raise ValueError(f"not an artifact file: {path.name}")
-        try:
-            snapshot = _scan(path.parent)
-        except FileNotFoundError:
-            snapshot = _Snapshot((), 0.0)
-        return cls(path.parent, artifact.stem_of(path.name), snapshot, root)
+        return cls(path.parent, artifact.stem_of(path.name), _scan_if_there(path.parent), root)
 
     def save(self, artifact: Artifact, content: Any) -> Path:
         """Write the artifact's content atomically (through `<name>.tmp`, then a rename) to the
