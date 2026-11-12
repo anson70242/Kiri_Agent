@@ -19,12 +19,16 @@ one by the folder reference a client sends.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
+import shutil
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 
 class Artifact(Enum):
@@ -310,6 +314,65 @@ class Downloads:
             return Archive.from_folder(path, self.root)
         except FileNotFoundError:
             raise ArchiveNotFound(ref) from None
+
+    def ref(self, folder: Path) -> str:
+        """The folder reference of an archive folder under the root: the `folder` value in
+        dashboard URLs, which `open` turns back into the archive. Raises ValueError for a
+        folder outside the root."""
+        return folder.resolve().relative_to(self.root).as_posix()
+
+    def prune(self, protect: Path, keep: int) -> list[Path]:
+        """Delete the oldest archives of `protect`'s creator beyond `keep`, oldest first by date,
+        then by the archive folder's modification time; never `protect` itself (the one just
+        downloaded). A date folder left empty goes too. Does nothing unless the creator folder
+        is directly under the downloads root. Returns the archive folders deleted."""
+        creator = protect.parent.parent
+        if creator.resolve().parent != self.root:  # never delete outside the downloads root
+            log.error("not pruning %s: not directly under %s", creator, self.root)
+            return []
+        folders = [t for d in creator.iterdir() if d.is_dir() for t in d.iterdir() if t.is_dir()]
+        folders.sort(key=lambda p: (p.parent.name, p.stat().st_mtime))
+        excess = len(folders) - keep
+        removed: list[Path] = []
+        for folder in folders:
+            if excess <= 0:
+                break
+            if folder == protect:
+                continue
+            shutil.rmtree(folder)
+            removed.append(folder)
+            excess -= 1
+            log.info("pruned old archive: %s", folder)
+            if not any(folder.parent.iterdir()):
+                folder.parent.rmdir()
+        return removed
+
+
+# ---- naming a new archive ----
+
+def safe_name(name: str, max_len: int = 150) -> str:
+    """Make `name` safe as a Windows / Linux file or folder name."""
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name)
+    name = " ".join(name.split()).strip(" .")
+    return name[:max_len].rstrip(" .") or "_"
+
+
+def name_archive(creator: str, date: str, title: str) -> tuple[Path, str]:
+    """Where a stream about to be downloaded goes: its folder relative to the downloads root
+    (`<creator>/<YYYYMMDD>/<title>`) and the stem its files are named after
+    (`[YYYYMMDD][creator] title`), both made safe for file names."""
+    return Path(safe_name(creator), date, safe_name(title)), safe_name(f"[{date}][{creator}] {title}")
+
+
+RAW_CHAT_SUFFIX = dict(zip(("youtube", "twitch"), Artifact.RAW_CHAT.suffixes))  # platform -> suffix
+
+
+def artifact_name(stem: str, artifact: Artifact, platform: str = "") -> str:
+    """The file name of `artifact` in an archive whose files are named after `stem`. Raw chat
+    is named by the `platform` it came from."""
+    if artifact is Artifact.RAW_CHAT:
+        return stem + RAW_CHAT_SUFFIX[platform]
+    return stem + artifact.suffixes[0]
 
 
 class ArchiveNotFound(LookupError):

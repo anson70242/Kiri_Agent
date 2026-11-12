@@ -46,6 +46,7 @@ from typing import Any
 import httpx
 from dotenv import load_dotenv
 
+from backend.archive import Archive, Artifact
 from backend.sheet import (HEAD_COLOR, HEAD_FONT_COLOR, HEADER, HIGH_CHAT_COLOR, HOT_COLOR, WIDTHS, cells,
                            score_style)
 
@@ -53,7 +54,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 MCP_URL = "https://docs.qq.com/openapi/mcp"
 TOKEN_PAGE = "https://docs.qq.com/open/auth/mcp.html"
 SHEET_URL = "https://docs.qq.com/sheet/{file_id}?tab={sheet_id}"
-HIGHLIGHTS_SUFFIX = ".highlights.json"
 TOKEN_ENV = "TENCENT_DOCS_MCP_TOKEN"
 
 NEW_SHEET_ROWS = 200  # rows Tencent gives a new sheet
@@ -292,11 +292,11 @@ def upload_table(table: dict[str, Any], settings: TencentSettings, *, sheet_titl
 
 
 def find_table(path: Path) -> Path:
-    """The .highlights.json itself, or the one inside an archive folder."""
+    """The highlight table file itself, or the archive's highlight table when `path` is an archive folder."""
     if path.is_dir():
-        found = next((f for f in sorted(path.iterdir()) if f.name.endswith(HIGHLIGHTS_SUFFIX)), None)
+        found = Archive.from_folder(path).file(Artifact.HIGHLIGHTS)
         if not found:
-            raise TencentDocsError(f"no *{HIGHLIGHTS_SUFFIX} in {path}")
+            raise TencentDocsError(f"no *{Artifact.HIGHLIGHTS.suffixes[0]} in {path}")
         return found
     if not path.is_file():
         raise TencentDocsError(f"not found: {path}")
@@ -304,11 +304,8 @@ def find_table(path: Path) -> Path:
 
 
 def archive_date(file: Path) -> str:
-    """YYYYMMDD from downloads/<creator>/<YYYYMMDD>/<title>/, or the `[YYYYMMDD]` file name prefix."""
-    if re.fullmatch(r"\d{8}", file.parent.parent.name):
-        return file.parent.parent.name
-    m = re.match(r"\[(\d{8})\]", file.name)
-    return m.group(1) if m else ""
+    """The YYYYMMDD of the archive holding `file` (see Archive.date); "" when none is known."""
+    return Archive.from_folder(file.parent).date
 
 
 def main(argv: list[str] | None = None) -> int:
