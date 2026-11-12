@@ -16,7 +16,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -28,7 +28,7 @@ from backend.notify.qq_gateway import QQGateway
 from . import StreamMonitor
 from .__main__ import REPO_ROOT, load_config
 from .archives import create_router
-from .auth_api import install_auth, install_open_me
+from .auth_api import install_auth, install_open_me, visible_streamers
 from .notify_api import create_notify_router
 from .base import LiveState, Streamer
 from .roster import RosterError, entry_id, load_roster
@@ -98,18 +98,27 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
     app = FastAPI(title="Kiri Live Monitor", lifespan=lifespan)
     app.state.notifier = notifier
     app.state.auto = auto
+    def streamer_names() -> set[str]:
+        return {e.get("name") or e["channel"] for e in roster.entries}
+
+    def visible(request: Request) -> set[str] | None:
+        """Streamer names this request may see; None = everyone (see auth_api.visible_streamers)."""
+        return visible_streamers(request, streamer_names())
+
     if auth_enabled(config) and not dev:
-        install_auth(app, load_auth(config))
+        install_auth(app, load_auth(config), streamer_names)
         print("Login: on")
     else:
         install_open_me(app)
         print("Login: off")
-    app.include_router(create_router(load_settings(config)[0].output_dir))
+    app.include_router(create_router(load_settings(config)[0].output_dir, visible))
     app.include_router(create_notify_router(notifier, roster, gateway))
 
-    def snapshot() -> dict:
+    def snapshot(names: set[str] | None = None) -> dict:
         rows = []
         for s in mon.streamers:
+            if names is not None and s.name not in names:
+                continue
             st = mon.statuses.get(s)
             rows.append(
                 st.to_dict()
@@ -141,14 +150,18 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
         return {"ok": True}
 
     @app.get("/api/status")
-    async def status() -> dict:
-        return snapshot()
+    async def status(request: Request) -> dict:
+        return snapshot(visible(request))
 
     @app.get("/api/downloads")
-    async def downloads() -> dict:
+    async def downloads(request: Request) -> dict:
         if not auto:
             return {"enabled": False, "active": [], "queue": []}
-        return {"enabled": True, **auto.snapshot()}
+        snap, names = auto.snapshot(), visible(request)
+        if names is not None:
+            snap = {**snap, **{k: [j for j in snap.get(k) or [] if j.get("name") in names]
+                               for k in ("active", "queue")}}
+        return {"enabled": True, **snap}
 
     async def live_check(s: Streamer) -> str | None:
         """Real channel check; its result also fills the new card right away."""
@@ -170,8 +183,9 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
             auto.uploads = roster.upload_map()
 
     @app.get("/api/streamers")
-    async def list_streamers() -> dict:
-        return {"streamers": roster.to_dicts()}
+    async def list_streamers(request: Request) -> dict:
+        names = visible(request)
+        return {"streamers": [s for s in roster.to_dicts() if names is None or s["name"] in names]}
 
     @app.post("/api/streamers", status_code=201)
     async def add_streamer(body: NewStreamer) -> dict:
@@ -206,9 +220,9 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
         return {"id": id}
 
     @app.post("/api/refresh")
-    async def refresh() -> dict:
+    async def refresh(request: Request) -> dict:
         await mon.refresh()
-        return snapshot()
+        return snapshot(visible(request))
 
     return app
 

@@ -17,7 +17,8 @@ from fastapi import APIRouter, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
-from backend.auth import COOKIE, SESSION_DAYS, Auth, AuthError, client_ip, is_trusted_proxy, public_user
+from backend.auth import (COOKIE, SESSION_DAYS, Auth, AuthError, client_ip, is_trusted_proxy, public_user,
+                          streamers_of)
 
 from .__main__ import REPO_ROOT
 
@@ -100,7 +101,7 @@ def _deny(request: Request, status: int, detail: str) -> Response:
     return _page(status, {403: "没有权限", 503: "需要先创建管理员"}.get(status, "出错了"), detail)
 
 
-def install_auth(app: FastAPI, auth: Auth) -> None:
+def install_auth(app: FastAPI, auth: Auth, streamer_names: Callable[[], set[str]] = set) -> None:
     """Put the login gate in front of every route and add the login endpoints."""
     app.state.auth = auth
 
@@ -127,7 +128,7 @@ def install_auth(app: FastAPI, auth: Auth) -> None:
         request.state.user = user
         return await call_next(request)
 
-    app.include_router(create_auth_router(auth))
+    app.include_router(create_auth_router(auth, streamer_names))
 
 
 class LoginBody(BaseModel):
@@ -145,13 +146,26 @@ class UserChange(BaseModel):
     role: Literal["admin", "member"] | None = None
     password: str | None = None
     disabled: bool | None = None
+    streamers: Literal["all"] | list[str] | None = None  # whom a member sees: "all" or names
+
+
+def visible_streamers(request: Request, names: set[str]) -> set[str] | None:
+    """The streamer names a request may see (`names`: everyone in the streamer list), or
+    None for everyone: login off, admins, and members allowed "all". A member's picked
+    names only count while those streamers are still in the list, so archives of a
+    deleted streamer stay with "all" members."""
+    user = getattr(request.state, "user", None)
+    if user is None:
+        return None
+    allowed = streamers_of(user)
+    return None if allowed == "all" else set(allowed) & names
 
 
 def is_self(request: Request, user: dict) -> bool:
     return user["username"].casefold() == request.state.user["username"].casefold()
 
 
-def create_auth_router(auth: Auth) -> APIRouter:
+def create_auth_router(auth: Auth, streamer_names: Callable[[], set[str]] = set) -> APIRouter:
     router = APIRouter()
 
     def fail(e: AuthError) -> HTTPException:
@@ -209,6 +223,8 @@ def create_auth_router(auth: Auth) -> APIRouter:
         is_me = is_self(request, target)
         if is_me and (body.role == "member" or body.disabled):
             raise HTTPException(400, "不能停用或降级自己")
+        if isinstance(body.streamers, list) and not set(body.streamers) <= streamer_names():
+            raise HTTPException(422, "名单里没有这个主播")
         try:
             u = auth.users.update(name, **body.model_dump())
         except AuthError as e:

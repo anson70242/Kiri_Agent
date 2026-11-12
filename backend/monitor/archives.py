@@ -8,11 +8,11 @@ and must stay inside output_dir.
 import json
 import shutil
 import zipfile
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
 
 from backend.sheet import highlights_xlsx
@@ -173,33 +173,45 @@ def list_archives(root: Path) -> list[dict]:
     return rows
 
 
-def create_router(output_dir: Path) -> APIRouter:
+def create_router(output_dir: Path,
+                  visible: Callable[[Request], set[str] | None] = lambda request: None) -> APIRouter:
+    """`visible(request)`: the streamer (creator folder) names that request may see, or
+    None for everyone (no login, admins, members allowed "all")."""
     router = APIRouter()
     root = output_dir.resolve()
 
-    def resolve_folder(folder: str) -> Path:
+    def may_see(request: Request, creator: str) -> bool:
+        names = visible(request)
+        return names is None or creator in names
+
+    def resolve_folder(folder: str, request: Request) -> Path:
         path = (root / folder).resolve()
         if path == root or not path.is_relative_to(root) or not path.is_dir():
             raise HTTPException(404, "archive not found")
+        if not may_see(request, path.relative_to(root).parts[0]):
+            raise HTTPException(404, "archive not found")  # same answer as "doesn't exist"
         return path
+
+    def seen_archives(request: Request) -> list[dict]:
+        return [a for a in list_archives(root) if may_see(request, a["creator"])]
 
     @router.get("/archives", include_in_schema=False)
     def page() -> FileResponse:
         return FileResponse(PAGE)
 
     @router.get("/api/archives")
-    def archives() -> dict:
+    def archives(request: Request) -> dict:
         disk = None
         try:
             u = shutil.disk_usage(root if root.exists() else root.parent)
             disk = {"total": u.total, "used": u.used, "free": u.free}
         except OSError:
             pass
-        return {"output_dir": str(root), "disk": disk, "archives": list_archives(root)}
+        return {"output_dir": str(root), "disk": disk, "archives": seen_archives(request)}
 
     @router.get("/api/archives/chat")
-    def chat(folder: str) -> dict:
-        path = resolve_folder(folder)
+    def chat(folder: str, request: Request) -> dict:
+        path = resolve_folder(folder, request)
         file = next((f for f in path.iterdir() if f.name.endswith(CHAT_SUFFIX)), None)
         if not file:
             raise HTTPException(404, "no parsed chat")
@@ -215,8 +227,8 @@ def create_router(output_dir: Path) -> APIRouter:
             density[minute] += 1
         return {"messages": messages, "density": density}
 
-    def load_transcript(folder: str, lang: str = "ja") -> list[dict]:
-        path = resolve_folder(folder)
+    def load_transcript(folder: str, lang: str, request: Request) -> list[dict]:
+        path = resolve_folder(folder, request)
         file = transcript_file(path.iterdir(), lang)
         if not file:
             raise HTTPException(404, "no transcript")
@@ -235,10 +247,10 @@ def create_router(output_dir: Path) -> APIRouter:
         return FileResponse(HIGHLIGHTS_PAGE)
 
     @router.get("/api/highlights")
-    def highlights_list() -> dict:
+    def highlights_list(request: Request) -> dict:
         """Every archive that has a 路灯表, newest first, with a one-line summary."""
         tables = []
-        for a in list_archives(root):
+        for a in seen_archives(request):
             path = root / a["folder"]
             file = highlights_file(path)
             if not file:
@@ -257,8 +269,8 @@ def create_router(output_dir: Path) -> APIRouter:
         return {"tables": tables}
 
     @router.get("/api/highlights/table")
-    def highlights_table(folder: str) -> dict:
-        file = highlights_file(resolve_folder(folder))
+    def highlights_table(folder: str, request: Request) -> dict:
+        file = highlights_file(resolve_folder(folder, request))
         if not file:
             raise HTTPException(404, "no 路灯表 for this archive")
         try:
@@ -267,9 +279,9 @@ def create_router(output_dir: Path) -> APIRouter:
             raise HTTPException(500, "路灯表 is not valid JSON")
 
     @router.get("/api/highlights/xlsx")
-    def highlights_xlsx_download(folder: str) -> Response:
+    def highlights_xlsx_download(folder: str, request: Request) -> Response:
         """The 路灯表 as a formatted Excel sheet."""
-        file = highlights_file(resolve_folder(folder))
+        file = highlights_file(resolve_folder(folder, request))
         if not file:
             raise HTTPException(404, "no 路灯表 for this archive")
         try:
@@ -281,9 +293,9 @@ def create_router(output_dir: Path) -> APIRouter:
                         headers={"Content-Disposition": attachment(name)})
 
     @router.get("/api/archives/zip")
-    def zip_download(folder: str) -> StreamingResponse:
+    def zip_download(folder: str, request: Request) -> StreamingResponse:
         """Everything of one archive except the raw chat, zipped on the fly (no temp file)."""
-        path = resolve_folder(folder)
+        path = resolve_folder(folder, request)
         files = sorted(f for f in path.iterdir() if f.is_file() and f.suffix != ".part"
                        and not f.name.endswith(RAW_CHAT_SUFFIXES))
         extra: dict[str, bytes] = {}
@@ -302,28 +314,28 @@ def create_router(output_dir: Path) -> APIRouter:
                                  headers={"Content-Disposition": attachment(path.name + ".zip")})
 
     @router.get("/api/archives/transcript")
-    def transcript(folder: str, lang: str = "ja") -> dict:
-        return {"segments": load_transcript(folder, lang)}
+    def transcript(folder: str, request: Request, lang: str = "ja") -> dict:
+        return {"segments": load_transcript(folder, lang, request)}
 
     @router.get("/api/archives/srt")
-    def srt_download(folder: str, lang: str = "ja") -> Response:
+    def srt_download(folder: str, request: Request, lang: str = "ja") -> Response:
         """Subtitles as an .srt file (`lang` ja or zh)."""
-        name = resolve_folder(folder).name + (".zh.srt" if lang == "zh" else ".ja.srt")
-        return Response(srt(load_transcript(folder, lang)), media_type="application/x-subrip; charset=utf-8",
+        name = resolve_folder(folder, request).name + (".zh.srt" if lang == "zh" else ".ja.srt")
+        return Response(srt(load_transcript(folder, lang, request)), media_type="application/x-subrip; charset=utf-8",
                         headers={"Content-Disposition": attachment(name)})
 
     @router.get("/api/archives/subtitles.vtt")
-    def subtitles(folder: str, lang: str = "ja") -> Response:
+    def subtitles(folder: str, request: Request, lang: str = "ja") -> Response:
         """The transcript (`lang` ja or zh) as WebVTT, for <track> on the video."""
         cues = "".join(
             f"\n{_vtt_time(s['start'])} --> {_vtt_time(s['end'])}\n{s['text']}\n"
-            for s in load_transcript(folder, lang)
+            for s in load_transcript(folder, lang, request)
         )
         return Response("WEBVTT\n" + cues, media_type="text/vtt; charset=utf-8")
 
     @router.get("/api/archives/file")
-    def file(folder: str, name: str, download: bool = False) -> FileResponse:
-        base = resolve_folder(folder)
+    def file(folder: str, name: str, request: Request, download: bool = False) -> FileResponse:
+        base = resolve_folder(folder, request)
         path = (base / name).resolve()
         if Path(name).name != name or path.parent != base:
             raise HTTPException(400, "bad file name")

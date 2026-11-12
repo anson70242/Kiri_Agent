@@ -130,6 +130,7 @@ def test_trusted_proxies_come_from_the_config(tmp_path, monkeypatch):
 
 
 def test_member_can_view_and_download_but_not_change_anything(client, tmp_path):
+    client.app.state.auth.users.update("fan", streamers="all")  # who they see: tests/test_streamer_access.py
     login(client, "fan")
     assert client.get("/api/me").json()["role"] == "member"
     for path in ["/", "/archives", "/highlights", "/api/status", "/api/streamers", "/api/archives",

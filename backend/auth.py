@@ -140,11 +140,20 @@ class _JsonFile:
 def public_user(u: dict[str, Any]) -> dict[str, Any]:
     """A user without the password hash."""
     return {"username": u["username"], "role": u["role"], "disabled": bool(u.get("disabled")),
-            "created_at": u.get("created_at")}
+            "created_at": u.get("created_at"), "streamers": streamers_of(u)}
+
+
+def streamers_of(u: dict[str, Any]) -> str | list[str]:
+    """Whom a user may see: "all", or a list of streamer names (members only; a new
+    member sees nobody until an admin picks). Admins always see everyone."""
+    if u.get("role") == "admin":
+        return "all"
+    s = u.get("streamers")
+    return "all" if s == "all" else list(s or [])
 
 
 class UserStore:
-    """data/users.json: [{username, role, password_hash, disabled, created_at}]."""
+    """data/users.json: [{username, role, password_hash, disabled, created_at, streamers}]."""
 
     def __init__(self, path: Path):
         self.file = _JsonFile(path, list)
@@ -182,7 +191,7 @@ class UserStore:
         return u
 
     def update(self, name: str, role: str | None = None, password: str | None = None,
-               disabled: bool | None = None) -> dict[str, Any]:
+               disabled: bool | None = None, streamers: str | list[str] | None = None) -> dict[str, Any]:
         u = self._need(name)
         if role is not None and role not in ROLES:
             raise AuthError(422, "角色只能是 admin 或 member")
@@ -193,6 +202,8 @@ class UserStore:
             u["role"] = role
         if disabled is not None:
             u["disabled"] = disabled
+        if streamers is not None:
+            u["streamers"] = streamers
         self.file.save()
         return u
 

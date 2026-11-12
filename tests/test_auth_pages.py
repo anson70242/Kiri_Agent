@@ -25,6 +25,7 @@ def server(tmp_path, monkeypatch):
     cfg = write_config(tmp_path)
     assert cli(monkeypatch, cfg, "add-user", "boss", "--admin", "--password-stdin") == 0
     assert cli(monkeypatch, cfg, "add-user", "fan", "--password-stdin") == 0
+    load_auth(cfg).users.update("fan", streamers="all")  # new members see nobody until picked
     app = create_app(cfg)
     app.state.auth.fail_delay = 0
     port = free_port()
@@ -129,3 +130,48 @@ def test_a_401_from_any_fetch_goes_to_login(page, server):
     page.context.clear_cookies()
     with page.expect_navigation(url="**/login?next=%2Farchives"):
         page.evaluate("setTimeout(() => fetch('/api/status'), 0)")  # returns before the page leaves
+
+
+@pytest.fixture
+def two_people(tmp_path, monkeypatch):
+    from .test_streamer_access import write_config as two_config
+
+    cfg = two_config(tmp_path)
+    assert cli(monkeypatch, cfg, "add-user", "boss", "--admin", "--password-stdin") == 0
+    assert cli(monkeypatch, cfg, "add-user", "fan", "--password-stdin") == 0
+    app = create_app(cfg)
+    app.state.auth.fail_delay = 0
+    port = free_port()
+    srv = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, lifespan="off", log_level="warning"))
+    t = threading.Thread(target=srv.run, daemon=True)
+    t.start()
+    while not srv.started:
+        time.sleep(0.02)
+    yield f"http://127.0.0.1:{port}", cfg
+    srv.should_exit = True
+    t.join(5)
+
+
+def test_admin_picks_whom_a_member_sees(page, two_people):
+    url, cfg = two_people
+    page.goto(url + "/login?next=%2Fusers")
+    log_in(page, "boss")
+    page.wait_for_url(url + "/users")
+    fan = page.get_by_role("row").filter(has_text="fan")
+    expect(fan).to_contain_text("（还没有）")
+    fan.get_by_role("button", name="可看主播 fan").click()
+    dlg = page.get_by_role("dialog")
+    dlg.get_by_label("A", exact=True).check()
+    dlg.get_by_role("button", name="保存").click()
+    expect(fan).to_contain_text("A")
+    assert load_auth(cfg).users.get("fan")["streamers"] == ["A"]
+
+    page.get_by_role("button", name="登出").click()
+    page.wait_for_url(url + "/login")
+    log_in(page, "fan")
+    page.wait_for_url(url + "/")
+    page.locator(".card").first.wait_for()
+    expect(page.locator(".card .name")).to_have_text(["A", "A"])  # A's two channels, no B
+    page.goto(url + "/archives")
+    expect(page.locator("body")).to_contain_text("歌枠")
+    expect(page.locator("body")).not_to_contain_text("雑談")
