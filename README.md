@@ -1,151 +1,133 @@
 # Kiri Agent
 
-Helps people cut highlight clips from VTuber / streamer broadcasts. It watches channels,
-downloads each archive when a stream ends, and analyses the VOD so an editor knows
-where to look: segment-by-segment summaries and scores, plus chat activity as a signal
-for the exciting moments. The result is uploaded to a shared online sheet (Google Sheets,
-Tencent Docs) so a team can split up the clipping work. A human still makes the final cut.
+帮切片组从 VTuber / 主播的直播里找素材。它监控频道，下播后自动下载录播，转写字幕、翻译成中文，
+再分析出「路灯表」：每 5 分钟一段的话题日志和评分，加上弹幕密度，告诉剪辑的人该看哪里。
+路灯表可以自动上传到共享的在线表格（腾讯文档；Google Sheets 计划中），方便团队分工。
+最后怎么剪，还是人来决定。
 
-## Pipeline
+## 流程
 
-| Step | What it does | Status |
+| 步骤 | 做什么 | 状态 |
 | --- | --- | --- |
-| [Live monitor](#live-monitor) | Polls YouTube / Twitch channels; streamers managed on the dashboard | done |
-| [Notifications](#go-live-notifications) | Discord message on go-live and stream end | done |
-| [Downloader](#downloader) | VOD + chat replay via yt-dlp and Twitch GQL; members / sub-only with cookies | done |
-| Chat cleaning | Raw chat → `{"time","user","msg"}` lines | done |
-| [Auto download](#auto-download) | Stream ends → archive downloaded, old ones pruned, Discord report | done |
-| [Transcription](#transcription) | Downloaded VOD → `<stem>.transcript.json` via faster-whisper on the GPU | done |
-| [Segment analysis](#analysis-路灯表) | 5-minute topic logs, chat density, whole-stream scoring, highlights → 路灯表 | done |
-| [Chinese subtitles](#chinese-subtitles) | Transcript → `<stem>.zh.transcript.json`, shown on the video, SRT download | done |
-| [Dashboard](#dashboard) | 直播状态 / 录播 / 路灯表 pages; 路灯表 as a formatted Excel download | done |
-| [Sheet upload](#upload-to-tencent-docs) | 路灯表 → a sheet in a Tencent Docs spreadsheet, per streamer, automatic | done (waiting for credentials) |
-| Google Sheets | The same upload for Google Sheets | planned |
+| [直播监控](#直播监控) | 轮询 YouTube / Twitch 频道；在网页上管理主播 | 完成 |
+| [开播提醒](#开播提醒) | 开播、下播时发 Discord 消息 | 完成 |
+| [下载器](#下载器) | 用 yt-dlp 和 Twitch GQL 下载录播和弹幕；会员 / 订阅限定靠 cookie | 完成 |
+| 弹幕清洗 | 原始弹幕 → `{"time","user","msg"}` 一行一条 | 完成 |
+| [自动下载](#自动下载) | 下播 → 下载录播、删除最旧的、Discord 报告 | 完成 |
+| [字幕转写](#字幕转写) | 录播 → `<stem>.transcript.json`（GPU 上的 faster-whisper） | 完成 |
+| [路灯表分析](#路灯表分析) | 5 分钟话题日志、弹幕密度、全场评分、高能点 → 路灯表 | 完成 |
+| [中文字幕](#中文字幕) | 日文字幕 → `<stem>.zh.transcript.json`，显示在影片上，可下载 SRT | 完成 |
+| [网页](#网页) | 直播状态 / 录播 / 路灯表三个页面；路灯表可下载成排好版的 Excel | 完成 |
+| [上传腾讯文档](#上传腾讯文档) | 路灯表 → 腾讯文档表格里的一个子表，按主播设定、自动上传 | 完成（等凭证） |
+| Google Sheets | 同样的上传，换成 Google Sheets | 计划中 |
 
-Each finished stage starts the next, per stream: download → transcribe → analyze and
-translate side by side → upload. Every stage retries and reports to Discord.
+每一场直播按顺序跑：下载 → 转写 → 分析和翻译同时进行 → 上传。每一步失败都会重试，并在 Discord 报告。
 
-## Setup
+## 安装
 
 ```sh
 uv sync
-cp .env.example .env      # then fill in what you use
+cp .env.example .env      # 再填入要用到的值
 ```
 
-Python 3.13+, [uv](https://docs.astral.sh/uv/), and ffmpeg (for downloads). For the
-browser tests, once: `uv run playwright install chromium`.
+需要 Python 3.13+、[uv](https://docs.astral.sh/uv/) 和 ffmpeg（下载用）。
+要跑浏览器测试的话，先装一次：`uv run playwright install chromium`。
 
 ## Agent
 
-[backend/agents/agent.py](backend/agents/agent.py) is the LLM side, built on the
-OpenAI Agents SDK over the chat completions API, so any OpenAI-compatible endpoint works
-(OpenAI, a local llama.cpp / vLLM / Ollama, ...). It is still a scaffold; the analysis
-agents will live here. Set `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL` in `.env`:
+[backend/agents/agent.py](backend/agents/agent.py) 是 LLM 这一侧，基于 OpenAI Agents SDK，
+走 chat completions API，所以任何兼容 OpenAI 的端点都能用（OpenAI、本地的 llama.cpp / vLLM /
+Ollama……）。目前还只是骨架。在 `.env` 设定 `OPENAI_BASE_URL`、`OPENAI_API_KEY`、`OPENAI_MODEL`：
 
 ```sh
-uv run backend/agents/agent.py "hello"     # one-shot
-uv run backend/agents/agent.py             # interactive session
+uv run backend/agents/agent.py "hello"     # 问一次
+uv run backend/agents/agent.py             # 互动模式
 ```
 
-### LLM proxy
+### LLM 代理
 
-The analysis LLM is set in `config.json` → `llm` (`base_url`, `model`, `api_key_env`,
-`proxy`), see [backend/llm.py](backend/llm.py). With `"proxy": true`, only LLM requests
-go through `LLM_PROXY`: another machine running [backend/llm_proxy.py](backend/llm_proxy.py),
-reachable only over Tailscale and password-protected. It tunnels HTTPS to the official
-LLM API hosts, and forwards plain HTTP to allowlisted local gateways on that machine
-(default `127.0.0.1:8317`, e.g. CLIProxyAPI for Google agy), so `base_url:
-http://127.0.0.1:8317/v1` means that machine's localhost. Downloads and monitoring keep
-connecting directly. `"proxy": false` (for anyone who doesn't need it) connects straight
-to `base_url`. Setup: "LLM 代理" in [docs/deploy.md](docs/deploy.md).
+分析用的 LLM 设定在 `config.json` → `llm`（`base_url`、`model`、`api_key_env`、`proxy`），
+见 [backend/llm.py](backend/llm.py)。`"proxy": true` 时，只有 LLM 请求会经过 `LLM_PROXY`：
+另一台机器上跑的 [backend/llm_proxy.py](backend/llm_proxy.py)，只能通过 Tailscale 连接，并且有密码保护。
+它把 HTTPS 转发到官方 LLM API，也能把纯 HTTP 转发到那台机器上白名单内的本地网关
+（默认 `127.0.0.1:8317`，例如 Google agy 用的 CLIProxyAPI），所以 `base_url:
+http://127.0.0.1:8317/v1` 指的是那台机器的 localhost。下载和监控照旧直连。
+不需要代理的人设 `"proxy": false`，直接连 `base_url`。设定方法见 [docs/deploy.md](docs/deploy.md) 的「LLM 代理」。
 
-## Live monitor
+## 直播监控
 
-Checks whether streamers are live. Environment is managed by uv (`uv sync`).
+检查主播是否在直播。
 
 ```sh
-uv run -m backend.monitor              # poll forever, print state changes
-uv run -m backend.monitor --once       # one check, table output
+uv run -m backend.monitor              # 一直轮询，打印状态变化
+uv run -m backend.monitor --once       # 只查一次，输出表格
 uv run -m backend.monitor --once --json
-uv run -m backend.monitor.server       # web dashboard at http://127.0.0.1:8770
+uv run -m backend.monitor.server       # 网页：http://127.0.0.1:8770
 ```
 
-Streamers are managed on the dashboard (see [Dashboard](#dashboard)). The list is saved in
-`data/streamers.json` (`monitor.streamers_file`), which deploys never touch;
-`monitor.streamers` in `config.json` only seeds it on the first start. `platform` is
-`youtube` or `twitch`; `channel` is a YouTube handle (`@foo`), channel id (`UC...`) or
-URL, or a Twitch login (`foo`) or URL. Adding a streamer checks that the channel
-exists; deleting one keeps their downloads.
+主播在网页上管理（见[网页](#网页)）。名单存在 `data/streamers.json`（`monitor.streamers_file`），
+部署不会动它；`config.json` 的 `monitor.streamers` 只在第一次启动时用来生成名单。
+`platform` 是 `youtube` 或 `twitch`；`channel` 是 YouTube 的 handle（`@foo`）、频道 ID（`UC...`）或网址，
+或 Twitch 的登录名（`foo`）或网址。新增主播时会先检查频道是否存在；删除主播会保留已下载的录播。
 
-- [roster.py](backend/monitor/roster.py): the streamer list and per-streamer settings.
-- [base.py](backend/monitor/base.py): shared `Streamer`, `StreamStatus`, `LiveState`,
-  `PlatformMonitor` base class, `StreamMonitor` poll loop.
-- [youtube.py](backend/monitor/youtube.py): `YouTubeMonitor`, scrapes `/<channel>/live`; no API key.
-- [twitch.py](backend/monitor/twitch.py): `TwitchMonitor`, reads the channel page's JSON-LD; no API key.
+- [roster.py](backend/monitor/roster.py)：主播名单和各主播的设定。
+- [base.py](backend/monitor/base.py)：共用的 `Streamer`、`StreamStatus`、`LiveState`、
+  `PlatformMonitor` 基类和 `StreamMonitor` 轮询。
+- [youtube.py](backend/monitor/youtube.py)：`YouTubeMonitor`，抓 `/<channel>/live` 页面；不需要 API key。
+- [twitch.py](backend/monitor/twitch.py)：`TwitchMonitor`，读频道页的 JSON-LD；不需要 API key。
 
-New platform: add `backend/monitor/<platform>.py` with a `PlatformMonitor` subclass
-setting `platform = "<name>"` and implementing `_check()`, then import it in
-[`__init__.py`](backend/monitor/__init__.py).
+新增平台：写一个 `backend/monitor/<platform>.py`，里面放一个 `PlatformMonitor` 子类，
+设 `platform = "<name>"` 并实现 `_check()`，再在 [`__init__.py`](backend/monitor/__init__.py) 里 import。
 
-## Go-live notifications
+## 开播提醒
 
-When a monitored streamer goes from offline / upcoming to live, the monitor (both the
-dashboard server and `uv run -m backend.monitor`) sends a Discord message. On the very
-first start (no `data/notify_state.json` yet) streamers already live are skipped
-(`notify.on_startup: true` to change that); a streamer added to the config later is
-announced even if already live. The same stream is never announced twice.
+主播从未开播 / 待机变成直播时，监控（网页服务器和 `uv run -m backend.monitor` 都会）发一条 Discord 消息。
+第一次启动时（还没有 `data/notify_state.json`），已经在播的主播不会提醒（`notify.on_startup: true` 可以改）；
+之后才加进来的主播，就算已经在播也会提醒。同一场直播不会提醒两次。
 
-When a stream ends it sends an "ended" message with the stream's duration, after the
-streamer stays not-live for `notify.offline_grace` seconds (default 120), so a brief
-blip sends nothing. `notify.on_offline: false` turns ended messages off.
+下播后，主播保持未直播 `notify.offline_grace` 秒（默认 120）才发「已下播」消息，附上直播时长，
+所以短暂断线不会误报。`notify.on_offline: false` 可以关掉下播消息。
 
-Guarantees (covered by the tests):
-- Every go-live is followed by exactly one ended for the same broadcast (`stream_id`:
-  YouTube video id, Twitch start time). A broadcast is never announced twice.
-- A failed check (network error, bot-check page) never counts as "offline".
-- The last live broadcast per streamer is saved in `data/notify_state.json`, so a
-  stream that ended or started while the monitor was down is reported after restart.
-  Run only one monitor process at a time, since they would share this file.
-- Messages are sent in order from a queue, retried up to 5 times with backoff, and
-  never slow down polling. A rejected webhook (4xx) is logged and not retried.
+保证（都有测试覆盖）：
+- 每次开播之后，同一场直播（`stream_id`：YouTube 的影片 ID、Twitch 的开播时间）一定刚好有一次下播消息。
+- 检查失败（网络错误、机器人验证页）永远不会当成「下播」。
+- 每个主播最后一场直播存在 `data/notify_state.json`，所以监控停机期间开播或下播的，重启后会补报。
+  同一时间只跑一个监控进程，因为它们会共用这个文件。
+- 消息从队列按顺序发出，失败最多重试 5 次（间隔递增），不会拖慢轮询。webhook 被拒（4xx）只记日志、不重试。
 
-What it can't do (e.g. a whole stream that starts and ends while the monitor is down
-is missed) is listed in [docs/monitor-limitations.md](docs/monitor-limitations.md).
+做不到的事（例如监控停机期间从开播到下播的一整场会漏掉）列在 [docs/monitor-limitations.md](docs/monitor-limitations.md)。
 
-1. Discord channel settings → Integrations → Webhooks → New Webhook → Copy Webhook URL.
-2. Put it in `.env` as `DISCORD_WEBHOOK_URL=...`.
-3. `uv run -m backend.notify` sends a test message (`--live` announces whoever is live now).
+1. Discord 频道设置 → 整合 → Webhooks → 新增 Webhook → 复制 Webhook 网址。
+2. 填进 `.env`：`DISCORD_WEBHOOK_URL=...`。
+3. `uv run -m backend.notify` 发一条测试消息（加 `--live` 会提醒现在正在播的主播）。
 
-Optional `notify.discord.mention` in `config.json`: `@everyone`, `@here` or a role `<@&id>`.
+可选：`config.json` 的 `notify.discord.mention` 可以设 `@everyone`、`@here` 或身份组 `<@&id>`。
 
-- [base.py](backend/notify/base.py): `Notifier` base class, `LiveNotifier` trigger rules.
-- [discord.py](backend/notify/discord.py): `DiscordNotifier`, webhook embed with title, cover, avatar.
+- [base.py](backend/notify/base.py)：`Notifier` 基类，`LiveNotifier` 的触发规则。
+- [discord.py](backend/notify/discord.py)：`DiscordNotifier`，带标题、封面、头像的 webhook embed。
 
-New channel: add a `Notifier` subclass with `name = "<channel>"` and `send()`, import it
-in [`backend/notify/__init__.py`](backend/notify/__init__.py), add a `notify.<channel>` entry.
+新增通知渠道：写一个 `Notifier` 子类，设 `name = "<channel>"` 并实现 `send()`，
+在 [`backend/notify/__init__.py`](backend/notify/__init__.py) 里 import，再加一个 `notify.<channel>` 设定。
 
-## Downloader
+## 下载器
 
-Downloads a YouTube / Twitch VOD and its chat replay. No external exe: video and
-metadata use the `yt-dlp` Python package (nightly pre-release, since YouTube changes
-often), its JS runtime is the `deno` pip package, and Twitch chat comes straight from
-Twitch's GQL API. Only ffmpeg must be installed (on PATH, or `download.ffmpeg`).
+下载 YouTube / Twitch 的录播和弹幕回放。不需要外部 exe：影片和资料用 `yt-dlp` Python 套件
+（nightly 预发布版，因为 YouTube 常常改），它的 JS 运行环境是 `deno` pip 套件，Twitch 弹幕直接从
+Twitch 的 GQL API 拿。只需要另外装 ffmpeg（在 PATH 里，或设 `download.ffmpeg`）。
 
 ```sh
-uv run -m backend.downloader <url>              # video + chat
-uv run -m backend.downloader <url> --no-video   # chat only (--no-chat: video only)
-uv run -m backend.downloader <url> --info       # metadata only
-uv lock --upgrade-package yt-dlp && uv sync     # update to the latest yt-dlp nightly
+uv run -m backend.downloader <url>              # 影片 + 弹幕
+uv run -m backend.downloader <url> --no-video   # 只要弹幕（--no-chat：只要影片）
+uv run -m backend.downloader <url> --info       # 只看资料
+uv lock --upgrade-package yt-dlp && uv sync     # 更新到最新的 yt-dlp nightly
 ```
 
-Files go to `downloads/<streamer>/<YYYYMMDD>/<title>/[date][streamer] title.mp4`, with
-chat next to it: `.live_chat.json` (YouTube, raw yt-dlp format) or `.chat.json` (Twitch,
-TwitchDownloaderCLI's layout). A channel in the streamer list uses that streamer's
-name; any other channel uses its display name.
+文件存到 `downloads/<主播>/<YYYYMMDD>/<标题>/[日期][主播] 标题.mp4`，弹幕放在旁边：
+`.live_chat.json`（YouTube，yt-dlp 原始格式）或 `.chat.json`（Twitch，TwitchDownloaderCLI 的格式）。
+主播名单里的频道用名单里的名字，其他频道用频道显示名称。
 
-Every downloaded chat is also cleaned into `.chat_parsed.json` (AutoKiri's format, one
-message per line; `sc` only on YouTube Super Chats / Stickers), see
-[chat_clean.py](backend/downloader/chat_clean.py):
+每份下载的弹幕也会清洗成 `.chat_parsed.json`（AutoKiri 的格式，一行一条；只有 YouTube 的
+Super Chat / 贴图才有 `sc`），见 [chat_clean.py](backend/downloader/chat_clean.py)：
 
 ```json
 [
@@ -154,58 +136,48 @@ message per line; `sc` only on YouTube Super Chats / Stickers), see
 ]
 ```
 
-`uv run -m backend.downloader --clean <file>.live_chat.json ...` cleans files downloaded earlier.
+`uv run -m backend.downloader --clean <file>.live_chat.json ...` 可以清洗以前下载的文件。
 
-- Members-only / age-restricted: a failed attempt is retried with cookies, from
-  `download.cookies_file` (`data/youtube_cookies.txt`) if it exists, else from
-  `download.cookies_from_browser` (default `firefox`; empty to disable). A server has
-  no browser, so it uses the cookies file: see "YouTube 会限 cookie" in
-  [docs/deploy.md](docs/deploy.md).
-- Twitch subscriber-only VODs: set `TWITCH_OAUTH` in `.env` (the `auth-token` cookie of twitch.tv).
-- Live streams are refused. Right after a YouTube stream ends it is still processing:
-  the video is refused until it's done (run again later).
+- 会员限定 / 年龄限制：失败后会带 cookie 重试，优先用 `download.cookies_file`（`data/youtube_cookies.txt`），
+  没有的话用 `download.cookies_from_browser`（默认 `firefox`；留空表示不用）。服务器没有浏览器，
+  所以用 cookie 文件：见 [docs/deploy.md](docs/deploy.md) 的「YouTube 会限 cookie」。
+- Twitch 订阅限定录播：在 `.env` 设 `TWITCH_OAUTH`（twitch.tv 的 `auth-token` cookie）。
+- 正在直播的不能下载。YouTube 刚下播时还在处理，处理完之前也不能下载（晚点再跑）。
 
-YouTube chat replay often appears only hours after a stream ends. When it isn't there
-yet, the chat is queued in `data/pending_chat.json` and retried every 30 min, for up to
-48 h (`download.chat_retry`). It lands next to the video under the original file name.
+YouTube 的弹幕回放常常要下播几小时后才出现。还没出现时，会排进 `data/pending_chat.json`，
+每 30 分钟重试一次，最多 48 小时（`download.chat_retry`），下载到后放在影片旁边、沿用原本的文件名。
 
 ```sh
-uv run -m backend.downloader --pending          # list queued chats
-uv run -m backend.downloader --retry            # retry them all now
-uv run -m backend.downloader --wait             # retry on schedule until the queue is empty
-uv run -m backend.downloader <url> --wait       # download, then wait for a late chat
+uv run -m backend.downloader --pending          # 列出排队中的弹幕
+uv run -m backend.downloader --retry            # 现在全部重试
+uv run -m backend.downloader --wait             # 按排程重试，直到队列清空
+uv run -m backend.downloader <url> --wait       # 下载后，等晚到的弹幕
 ```
 
-From code: `download(url, *load_settings(config))` in
-[backend/downloader/__init__.py](backend/downloader/__init__.py). A new platform is a
-`PlatformDownloader` subclass with `platform`, `url_re` and `download_chat()`.
+在程序里用：[backend/downloader/__init__.py](backend/downloader/__init__.py) 的
+`download(url, *load_settings(config))`。新增平台是一个 `PlatformDownloader` 子类，
+要有 `platform`、`url_re` 和 `download_chat()`。
 
-## Auto download
+## 自动下载
 
-When the monitor reports a stream ended (same rule as the "ended" Discord message), the
-archive of a streamer with auto-download on (the ⚙ gear, or `"auto_download": true`) is queued and
-downloaded (video ≤ `download.max_height`, default 1080p, plus chat) by
-the dashboard server or `uv run -m backend.monitor`. See
-[auto.py](backend/downloader/auto.py).
+监控判定下播时（和 Discord「已下播」消息同一套规则），开了自动下载的主播（齿轮 ⚙ 里设定）
+的录播会排进队列下载（影片不超过 `download.max_height`，默认 1080p，加弹幕），
+由网页服务器或 `uv run -m backend.monitor` 执行。见 [auto.py](backend/downloader/auto.py)。
 
-- Not ready yet (YouTube still processing, Twitch archive not listed): retried every
-  `download.auto.retry_minutes` (15) for up to `give_up_hours` (12).
-- Other failures (expired cookies, deleted video, network) are retried `max_errors` (3)
-  times, then Discord gets a failure message, with a hint when cookies look expired.
-- Success: Discord message with file size and chat status. Then that streamer's folder
-  is trimmed to `keep` archives (per streamer, default `download.auto.keep` = 6); the
-  oldest go first.
-- The queue is `data/download_queue.json`, so a restart (deploy) resumes it; late chats
-  use the chat retry queue below.
+- 还没好（YouTube 还在处理、Twitch 录播还没列出）：每 `download.auto.retry_minutes`（15）分钟重试，
+  最多 `give_up_hours`（12）小时。
+- 其他失败（cookie 过期、影片被删、网络）重试 `max_errors`（3）次，然后在 Discord 报失败；
+  看起来是 cookie 过期时会附上提示。
+- 成功：Discord 消息附上文件大小和弹幕状态。然后这个主播的文件夹只保留 `keep` 场
+  （每个主播可以设，默认 `download.auto.keep` = 6），最旧的先删。
+- 队列存在 `data/download_queue.json`，所以重启（部署）后会接着跑；晚到的弹幕走上面的弹幕重试队列。
 
-## Transcription
+## 字幕转写
 
-After an auto-download, the same queue job moves to a "transcribe" stage. Downloads and
-transcriptions have a worker each (one download + one transcription at a time, side by
-side), so a long transcription never holds up the next download. ffmpeg
-extracts the audio (16 kHz mono Opus) and the whole stream is sent to the `whisper`
-service ([services/whisper](services/whisper), faster-whisper large-v3-turbo, started by
-`docker-compose.yml` on the GPU, reachable only from kiri). Result next to the video:
+自动下载完成后，同一个任务进入「转写」阶段。下载和转写各有一个 worker（一次一个下载、一个转写，同时进行），
+所以长时间的转写不会挡住下一场下载。ffmpeg 抽出音频（16 kHz 单声道 Opus），整场送给 `whisper` 服务
+（[services/whisper](services/whisper)，faster-whisper large-v3-turbo，由 `docker-compose.yml`
+在 GPU 上启动，只有 kiri 连得到）。结果放在影片旁边：
 
 ```json
 [
@@ -214,140 +186,125 @@ service ([services/whisper](services/whisper), faster-whisper large-v3-turbo, st
 ]
 ```
 
-About 13× realtime on a GTX 1660 (a 4 h stream in ~20 min). Failures are retried
-`download.auto.max_errors` times, then Discord gets a "字幕转写失败" message. Configure
-with the `asr` section of `config.json` (`url`, `language`, `vad`; remove it to skip
-transcription). By hand: `uv run -m backend.asr <video> --url http://...:8000`.
+GTX 1660 上大约 13 倍速（4 小时的直播约 20 分钟）。失败重试 `download.auto.max_errors` 次，
+然后 Discord 收到「字幕转写失败」。在 `config.json` 的 `asr` 段设定（`url`、`language`、`vad`；
+删掉这段就不转写）。手动：`uv run -m backend.asr <video> --url http://...:8000`。
 
-## Analysis (路灯表)
+## 路灯表分析
 
-After transcription the job moves to an "analyze" stage ([analysis.py](backend/analysis.py),
-prompts adapted from AutoKiri's clip_highlight). Uses the `llm` settings (see LLM proxy).
+转写完后进入「分析」阶段（[analysis.py](backend/analysis.py)，prompt 改编自 AutoKiri 的 clip_highlight）。
+用 `llm` 的设定（见 LLM 代理）。
 
-1. Every 5-minute segment (plus 30 s context each side): transcript + a chat digest (count,
-   density vs. the stream average, top reactions, Super Chats, up to 150 sampled messages;
-   bots and waiting-room chat excluded) → a topic log, usually 3 entries of 1–3 minutes.
-2. One call over the whole stream: all topic logs + chat density → a 1–10 score per segment,
-   relative within the stream; segments from `analysis.min_score` (7) also get highlights
-   and a best clip (🏆).
-3. `<stem>.highlights.json`, one row per segment: `start`, `end`, `topics`, `timeline`,
-   `highlights`, `top_pick`, `score`, `reason`, `chat_count`, `chat_ratio`, `chat_level`
-   (高/中/低: top 20% / bottom 30% of segments by density).
+1. 每 5 分钟一段（前后各多带 30 秒上下文）：字幕 + 弹幕摘要（条数、相对全场平均的密度、热门反应、
+   Super Chat、最多 150 条抽样；排除机器人和待机室弹幕）→ 话题日志，通常 3 条，每条 1–3 分钟。
+2. 全场一次调用：所有话题日志 + 弹幕密度 → 每段 1–10 分（全场内相对比较）；
+   达到 `analysis.min_score`（7）分的段落再加上高能点和最佳切片（🏆）。
+3. 输出 `<stem>.highlights.json`，每段一行：`start`、`end`、`topics`、`timeline`、`highlights`、
+   `top_pick`、`score`、`reason`、`chat_count`、`chat_ratio`、`chat_level`
+   （高 / 中 / 低：按密度排名前 20% / 后 30%）。
 
-The table is shown on the 路灯表 page and downloads as Excel (see [Dashboard](#dashboard)).
-Discord then gets the top 5 segments. A 5 h stream takes about 3 minutes with
-`gemini-3-flash`. By hand: `uv run -m backend.analysis <video> --streamer NAME --title T`
-(`--no-proxy` when running on the proxy machine itself).
+路灯表会显示在「路灯表」页面，也能下载成 Excel（见[网页](#网页)）。Discord 会收到分数最高的 5 段。
+5 小时的直播用 `gemini-3-flash` 大约 3 分钟。手动：`uv run -m backend.analysis <video> --streamer NAME --title T`
+（在代理那台机器上直接跑时加 `--no-proxy`）。
 
-## Chinese subtitles
+## 中文字幕
 
-Runs side by side with the analysis once the transcript exists ([translate.py](backend/translate.py),
-AutoKiri's translator prompt without its streamer-specific parts). The transcript goes
-to the LLM in groups (`translate.group`, 80 lines) with `translate.context` (5) lines of
-context each side; the reply `{"lines": [{"id", "text"}]}` maps back 1:1, so timing never
-moves. Missing lines are asked again, then kept in Japanese. Output
-`<stem>.zh.transcript.json`; the archives page shows it on the video (default track),
-switches 中 / 日 / 双语 in the subtitle panel, and offers SRT downloads. A 5 h stream is
-about 120k tokens. By hand: `uv run -m backend.translate <video>`.
+字幕转写完成后，和路灯表分析同时进行（[translate.py](backend/translate.py)，用 AutoKiri 的翻译 prompt，
+去掉了针对特定主播的部分）。字幕按组送给 LLM（`translate.group`，80 行），前后各带 `translate.context`（5）行上下文；
+回复 `{"lines": [{"id", "text"}]}` 一对一对回去，所以时间轴不会跑掉。漏掉的行会再问一次，还是没有就保留日文。
+输出 `<stem>.zh.transcript.json`；录播页默认在影片上显示中文字幕，字幕栏可以切换 中 / 日 / 双语，也能下载 SRT。
+5 小时的直播大约 12 万 token。手动：`uv run -m backend.translate <video>`。
 
-## Dashboard
+## 网页
 
-`uv run -m backend.monitor.server` (on the server: through Tailscale, see Deploy). Three pages:
+`uv run -m backend.monitor.server`（服务器上的通过 Tailscale 打开，见[部署](#部署)）。三个页面：
 
-- **直播状态** ([monitor.html](frontend/monitor.html)): who is live / upcoming / offline,
-  with covers and a tag search. ＋ 新增主播 adds a streamer; the ⚙ gear on each card sets
-  自动下载, 保留录播数 (archives kept), 自动上传到腾讯文档 + the target spreadsheet, and
-  deletes the streamer. Cards show ⬇ 自动下载 / ⬆ 自动上传 when on.
-- **录播** ([archives.html](frontend/archives.html)): downloaded archives with pipeline
-  progress. Each archive plays with Chinese (default) / Japanese subtitles, a 中 / 日 / 双语
-  subtitle panel, chat replay and a chat density chart. Downloads: video, chat, SRT
-  (中 / 日), 路灯表 (Excel), or everything as one zip (raw chat left out).
-- **路灯表** ([highlights.html](frontend/highlights.html)): each stream's table, filterable
-  by score, chat level and "only with clips"; topic-log entries expand.
+- **直播状态**（[monitor.html](frontend/monitor.html)）：谁在直播 / 待机 / 未开播，带封面和标签搜索。
+  「＋ 新增主播」加主播；每张卡片的齿轮 ⚙ 可以设定自动下载、保留录播数、自动上传到腾讯文档和目标表格，
+  也可以删除主播。开着的设定会在卡片上显示 ⬇ 自动下载 / ⬆ 自动上传。
+- **录播**（[archives.html](frontend/archives.html)）：已下载的录播和处理进度。每场都能播放，
+  带中文（默认）/ 日文字幕、中 / 日 / 双语字幕栏、弹幕回放和弹幕密度图。可下载：影片、弹幕、
+  SRT（中 / 日）、路灯表（Excel），或打包成一个 zip（不含原始弹幕）。
+- **路灯表**（[highlights.html](frontend/highlights.html)）：每场的路灯表，可按分数、弹幕热度、
+  「只看有切片」筛选，话题日志可以展开。
 
-The Excel 路灯表 ([sheet.py](backend/sheet.py)) is ready to read as opened: frozen header,
-wide wrapped 内容摘要 / 切片标题 columns (left-aligned, everything else centred), score
-colours, 🏆 rows highlighted, an empty 剪辑 column for the team. Importing it into Tencent
-Docs or Google Sheets by hand keeps that formatting.
+Excel 路灯表（[sheet.py](backend/sheet.py)）打开就能读：表头冻结；内容摘要和切片标题两栏较宽、自动换行、
+靠左对齐，其他栏置中；分数有颜色，有 🏆 的行标黄；最后留一栏空白的「剪辑」给团队填。
+手动导入腾讯文档或 Google Sheets 时，这些格式都会保留。
 
-API: `/api/status`, `/api/streamers` (GET / POST / PATCH / DELETE), `/api/downloads`,
-`/api/archives/*`, `/api/highlights/*` (see [server.py](backend/monitor/server.py) and
-[archives.py](backend/monitor/archives.py)).
+API：`/api/status`、`/api/streamers`（GET / POST / PATCH / DELETE）、`/api/downloads`、
+`/api/archives/*`、`/api/highlights/*`（见 [server.py](backend/monitor/server.py) 和
+[archives.py](backend/monitor/archives.py)）。
 
-## Upload to Tencent Docs
+## 上传腾讯文档
 
-[tencent_docs.py](backend/tencent_docs.py) adds a 路灯表 as a new sheet (tab) of an existing
-docs.qq.com spreadsheet, with the same columns and cell text as the Excel download.
+[tencent_docs.py](backend/tencent_docs.py) 把路灯表加成一份现有 docs.qq.com 表格里的新子表，
+栏位和文字与 Excel 下载完全一样。
 
-Automatic, per streamer: in the ⚙ gear, tick 自动上传到腾讯文档 and paste the target
-spreadsheet's link (each streamer can use its own spreadsheet, or share one). Once the
-路灯表 is ready it is uploaded (a pipeline stage after the analysis: retried like the
-others, 📤 / ❗ on Discord with the sheet link). Uploading the same stream again replaces
-its sheet. By hand:
+自动上传按主播设定：在齿轮 ⚙ 里勾「自动上传到腾讯文档」，贴上目标表格的链接（每个主播可以用自己的表格，
+也可以共用一份）。路灯表做好后就会上传（分析之后的一个阶段：和其他阶段一样会重试，
+Discord 会收到 📤 或 ❗，附上子表链接）。同一场再传会覆盖旧的子表。手动：
 
 ```sh
-uv run -m backend.tencent_docs downloads/<creator>/<YYYYMMDD>/<title>/ --sheet <link or FILE_ID>
-uv run -m backend.tencent_docs <.highlights.json> --sheet <link> --title "20261111 xx"
+uv run -m backend.tencent_docs downloads/<主播>/<YYYYMMDD>/<标题>/ --sheet <链接或 FILE_ID>
+uv run -m backend.tencent_docs <.highlights.json> --sheet <链接> --title "20261111 xx"
 ```
 
-Credentials (shared by every streamer): `TENCENT_DOCS_ACCESS_TOKEN` /
-`TENCENT_DOCS_CLIENT_ID` / `TENCENT_DOCS_OPEN_ID` in `.env` (Tencent Docs Open Platform;
-registering needs a mainland ID). Without them the upload stage is skipped (logged). After
-changing them on the server: `docker compose up -d --force-recreate kiri` (a plain
-restart doesn't re-read `.env`).
+凭证（所有主播共用）：在 `.env` 填 `TENCENT_DOCS_ACCESS_TOKEN` / `TENCENT_DOCS_CLIENT_ID` /
+`TENCENT_DOCS_OPEN_ID`（腾讯文档开放平台；注册需要大陆身份证）。没填的话会跳过上传（只记日志）。
+在服务器上改完后要用 `docker compose up -d --force-recreate kiri` 重启（单纯 restart 不会重新读 `.env`）。
 
-Limits of the v3 API: the sheet is named `<YYYYMMDD> <creator> <title>`, cut to 31
-characters (a re-upload deletes the old sheet first; only when it is the spreadsheet's only
-sheet does the new one get ` (2)`). New sheets
-always land last (no move). Values only: no colours, alignment, wrap, column widths or
-frozen header (import the Excel download by hand when those matter). At most 10000 cells per sheet (~1200
-segments). The access token expires after about 30 days: then every call fails with
-`API error 400006`; get a new one and update `.env`.
+v3 API 的限制：子表名是 `<YYYYMMDD> <主播> <标题>`，截到 31 个字符（重传会先删掉旧的子表；
+只有它是整份表格唯一的子表时，新的才会加上 ` (2)`）。新子表总是排在最后（不能移动）。
+只能写入数值：颜色、对齐、换行、列宽、冻结表头都带不过去（需要这些格式时，手动导入 Excel）。
+每个子表最多 10000 格（约 1200 段）。access token 大约 30 天过期，之后每次调用都会返回
+`API error 400006`，换一个新的填进 `.env` 即可。
 
-## Local preview
+## 本地预览
 
-Check page changes without deploying:
+不部署也能检查页面改动：
 
 ```sh
-uv run scripts/pull_archive.py 鹿乃 --minutes 3    # copy an archive from the server (3 min of video)
+uv run scripts/pull_archive.py 鹿乃 --minutes 3    # 从服务器复制一场录播（影片只取 3 分钟）
 uv run -m backend.monitor.server --dev --reload    # http://127.0.0.1:8770
 ```
 
-`--dev` shows the pages (and live status) but never downloads, transcribes, analyzes
-or sends Discord messages. HTML changes show on a browser refresh; `--reload` restarts
-the server when backend code changes. `pull_archive.py` streams everything but the raw
-chat over ssh (`--minutes 0`: no video, `--full`: whole video) into `downloads/`.
+`--dev` 会显示页面（和直播状态），但不下载、不转写、不分析，也不发 Discord。改 HTML 刷新浏览器就能看到；
+`--reload` 会在后端代码改动时重启服务器。`pull_archive.py` 通过 ssh 把原始弹幕以外的所有文件传到
+`downloads/`（`--minutes 0`：不要影片，`--full`：完整影片）。
 
-## Tests
-
-```sh
-uv run pytest                          # everything offline (~50s)
-uv run pytest -m network -s            # real YouTube / Twitch checks
-STRESS_SEEDS=1000 uv run pytest tests/test_random_sequences.py   # longer stress run
-```
-
-The dashboard's browser tests ([test_monitor_page.py](tests/test_monitor_page.py), Playwright)
-need Chromium (`uv run playwright install chromium`); without it they skip themselves,
-which is what CI does (CI runs the code tests only).
-
-## Deploy
-
-CI ([ci.yml](.github/workflows/ci.yml)) runs the tests and builds the Docker image on
-every pull request and on main. When CI passes on main, [deploy.yml](.github/workflows/deploy.yml)
-copies the code to the server over SSH and runs `docker compose up -d --build`.
-The dashboard listens only on the server's localhost and is reached through Tailscale.
+## 测试
 
 ```sh
-docker compose up -d --build     # run the container locally (needs .env)
+uv run pytest                          # 全部离线测试（约 50 秒）
+uv run pytest -m network -s            # 连真实的 YouTube / Twitch 检查
+STRESS_SEEDS=1000 uv run pytest tests/test_random_sequences.py   # 更长的压力测试
 ```
 
-One-time server setup (Docker, deploy user, SSH key, GitHub secrets, Tailscale):
-[docs/deploy.md](docs/deploy.md).
+网页的浏览器测试（[test_monitor_page.py](tests/test_monitor_page.py)，Playwright）需要 Chromium
+（`uv run playwright install chromium`）；没装就会自动跳过，CI 就是这样（CI 只跑代码测试）。
 
-## Configuration
+## 部署
 
-`config.json` holds everything safe to commit: `monitor`, `notify`, `llm`, `analysis`,
-`translate`, `asr`, `upload`, `download`. Secrets go in `.env` (see
-[.env.example](.env.example)): LLM keys, `DISCORD_WEBHOOK_URL`, `TWITCH_OAUTH`,
-`LLM_PROXY` / `LLM_PROXY_TOKEN`, `TENCENT_DOCS_*`. Everything the dashboard edits lives
-in `data/` (streamer list, queues, notify state), which deploys never touch.
+CI（[ci.yml](.github/workflows/ci.yml)）在每个 pull request 和 main 上跑测试并构建 Docker 镜像。
+main 上的 CI 通过后，[deploy.yml](.github/workflows/deploy.yml) 通过 SSH 把代码复制到服务器，
+执行 `docker compose up -d --build`。网页只在服务器的 localhost 上监听，通过 Tailscale 访问。
+
+```sh
+docker compose up -d --build     # 在本地跑容器（需要 .env）
+```
+
+服务器的一次性设定（Docker、部署用户、SSH key、GitHub secrets、Tailscale）：[docs/deploy.md](docs/deploy.md)。
+
+## 配置
+
+`config.json` 放所有可以提交的设定：`monitor`、`notify`、`llm`、`analysis`、`translate`、`asr`、
+`upload`、`download`。密钥放在 `.env`（见 [.env.example](.env.example)）：LLM key、`DISCORD_WEBHOOK_URL`、
+`TWITCH_OAUTH`、`LLM_PROXY` / `LLM_PROXY_TOKEN`、`TENCENT_DOCS_*`。网页上改的东西都存在 `data/`
+（主播名单、队列、提醒状态），部署不会动它。
+
+## 授权
+
+本项目采用 [GNU Affero General Public License v3.0](LICENSE)（AGPL-3.0）。可以自由使用、修改和分发；
+但修改后的版本如果以网络服务的形式提供给别人使用，也必须公开源代码。
+路灯表分析和翻译的 prompt 改编自同为 AGPL-3.0 的 [AutoKiri](https://github.com/anson70242/AutoKiri)。
