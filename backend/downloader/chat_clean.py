@@ -1,13 +1,13 @@
 """Turn a raw chat replay into a short, uniform list for reading and LLM prompts.
 
-Output (the chat artifact, saved by backend.archive in AutoKiri's layout, one message per line):
+The result is the chat artifact (saved by backend.archive in AutoKiri's layout, one message per line):
 
     [
       {"time": "00:12:34", "user": "Bob", "msg": "こんゆかし〜"},
       {"time": "00:15:00", "user": "@spica_v", "msg": "おめでとう", "sc": "¥100"}
     ]
 
-`time` is the offset from the start of the VOD. `sc` only appears on YouTube paid
+`time` is the offset from the start of the video. `sc` only appears on YouTube paid
 messages (Super Chat / Super Sticker). Messages without any text are dropped.
 Custom emotes are kept as their name (`:_chu:`, `Kappa`), standard emoji as the emoji.
 """

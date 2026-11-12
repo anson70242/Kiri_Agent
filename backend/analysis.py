@@ -184,8 +184,8 @@ def analyze(
     title: str = "",
     settings: AnalysisSettings | None = None,
 ) -> Path:
-    """Analyze a downloaded stream (needs its transcript; chat is optional) and save the
-    highlight table in its archive, next to the video."""
+    """Analyze the archive `video` belongs to (needs its transcript; chat is optional) and
+    save the highlight table in it, next to the video."""
     s = settings or AnalysisSettings()
     archive = Archive.from_video(video)
     try:

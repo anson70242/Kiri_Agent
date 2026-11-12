@@ -84,7 +84,8 @@ class VideoInfo:
 
     @property
     def folder(self) -> Path:
-        """Relative output folder: `<creator>/<date>/<title>` (named by the Archive module)."""
+        """The archive folder relative to the downloads root: `<creator>/<date>/<title>` (named by
+        the Archive module)."""
         return name_archive(self.creator, self.date, self.title)[0]
 
 

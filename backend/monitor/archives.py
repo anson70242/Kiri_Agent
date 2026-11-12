@@ -1,4 +1,4 @@
-"""Archives (录播) and 路灯表 pages for the dashboard: browse downloaded VODs, their chat,
+"""Archives (录播) and 路灯表 pages for the dashboard: browse the archives, their chat,
 subtitles and highlight tables.
 
 The layout on disk and the folder references clients send belong to backend.archive; this
