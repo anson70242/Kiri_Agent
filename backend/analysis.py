@@ -88,6 +88,7 @@ class AnalysisSettings:
     sample_size: int = 150
     min_score: int = 7  # segments from this score get highlights + the best clip
     retries: int = 3  # attempts per LLM call when the reply isn't valid JSON
+    limit_seconds: int | None = None  # only the first part of the stream (trial runs)
 
 
 @dataclass
@@ -199,6 +200,9 @@ def analyze(
     transcript = json.loads(transcript_file.read_text(encoding="utf-8"))
     chat_file = sibling(video, ".chat_parsed.json")
     chat = json.loads(chat_file.read_text(encoding="utf-8")) if chat_file.exists() else []
+    if s.limit_seconds:
+        transcript = [x for x in transcript if x["start"] < s.limit_seconds]
+        chat = [m for m in chat if seconds(m["time"]) < s.limit_seconds]
 
     segs = build_segments(transcript, chat, s.seg_seconds, s.context_seconds, s.sample_size)
     header = f"主播：{streamer}　直播标题：{title}"
@@ -303,6 +307,7 @@ def main() -> int:
     p.add_argument("--title", default="")
     p.add_argument("--config", type=Path, default=Path(__file__).resolve().parents[1] / "config.json")
     p.add_argument("--no-proxy", action="store_true", help="ignore llm.proxy (running on the proxy machine itself)")
+    p.add_argument("--minutes", type=int, help="only analyze the first N minutes (trial run)")
     args = p.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -319,7 +324,8 @@ def main() -> int:
         llm.proxy = None
     a = json.loads(args.config.read_text(encoding="utf-8")).get("analysis") or {}
     settings = AnalysisSettings(seg_seconds=int(a.get("segment_minutes", 5) * 60),
-                                context_seconds=int(a.get("context_seconds", 30)), min_score=int(a.get("min_score", 7)))
+                                context_seconds=int(a.get("context_seconds", 30)), min_score=int(a.get("min_score", 7)),
+                                limit_seconds=args.minutes * 60 if args.minutes else None)
     complete = functools.partial(chat, llm, response_format={"type": "json_object"})
     try:
         print(analyze(args.video, complete, args.streamer, args.title, settings))

@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from backend.analysis import AnalysisError, analyze, build_segments, chat_levels, highlights_path
+from backend.analysis import AnalysisError, AnalysisSettings, analyze, build_segments, chat_levels, highlights_path
 
 
 def tr(start, text, dur=2.0):
@@ -139,6 +139,17 @@ def test_analyze_prompts_carry_the_material(tmp_path):
     assert "¥500" in seg2 and "00:06:40 かわいい" in seg2
     scoring = llm.calls[2][-1]["content"]
     assert "【00:00:00】" in scoring and "【00:05:00】" in scoring
+
+
+def test_limit_analyzes_only_the_first_minutes(tmp_path):
+    video = make_archive(tmp_path)  # transcript reaches 00:06:42 -> 2 segments
+    llm = FakeLLM(SCORES[:1])
+    analyze(video, llm, streamer="A", title="t", settings=AnalysisSettings(limit_seconds=300))
+
+    rows = json.loads(highlights_path(video).read_text(encoding="utf-8"))["rows"]
+    assert [r["start"] for r in rows] == ["00:00:00"]
+    assert len(llm.calls) == 2  # 1 segment + scoring
+    assert "まだチュートリアル" not in llm.calls[0][-1]["content"]  # 00:06:40: beyond the limit, not even context
 
 
 def test_bad_json_is_retried(tmp_path):
