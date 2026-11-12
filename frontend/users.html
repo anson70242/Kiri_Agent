@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>用户 · 切片小助手</title>
+<script src="/common.js"></script>
+<style>
+  :root { /* same 天青 Azure theme as monitor.html */
+    --bg: linear-gradient(160deg, #eef5ff 0%, #f3faff 50%, #f5f7ff 100%) fixed;
+    --card: #ffffff; --text: #172554; --muted: #5a6b8c; --border: #c7dbf7;
+    --accent: #2563eb; --live: #e11d48; --live-bg: #fde2e7; --ok: #059669; --ok-bg: #d1fae5;
+    --off: #5a6b8c; --off-bg: #e8effb;
+    --topbar-bg: rgba(255,255,255,.85); --topbar-text: #1e40af; --topbar-muted: #5a6b8c;
+    --topbar-accent: #2563eb; --topbar-border: #c7dbf7;
+    --shadow: 0 1px 2px rgba(37,99,235,.06), 0 8px 20px rgba(37,99,235,.10);
+  }
+  * { box-sizing: border-box; }
+  html { color-scheme: light; }
+  body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; }
+  .topbar { position: sticky; top: 0; z-index: 10; background: var(--topbar-bg); backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--topbar-border); }
+  .topbar-inner { max-width: 1100px; margin: 0 auto; padding: 0 16px; height: 56px;
+    display: flex; align-items: center; gap: 28px; }
+  .brand { font-weight: 800; font-size: 18px; letter-spacing: .2px; color: var(--topbar-text); text-decoration: none; }
+  .nav { display: flex; gap: 4px; height: 100%; overflow-x: auto; }
+  .nav a { display: flex; align-items: center; padding: 0 12px; color: var(--topbar-muted); text-decoration: none;
+    font-size: 14px; border-bottom: 2px solid transparent; white-space: nowrap; }
+  .nav a:hover { color: var(--topbar-text); }
+  .nav a.active { color: var(--topbar-accent); border-bottom-color: var(--topbar-accent); font-weight: 600; }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 48px; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; margin-bottom: 16px; }
+  h1 { font-size: 22px; margin: 0; }
+  .spacer { flex: 1; }
+  .meta { color: var(--muted); font-size: 13px; }
+  .chip { padding: 2px 10px; border-radius: 999px; font-size: 13px; font-weight: 600; white-space: nowrap; }
+  .chip.ok { background: var(--ok-bg); color: var(--ok); }
+  .chip.bad { background: var(--live-bg); color: var(--live); }
+  .chip.off { background: var(--off-bg); color: var(--off); }
+  button { font: inherit; font-size: 14px; padding: 6px 14px; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--border); background: var(--card); color: var(--text); }
+  button:hover { border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: wait; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.danger { color: var(--live); }
+  button.danger:hover { border-color: var(--live); }
+  td button { font-size: 13px; padding: 3px 10px; }
+  .msg { color: var(--live); font-size: 13px; min-height: 1.2em; margin: 0 0 8px; }
+  .empty { color: var(--muted); padding: 20px; text-align: center; background: var(--card); border: 1px dashed var(--border);
+    border-radius: 12px; }
+  .wrap { background: var(--card); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th, td { border-bottom: 1px solid var(--off-bg); padding: 9px 12px; text-align: left; vertical-align: middle; }
+  tr:last-child td { border-bottom: 0; }
+  th { color: var(--muted); font-weight: 600; font-size: 12.5px; background: #f6f9ff; white-space: nowrap; }
+  td.name { font-weight: 600; overflow-wrap: anywhere; }
+  td.name .you { color: var(--muted); font-weight: 400; font-size: 12px; margin-left: 4px; }
+  td.t { white-space: nowrap; color: var(--muted); font-variant-numeric: tabular-nums; }
+  td .ops { display: flex; flex-wrap: wrap; gap: 6px; }
+  dialog { border: 1px solid var(--border); border-radius: 14px; padding: 20px; width: min(380px, calc(100vw - 32px));
+    color: var(--text); background: var(--card); box-shadow: 0 20px 48px rgba(23, 37, 84, .25); }
+  dialog::backdrop { background: rgba(23, 37, 84, .25); }
+  dialog h3 { margin: 0 0 14px; font-size: 17px; }
+  dialog form { display: flex; flex-direction: column; gap: 12px; }
+  dialog label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+  dialog input, dialog select { font: inherit; font-size: 14px; padding: 7px 10px;
+    border: 1px solid var(--border); border-radius: 8px; color: var(--text); background: var(--card); }
+  dialog .hint { font-size: 12px; color: var(--muted); }
+  dialog .msg { margin: 0; }
+  dialog .actions { display: flex; gap: 8px; justify-content: flex-end; }
+</style>
+</head>
+<body>
+<nav class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="/">切片小助手</a>
+    <div class="nav">
+      <a href="/">直播状态</a>
+      <a href="/archives">录播</a>
+      <a href="/highlights">路灯表</a>
+      <a href="/notify" class="admin-only">通知</a>
+      <a href="/users" class="admin-only auth-only active">用户</a>
+    </div>
+  </div>
+</nav>
+<main>
+  <header>
+    <h1>用户</h1>
+    <span class="meta" id="meta"></span>
+    <div class="spacer"></div>
+    <button id="add" hidden>＋ 新增用户</button>
+  </header>
+  <p class="msg" id="msg" role="alert"></p>
+  <div id="list"></div>
+</main>
+<dialog id="add-dlg" aria-labelledby="add-h">
+  <h3 id="add-h">新增用户</h3>
+  <form method="dialog">
+    <label>用户名 <input name="username" required autocomplete="off" placeholder="2-32 位"></label>
+    <label>密码 <input name="password" type="password" required autocomplete="new-password" placeholder="至少 8 位"></label>
+    <label>角色 <select name="role"><option value="member">成员</option><option value="admin">管理员</option></select></label>
+    <span class="hint">成员可以看和下载，不能修改设置；管理员可以做所有事</span>
+    <div class="msg" role="alert"></div>
+    <div class="actions">
+      <button type="button" value="cancel">取消</button>
+      <button class="primary" type="submit">添加</button>
+    </div>
+  </form>
+</dialog>
+<dialog id="pw-dlg" aria-labelledby="pw-h">
+  <h3 id="pw-h"></h3>
+  <form method="dialog">
+    <label>新密码 <input name="password" type="password" required autocomplete="new-password" placeholder="至少 8 位"></label>
+    <span class="hint">改密码后，这个用户在所有设备上都要重新登录</span>
+    <div class="msg" role="alert"></div>
+    <div class="actions">
+      <button type="button" value="cancel">取消</button>
+      <button class="primary" type="submit">保存</button>
+    </div>
+  </form>
+</dialog>
+<script>
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const ROLE = { admin: "管理员", member: "成员" };
+const msgEl = document.getElementById("msg");
+let me = null, users = [];
+
+// null on success, else the server's message
+async function send(method, url, body) {
+  const r = await fetch(url, { method, headers: { "Content-Type": "application/json" },
+    body: body && JSON.stringify(body) });
+  if (r.ok) return null;
+  const j = await r.json().catch(() => ({}));
+  const d = j.detail;
+  return typeof d === "string" ? d : Array.isArray(d) ? "输入不正确" : `出错了 (${r.status})`;
+}
+const userUrl = name => `/api/users?name=${encodeURIComponent(name)}`;
+const isMe = u => me?.username && u.username.toLowerCase() === me.username.toLowerCase();
+const day = iso => iso ? new Date(iso).toLocaleDateString("zh-CN") : "";
+
+function row(u) {
+  const n = esc(u.username), self = isMe(u);
+  const ops = [`<button data-op="password" aria-label="重设密码 ${n}">重设密码</button>`];
+  if (!self) {
+    ops.push(u.role === "admin"
+      ? `<button data-op="member" aria-label="设为成员 ${n}">设为成员</button>`
+      : `<button data-op="admin" aria-label="设为管理员 ${n}">设为管理员</button>`);
+    ops.push(u.disabled
+      ? `<button data-op="enable" aria-label="启用 ${n}">启用</button>`
+      : `<button data-op="disable" aria-label="停用 ${n}">停用</button>`);
+    ops.push(`<button class="danger" data-op="delete" aria-label="删除 ${n}">删除</button>`);
+  }
+  return `<tr data-name="${n}">
+    <td class="name">${n}${self ? `<span class="you">（你）</span>` : ""}</td>
+    <td>${ROLE[u.role] || esc(u.role)}</td>
+    <td>${u.disabled ? `<span class="chip bad">已停用</span>` : `<span class="chip ok">正常</span>`}</td>
+    <td class="t">${day(u.created_at)}</td>
+    <td><div class="ops">${ops.join("")}</div></td>
+  </tr>`;
+}
+
+function draw() {
+  document.getElementById("meta").textContent = `共 ${users.length} 位`;
+  document.getElementById("list").innerHTML = !users.length ? `<div class="empty">还没有用户</div>`
+    : `<div class="wrap"><table>
+        <thead><tr><th>用户名</th><th>角色</th><th>状态</th><th>创建日期</th><th>操作</th></tr></thead>
+        <tbody>${users.map(row).join("")}</tbody></table></div>`;
+}
+
+async function load() {
+  const r = await fetch("/api/users");
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { msgEl.textContent = typeof j.detail === "string" ? j.detail : `出错了 (${r.status})`; return; }
+  users = j.users;
+  draw();
+}
+
+function wire(dlg, onSubmit) {
+  const form = dlg.querySelector("form"), msg = dlg.querySelector(".msg");
+  dlg.querySelector("button[value=cancel]").onclick = () => dlg.close();
+  form.onsubmit = async e => {
+    e.preventDefault();
+    const submit = form.querySelector("[type=submit]");
+    submit.disabled = true; msg.textContent = "";
+    const err = await onSubmit(form);
+    submit.disabled = false;
+    if (err) msg.textContent = err;
+    else { dlg.close(); msgEl.textContent = ""; await load(); }
+  };
+  return { form, msg };
+}
+
+const addDlg = document.getElementById("add-dlg");
+const add = wire(addDlg, f => send("POST", "/api/users",
+  { username: f.username.value.trim(), password: f.password.value, role: f.role.value }));
+document.getElementById("add").onclick = () => { add.form.reset(); add.msg.textContent = ""; addDlg.showModal(); };
+
+const pwDlg = document.getElementById("pw-dlg");
+let pwName = null;
+const pw = wire(pwDlg, f => send("PATCH", userUrl(pwName), { password: f.password.value }));
+
+document.getElementById("list").addEventListener("click", async e => {
+  const b = e.target.closest("button[data-op]");
+  if (!b) return;
+  const name = b.closest("tr").dataset.name, op = b.dataset.op;
+  msgEl.textContent = "";
+  if (op === "password") {
+    pwName = name;
+    document.getElementById("pw-h").textContent = `重设密码 · ${name}`;
+    pw.form.reset(); pw.msg.textContent = "";
+    pwDlg.showModal();
+    return;
+  }
+  let err;
+  b.disabled = true;
+  if (op === "delete") {
+    if (!confirm(`删除用户「${name}」？\n删除后不能恢复，这个用户会马上被登出。`)) { b.disabled = false; return; }
+    err = await send("DELETE", userUrl(name));
+  } else {
+    const body = { admin: { role: "admin" }, member: { role: "member" },
+                   disable: { disabled: true }, enable: { disabled: false } }[op];
+    err = await send("PATCH", userUrl(name), body);
+  }
+  b.disabled = false;
+  if (err) msgEl.textContent = `${name}：${err}`;
+  else await load();
+});
+
+kiri.me.then(m => {
+  me = m;
+  if (!m.auth) {
+    document.getElementById("list").innerHTML =
+      `<div class="empty">登录没有开启（config.json 里 auth.enabled 不是 true），没有用户可以管理。</div>`;
+    return;
+  }
+  document.getElementById("add").hidden = false;
+  load();
+}, () => { msgEl.textContent = "连不上后端，确认 server 在运行"; });
+</script>
+</body>
+</html>

@@ -20,6 +20,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from backend.auth import auth_enabled, load_auth
 from backend.downloader import load_settings
 from backend.downloader.auto import attach
 from backend.notify.qq_gateway import QQGateway
@@ -27,11 +28,14 @@ from backend.notify.qq_gateway import QQGateway
 from . import StreamMonitor
 from .__main__ import REPO_ROOT, load_config
 from .archives import create_router
+from .auth_api import install_auth, install_open_me
 from .notify_api import create_notify_router
 from .base import LiveState, Streamer
 from .roster import RosterError, entry_id, load_roster
 
 PAGE = REPO_ROOT / "frontend" / "monitor.html"
+USERS_PAGE = REPO_ROOT / "frontend" / "users.html"
+COMMON_JS = REPO_ROOT / "frontend" / "common.js"
 
 ChannelCheck = Callable[[Streamer], Awaitable[str | None]]  # error message, or None if it exists
 
@@ -55,7 +59,8 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
                check_channel: ChannelCheck | None = None) -> FastAPI:
     """`dev`: local preview of the pages. Still shows live status, but never downloads,
     transcribes, analyzes or sends Discord messages.
-    `check_channel`: replaces the real "does this channel exist" check (tests)."""
+    `check_channel`: replaces the real "does this channel exist" check (tests).
+    Login is on when the config has `"auth": {"enabled": true}` (never in dev mode)."""
     _, cfg_interval = load_config(config)
     interval = interval or cfg_interval
     roster = load_roster(config)
@@ -93,6 +98,12 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
     app = FastAPI(title="Kiri Live Monitor", lifespan=lifespan)
     app.state.notifier = notifier
     app.state.auto = auto
+    if auth_enabled(config) and not dev:
+        install_auth(app, load_auth(config))
+        print("Login: on")
+    else:
+        install_open_me(app)
+        print("Login: off")
     app.include_router(create_router(load_settings(config)[0].output_dir))
     app.include_router(create_notify_router(notifier, roster, gateway))
 
@@ -114,6 +125,15 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
     @app.get("/")
     async def index() -> FileResponse:
         return FileResponse(PAGE)
+
+    @app.get("/common.js", include_in_schema=False)
+    async def common_js() -> FileResponse:
+        """Shared page script: who is logged in, role-based UI, 401 -> login."""
+        return FileResponse(COMMON_JS, media_type="text/javascript")
+
+    @app.get("/users", include_in_schema=False)
+    async def users_page() -> FileResponse:
+        return FileResponse(USERS_PAGE)
 
     @app.get("/api/status")
     async def status() -> dict:

@@ -4,7 +4,6 @@ Runs the real app (with a fake channel check and no background polling) on a fre
 port and drives it with Playwright. Needs `uv run playwright install chromium`.
 """
 
-import socket
 import threading
 import time
 
@@ -14,6 +13,7 @@ from fastapi.testclient import TestClient
 
 from backend.monitor.server import create_app
 
+from .helpers import free_port
 from .test_streamers_api import channel_exists, write_config
 
 sync_api = pytest.importorskip("playwright.sync_api")
@@ -44,9 +44,7 @@ def page(browser):
 @pytest.fixture
 def server(tmp_path):
     cfg = write_config(tmp_path)
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        port = s.getsockname()[1]
+    port = free_port()  # never one Chromium refuses (e.g. 6666)
     # lifespan off: no polling of the (fake) channels in the background.
     srv = uvicorn.Server(uvicorn.Config(create_app(cfg, check_channel=channel_exists),
                                         host="127.0.0.1", port=port, lifespan="off", log_level="warning"))
@@ -147,9 +145,7 @@ def notify_server(tmp_path, monkeypatch):
     cfg = notify_config(tmp_path)
     app = create_app(cfg)
     app.state.notifier.qq.groups.register("G1ABCDEF")  # as if the bot was added to a group
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        port = s.getsockname()[1]
+    port = free_port()  # never one Chromium refuses (e.g. 6666)
     srv = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, lifespan="off", log_level="warning"))
     t = threading.Thread(target=srv.run, daemon=True)
     t.start()

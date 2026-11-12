@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>切片小助手</title>
+<script src="/common.js"></script>
 <style>
   :root { /* 天青 Azure: white top bar, soft blue gradient background */
     --bg: linear-gradient(160deg, #eef5ff 0%, #f3faff 50%, #f5f7ff 100%) fixed;
@@ -142,7 +143,8 @@
       <a href="/" class="active">直播状态</a>
       <a href="/archives">录播</a>
       <a href="/highlights">路灯表</a>
-      <a href="/notify">通知</a>
+      <a href="/notify" class="admin-only">通知</a>
+      <a href="/users" class="admin-only auth-only">用户</a>
     </div>
   </div>
 </nav>
@@ -154,7 +156,7 @@
     <span class="meta" id="meta">加载中…</span>
     <button id="notify" hidden>开启开播通知</button>
     <button id="refresh">立即刷新</button>
-    <button id="add">＋ 新增主播</button>
+    <button id="add" class="admin-only">＋ 新增主播</button>
   </header>
   <div class="toolbar">
     <div class="search" id="search">
@@ -238,7 +240,7 @@ function card(s) {
     <div class="top">
       ${s.avatar ? `<img class="avatar" ${img(s.avatar)}>` : ""}
       <span class="name" title="${esc(s.name)} · ${esc(s.channel)}">${esc(s.name)}</span>
-      <button class="gear" data-id="${esc(key(s))}" aria-label="设置 ${esc(s.name)}" title="设置">⚙</button>
+      <button class="gear admin-only" data-id="${esc(key(s))}" aria-label="设置 ${esc(s.name)}" title="设置">⚙</button>
     </div>
     <div class="tags">
       <span class="chip state"><span class="dot"></span>${LABEL[s.state] || s.state}</span>
@@ -291,7 +293,7 @@ function draw() {
     ? `<section class="group"><h2>${title} · ${items.length}</h2><div class="grid ${cls}">${items.map(card).join("")}</div></section>`
     : "";
   document.getElementById("grid").innerHTML =
-    !all.length ? `<div class="empty">还没有主播，点右上角「＋ 新增主播」</div>`
+    !all.length ? `<div class="empty">还没有主播${kiri.isAdmin() ? "，点右上角「＋ 新增主播」" : ""}</div>`
     : !rows.length ? `<div class="empty">没有符合条件的主播</div>`
     : section("直播中 / 待机", active, "") + section("未开播", rest, "compact");
 }
@@ -457,6 +459,7 @@ if ("Notification" in window && Notification.permission === "default") {
 
 load();
 setInterval(load, POLL_MS);
+kiri.me.then(draw, () => {});  // the empty-state hint depends on the role
 
 // ---- Streamer management ----
 async function send(method, url, body) {
@@ -485,7 +488,9 @@ function wire(dlg, onSubmit) {
 const addDlg = document.getElementById("add-dlg");
 const add = wire(addDlg, f => send("POST", "/api/streamers",
   { name: f.name.value, platform: f.platform.value, channel: f.channel.value }));
-document.getElementById("add").onclick = () => { add.form.reset(); add.msg.textContent = ""; addDlg.showModal(); };
+document.getElementById("add").onclick = () => {
+  if (!kiri.isAdmin()) return;
+  add.form.reset(); add.msg.textContent = ""; addDlg.showModal(); };
 
 const gearDlg = document.getElementById("gear-dlg");
 let gearId = null;
@@ -495,7 +500,7 @@ const gear = wire(gearDlg, f => send("PATCH", idUrl(),
     upload: f.upload.checked, upload_sheet: f.upload_sheet.value }));
 document.getElementById("grid").addEventListener("click", e => {
   const b = e.target.closest(".gear");
-  if (!b) return;
+  if (!b || !kiri.isAdmin()) return;  // members never get the settings dialog
   gearId = b.dataset.id;
   const s = settings[gearId] || {};
   const row = lastData?.streamers.find(r => key(r) === gearId);

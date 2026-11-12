@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>登录 · 切片小助手</title>
+<style>
+  :root { /* same 天青 Azure theme as monitor.html */
+    --bg: linear-gradient(160deg, #eef5ff 0%, #f3faff 50%, #f5f7ff 100%) fixed;
+    --card: #ffffff; --text: #172554; --muted: #5a6b8c; --border: #c7dbf7;
+    --accent: #2563eb; --live: #e11d48; --live-bg: #fde2e7;
+    --topbar-bg: rgba(255,255,255,.85); --topbar-text: #1e40af; --topbar-border: #c7dbf7;
+    --shadow: 0 1px 2px rgba(37,99,235,.06), 0 8px 20px rgba(37,99,235,.10);
+  }
+  * { box-sizing: border-box; }
+  html { color-scheme: light; }
+  body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; }
+  .topbar { position: sticky; top: 0; z-index: 10; background: var(--topbar-bg); backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--topbar-border); }
+  .topbar-inner { max-width: 1100px; margin: 0 auto; padding: 0 16px; height: 56px; display: flex; align-items: center; }
+  .brand { font-weight: 800; font-size: 18px; letter-spacing: .2px; color: var(--topbar-text); text-decoration: none; }
+  main { max-width: 380px; margin: 0 auto; padding: 64px 16px 48px; }
+  form { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px;
+    box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 14px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+  input { font: inherit; font-size: 15px; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--card); color: var(--text); }
+  input:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent); }
+  button { font: inherit; font-size: 15px; font-weight: 600; padding: 9px 12px; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--accent); background: var(--accent); color: #fff; }
+  button:disabled { opacity: .6; cursor: default; }
+  .error { min-height: 1.5em; margin: 0; font-size: 13px; color: var(--live); }
+  .hint { font-size: 12px; color: var(--muted); margin: 0; }
+</style>
+</head>
+<body>
+<nav class="topbar">
+  <div class="topbar-inner"><a class="brand" href="/">切片小助手</a></div>
+</nav>
+<main>
+  <form id="form" autocomplete="on">
+    <h1>登录</h1>
+    <label>用户名 <input id="username" name="username" autocomplete="username" required autofocus></label>
+    <label>密码 <input id="password" name="password" type="password" autocomplete="current-password" required></label>
+    <p class="error" id="error" role="alert"></p>
+    <button id="submit" type="submit">登录</button>
+    <p class="hint">账号由管理员创建；忘记密码请联系管理员。</p>
+  </form>
+</main>
+<script>
+  const form = document.getElementById("form");
+  const errorBox = document.getElementById("error");
+  const submit = document.getElementById("submit");
+
+  // Only go back to a path on this site (never "//other.site").
+  function nextPath() {
+    const next = new URLSearchParams(location.search).get("next") || "/";
+    return next.startsWith("/") && !next.startsWith("//") && !next.startsWith("/\\") ? next : "/";
+  }
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    errorBox.textContent = "";
+    submit.disabled = true;
+    try {
+      const r = await fetch("/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: document.getElementById("username").value.trim(),
+          password: document.getElementById("password").value,
+        }),
+      });
+      if (r.ok) {
+        location.replace(nextPath());
+        return;
+      }
+      let detail = "登录失败";
+      try { detail = (await r.json()).detail || detail; } catch {}
+      errorBox.textContent = typeof detail === "string" ? detail : "登录失败";
+      document.getElementById("password").select();
+    } catch {
+      errorBox.textContent = "连不上服务器，请稍后再试";
+    } finally {
+      submit.disabled = false;
+    }
+  });
+</script>
+</body>
+</html>

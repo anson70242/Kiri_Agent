@@ -1,0 +1,48 @@
+# HTTPS on the server's bare public IPv4 (no domain), with a free Let's Encrypt IP
+# certificate. LE issues IP certificates only under the "shortlived" profile (~6 days);
+# Caddy renews them by itself well before expiry (LE's ARI window), via http-01 on port 80 or
+# tls-alpn-01 on 443. Certificates live in the caddy-data volume, so redeploys keep them.
+# PUBLIC_IP comes from the server's .env (see docs/deploy.md); never hard-code it here.
+{
+	# Browsers send no SNI when you browse to an IP, and behind Docker's NAT the local
+	# address Caddy sees is the container's, so tell it which certificate to serve.
+	default_sni {$PUBLIC_IP}
+
+	servers {
+		# Only TCP 80/443 are published; don't advertise HTTP/3 (UDP).
+		protocols h1 h2
+		timeouts {
+			# Default 1m: a download paused in the browser, or an upstream that takes a
+			# while to answer, would be cut. Still drops connections that are truly dead.
+			write_idle 10m
+		}
+	}
+}
+
+{$PUBLIC_IP} {
+	tls {
+		# Let's Encrypt only (its default directory): Caddy's ZeroSSL fallback would
+		# have to support the profile too.
+		issuer acme {
+			profile shortlived
+		}
+	}
+
+	# No HSTS: browsers ignore it for IP-address hosts (RFC 6797 §8.1), and pinning HTTPS
+	# on a 6-day certificate only makes a missed renewal worse.
+	# "?" = set only when the app hasn't set the header itself.
+	header {
+		?X-Content-Type-Options nosniff
+		?Referrer-Policy same-origin
+		?X-Frame-Options DENY
+		?Content-Security-Policy "frame-ancestors 'none'"
+		-Server
+	}
+
+	# Sends X-Forwarded-For (the real client IP; incoming X-Forwarded-* from the client is
+	# discarded), X-Forwarded-Proto https and X-Forwarded-Host. No body size limit.
+	reverse_proxy kiri:8770 {
+		# Pass streamed responses (zip downloads, multi-GB videos) through unbuffered.
+		flush_interval -1
+	}
+}

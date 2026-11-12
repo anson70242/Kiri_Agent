@@ -321,6 +321,33 @@ docker compose up -d --build     # 在本地跑容器（需要 .env）
 
 服务器的一次性设定（Docker、部署用户、SSH key、GitHub secrets、Tailscale）：[docs/deploy.md](docs/deploy.md)。
 
+### 登录
+
+`config.json` 的 `"auth": {"enabled": true}` 打开登录（本地预览 `--dev` 不需要登录）。两种角色：
+
+| | 管理员 | 成员 |
+|---|---|---|
+| 看直播状态、录播、路灯表，下载影片 / 字幕 / 路灯表 / zip | ✅ | ✅ |
+| 新增或修改主播、齿轮设定、通知页、用户页 | ✅ | ❌ |
+
+第一个管理员在服务器上建（输入两次密码）：
+
+```sh
+docker compose exec kiri /app/.venv/bin/python -m backend.auth add-user <名字> --admin
+```
+
+之后在「用户」页面新增账号、重设密码、停用。还有 `list` / `passwd <名字>` / `disable <名字>` / `enable <名字>`。
+建好第一个管理员之前，所有页面都只显示这条命令。登录 30 天有效；同一个 IP 输错 5 次锁 15 分钟；
+停用或改密码会让那个人马上下线。账号存在 `data/users.json`（密码是 scrypt 哈希），登录状态在 `data/sessions.json`。
+见 [auth.py](backend/auth.py)、[auth_api.py](backend/monitor/auth_api.py)（权限规则都在 `required_role`）。
+
+### 公网 HTTPS
+
+没有域名也行：Caddy（[caddy/Caddyfile](caddy/Caddyfile)）向 Let's Encrypt 申请 IP 证书（6 天有效，自动续期），
+再转给网页。在服务器 `.env` 设 `COMPOSE_PROFILES=public`、`PUBLIC_IP`、`PUBLIC_BIND_IP` 才会启动，
+路由器要把 TCP 80 / 443 转发到服务器。步骤见 [docs/deploy.md](docs/deploy.md) 的「公网 HTTPS」。
+**先建好管理员、确认要登录才能进，再开放公网。**
+
 ## 配置
 
 `config.json` 放所有可以提交的设定：`monitor`、`notify`、`llm`、`analysis`、`translate`、`asr`、

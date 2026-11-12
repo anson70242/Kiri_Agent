@@ -9,7 +9,7 @@ git push main ─▶ CI（测试 + 构建镜像）─通过─▶ Deploy：rsync
 - PR 和 push 到 main 都会跑 CI（[ci.yml](../.github/workflows/ci.yml)）。
 - 只有 main 上 CI 通过的那个 commit 才会部署（[deploy.yml](../.github/workflows/deploy.yml)）。
 - 服务器上的 `.env`（密钥）和数据卷 `kiri_kiri-data`（通知状态）部署时不会被动到。
-- 网页只监听服务器本机，公网 IP 上看不到；你通过 Tailscale 访问。
+- 网页本身只监听服务器本机；你通过 Tailscale 访问。要从公网 IP 用 HTTPS 访问，见「公网 HTTPS」。
 
 ## 服务器
 
@@ -49,6 +49,55 @@ sudo tailscale serve --bg 8770    # 把网页分享给你的 Tailscale 设备
 成功后会显示一个网址，像 `https://<机器名>.<你的tailnet>.ts.net`。这个设置重启后会保留。
 
 你的电脑和手机：装 Tailscale App，用同一个账号登录，打开上面的网址就能看。
+
+## 公网 HTTPS（没有域名，直接用 IP）
+
+不装 Tailscale 的人也要能看时，用 `caddy` 服务把网页挂到服务器的公网 IP 上：
+`https://<公网IP>`。证书是 Let's Encrypt 免费的 IP 证书（有效期约 6 天，`shortlived` 档），
+Caddy 自己申请、自己续期，配置在 [caddy/Caddyfile](../caddy/Caddyfile)。
+Tailscale 那条路照旧能用。
+
+```
+浏览器 ──https://<公网IP>──▶ 路由器 80/443 转发 ──▶ caddy（容器）──▶ kiri:8770
+```
+
+**一定要先有登录。** 公开后任何人都能打开这个网址，所以要等 kiri 的登录功能上线后再开。
+
+**1. 开端口**
+
+- 路由器（服务器在内网 `192.168.x.x` 后面）：把 TCP **80** 和 **443** 转发到服务器的内网 IP；
+  在路由器里给服务器固定这个内网 IP（DHCP 保留）。
+- 服务器防火墙如果开着：`sudo ufw allow 80,443/tcp`。云主机则在安全组里放行 80、443。
+- 80 也必须开：Let's Encrypt 从外网连 80（http-01）或 443（tls-alpn-01）来验证这个 IP，续期也是。
+
+**2. 在服务器 `~/kiri/.env` 加三行**，然后 `docker compose up -d`：
+
+```sh
+COMPOSE_PROFILES=public       # 打开 caddy 服务；删掉这行就关掉
+PUBLIC_IP=<公网IPv4>          # curl -4 ifconfig.me 查；IP 不要写进 git（仓库是公开的）
+PUBLIC_BIND_IP=<服务器内网IP>  # ip -4 addr 查，例如 192.168.1.10
+```
+
+`PUBLIC_BIND_IP` 不能省：`tailscale serve` 已经占了 Tailscale IP 上的 443，
+caddy 再去占 `0.0.0.0:443` 会报 `address already in use`，所以只绑内网 IP。
+
+**3. 检查证书**
+
+```sh
+docker compose logs caddy | grep -iE "certificate obtained|error"   # 看到 certificate obtained 就成功
+curl -sv https://<公网IP> -o /dev/null 2>&1 | grep -E "subject|expire|issuer"
+```
+
+在外网（例如手机关掉 Wi-Fi）打开 `https://<公网IP>`，浏览器不应有警告。
+
+**续期**：证书约 6 天过期，Caddy 在后台按 Let's Encrypt 建议的时间（过期前两三天）自动续，不用管。
+证书存在数据卷 `kiri_caddy-data` 里，重新部署不会丢、也不会重新申请。
+续期要求 80/443 一直能从外网连到；端口转发被关掉的话，几天后网页就会出现证书错误。
+
+**公网 IP 变了**：家用宽带的 IP 可能会变。变了就改 `.env` 的 `PUBLIC_IP`，再
+`docker compose up -d --force-recreate caddy`，Caddy 会为新 IP 申请证书。
+
+**关掉公网访问**：删掉 `.env` 里的 `COMPOSE_PROFILES=public`，然后 `docker compose stop caddy && docker compose rm -f caddy`。
 
 ## 部署
 

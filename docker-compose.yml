@@ -15,9 +15,12 @@ services:
       - kiri-data:/app/data  # notify state, chat retry queue, youtube_cookies.txt
       - kiri-downloads:/app/downloads
     ports:
-      # Server-local only. Reach it from your devices through `tailscale serve`
-      # (see docs/deploy.md); the public IP never exposes the dashboard.
+      # Server-local only: reach it from your devices through `tailscale serve`
+      # (see docs/deploy.md). The public IP gets it only through caddy (HTTPS) below.
       - "127.0.0.1:8770:8770"
+    networks:
+      - default  # whisper
+      - edge     # caddy
     depends_on:
       - whisper
     logging: &logging
@@ -48,6 +51,43 @@ services:
       retries: 3
     logging: *logging
 
+  # HTTPS on the server's public IP (no domain): a Let's Encrypt IP certificate, see
+  # caddy/Caddyfile. Off unless the server's .env has COMPOSE_PROFILES=public and
+  # PUBLIC_IP=<public IPv4> (docs/deploy.md).
+  caddy:
+    image: caddy:2.11.9
+    container_name: kiri-caddy
+    profiles: [public]
+    restart: unless-stopped
+    environment:
+      PUBLIC_IP: ${PUBLIC_IP:-}
+    ports:
+      # PUBLIC_BIND_IP: the host address the router forwards 80/443 to. Needed when
+      # `tailscale serve` already holds 443 on the Tailscale IP, which makes 0.0.0.0:443
+      # fail with "address already in use".
+      - "${PUBLIC_BIND_IP:-0.0.0.0}:80:80"
+      - "${PUBLIC_BIND_IP:-0.0.0.0}:443:443"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data      # certificates + ACME account: must survive redeploys
+      - caddy-config:/config
+    networks:
+      edge:
+        # Fixed, so the app can trust X-Forwarded-* from this address only.
+        ipv4_address: 172.29.70.10
+    depends_on:
+      - kiri
+    logging: *logging
+
+networks:
+  # caddy <-> kiri only. Fixed subnet so caddy's address above never changes.
+  edge:
+    ipam:
+      config:
+        - subnet: 172.29.70.0/24
+
 volumes:
   kiri-data:
   kiri-downloads:
+  caddy-data:
+  caddy-config:

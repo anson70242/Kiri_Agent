@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>路灯表 · 切片小助手</title>
+<script src="/common.js"></script>
 <style>
   :root { /* same 天青 Azure theme as monitor.html */
     --bg: linear-gradient(160deg, #eef5ff 0%, #f3faff 50%, #f5f7ff 100%) fixed;
@@ -90,7 +91,8 @@
       <a href="/">直播状态</a>
       <a href="/archives">录播</a>
       <a href="/highlights" class="active">路灯表</a>
-      <a href="/notify">通知</a>
+      <a href="/notify" class="admin-only">通知</a>
+      <a href="/users" class="admin-only auth-only">用户</a>
     </div>
   </div>
 </nav>
