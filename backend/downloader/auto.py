@@ -52,6 +52,7 @@ from backend.translate import translate as translate_transcript
 from backend.monitor import StreamMonitor, Streamer, StreamStatus
 from backend.monitor.roster import load_roster
 from backend.notify import EventKind, LiveNotifier, StreamEvent, load_notifier
+from backend.state_file import StateFile
 
 from . import REPO_ROOT, download, downloader_for, load_settings
 from .base import DownloadError, DownloadResult, DownloadSettings
@@ -101,6 +102,13 @@ class Job:
         return cls(**d | {"status": StreamStatus.from_dict(d["status"])})
 
 
+def decode_jobs(raw: Any) -> list[Job]:
+    """The download queue file's JSON -> jobs; raises if it isn't a list of jobs."""
+    if not isinstance(raw, list):
+        raise ValueError(f"expected a list of jobs, got {type(raw).__name__}")
+    return [Job.from_dict(d) for d in raw]
+
+
 @dataclass
 class Outcome:
     kind: Literal["done", "wait", "error"]
@@ -135,7 +143,9 @@ class AutoDownloader:
         self.settings = settings
         self.streamers = list(streamers)
         self.keep = keep
-        self.state_file = state_file
+        # Runtime state: a damaged queue is set aside as a backup (the owner is alerted).
+        self._queue = StateFile(state_file, default=list, policy="recover", decode=decode_jobs,
+                                encode=lambda jobs: [j.to_dict() for j in jobs])
         self.retry_interval = retry_interval
         self.give_up = give_up
         self.max_errors = max_errors
@@ -150,21 +160,15 @@ class AutoDownloader:
 
     # ---- queue ----
 
+    @property
+    def state_file(self) -> Path:
+        return self._queue.path
+
     def load(self) -> list[Job]:
-        try:
-            raw = json.loads(self.state_file.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            return []
-        except (OSError, ValueError) as e:
-            log.error("can't read %s (%s); treating the queue as empty", self.state_file, e)
-            return []
-        return [Job.from_dict(d) for d in raw]
+        return self._queue.load()
 
     def save(self, jobs: Iterable[Job]) -> None:
-        self.state_file.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.state_file.with_name(self.state_file.name + ".tmp")
-        tmp.write_text(json.dumps([j.to_dict() for j in jobs], ensure_ascii=False, indent=1), encoding="utf-8")
-        tmp.replace(self.state_file)
+        self._queue.save(list(jobs))
 
     def on_ended(self, event: StreamEvent) -> None:
         """LiveNotifier.on_ended listener: queue the archive of a stream that ended."""

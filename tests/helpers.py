@@ -79,3 +79,15 @@ def free_port() -> int:
             port = s.getsockname()[1]
         if port not in CHROME_UNSAFE:
             return port
+
+
+class AlertRecorder(Recorder):
+    """A Recorder that also takes operator alerts, built the way load_notifier builds a
+    channel: register it with `monkeypatch.setitem(Notifier.registry, "rec", AlertRecorder)`."""
+
+    def __init__(self, url: str = "", mention: str | None = None):
+        super().__init__()
+        self.alerts: list[str] = []
+
+    async def alert(self, text: str) -> None:
+        self.alerts.append(text)
