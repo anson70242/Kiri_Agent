@@ -4,6 +4,9 @@ auto_download, keep, upload (to Tencent Docs) and upload_sheet (the spreadsheet 
 config.json is replaced on every deploy, so the list the dashboard edits lives in
 its own file (`monitor.streamers_file`, default `data/streamers.json` next to the
 config). config.json's `monitor.streamers` only seeds that file the first time.
+
+The file is operator data: when it is damaged, loading raises StateFileError (the
+service refuses to start) rather than run on an empty or re-seeded list.
 """
 
 from __future__ import annotations
@@ -12,6 +15,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from backend.state_file import StateFile
 from backend.tencent_docs import parse_file_id
 
 from .base import PlatformMonitor, Streamer
@@ -27,20 +31,33 @@ def entry_id(e: dict[str, Any]) -> str:
     return f"{e['platform']}:{e['channel']}"
 
 
+def decode_entries(raw: Any) -> list[dict[str, Any]]:
+    """The file's entries; raises on anything that isn't a list of streamers."""
+    if not isinstance(raw, list):
+        raise ValueError(f"expected a list of streamers, got {type(raw).__name__}")
+    for e in raw:
+        if not (isinstance(e, dict) and isinstance(e.get("platform"), str) and isinstance(e.get("channel"), str)):
+            raise ValueError(f"not a streamer (needs platform and channel): {e!r}")
+    return raw
+
+
 class Roster:
     def __init__(self, path: Path, seed: list[dict[str, Any]]):
-        self.path = path
-        try:
-            self.entries: list[dict[str, Any]] = json.loads(path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            self.entries = [dict(e) for e in seed]
+        self._file: StateFile[list[dict[str, Any]] | None] = StateFile(
+            path, default=lambda: None, policy="strict", decode=decode_entries)
+        entries = self._file.load()
+        if entries is None:  # no file yet: seed it from the config
+            self.entries: list[dict[str, Any]] = [dict(e) for e in seed]
             self.save()
+        else:
+            self.entries = entries
+
+    @property
+    def path(self) -> Path:
+        return self._file.path
 
     def save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_name(self.path.name + ".tmp")
-        tmp.write_text(json.dumps(self.entries, ensure_ascii=False, indent=1), encoding="utf-8")
-        tmp.replace(self.path)
+        self._file.save(self.entries)
 
     def find(self, sid: str) -> dict[str, Any] | None:
         return next((e for e in self.entries if entry_id(e) == sid), None)

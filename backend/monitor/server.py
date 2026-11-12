@@ -12,6 +12,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import sys
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 
@@ -25,7 +26,7 @@ from backend.downloader import load_settings
 from backend.downloader.auto import attach
 from backend.notify.incidents import IncidentAlerts
 from backend.notify.qq_gateway import QQGateway
-from backend.state_file import set_incident_hook
+from backend.state_file import StateFileError, set_incident_hook
 
 from . import StreamMonitor
 from .__main__ import REPO_ROOT, load_config
@@ -257,13 +258,22 @@ def main() -> None:
         uvicorn.run("backend.monitor.server:dev_app", factory=True, host=args.host, port=args.port,
                     log_level="warning", reload=True, reload_dirs=[str(REPO_ROOT / "backend")])
         return
-    uvicorn.run(create_app(args.config, args.interval, dev=args.dev), host=args.host, port=args.port,
+    uvicorn.run(app_or_exit(args.config, args.interval, dev=args.dev), host=args.host, port=args.port,
                 log_level="warning")
+
+
+def app_or_exit(config: Path, interval: float | None = None, dev: bool = False) -> FastAPI:
+    """create_app, but damaged operator data ends the process with one readable line."""
+    try:
+        return create_app(config, interval, dev=dev)
+    except StateFileError as e:
+        print(e.message, file=sys.stderr)
+        sys.exit(1)
 
 
 def dev_app() -> FastAPI:
     """App factory for `--dev --reload`."""
-    return create_app(Path(os.environ.get("KIRI_DEV_CONFIG") or REPO_ROOT / "config.json"), dev=True)
+    return app_or_exit(Path(os.environ.get("KIRI_DEV_CONFIG") or REPO_ROOT / "config.json"), dev=True)
 
 
 if __name__ == "__main__":

@@ -12,6 +12,8 @@ import logging
 import sys
 from pathlib import Path
 
+from backend.state_file import StateFileError
+
 from . import LiveState, StreamMonitor, Streamer, StreamStatus
 from .roster import load_roster
 
@@ -100,3 +102,6 @@ if __name__ == "__main__":
         sys.exit(asyncio.run(main()))
     except KeyboardInterrupt:
         pass
+    except StateFileError as e:  # damaged operator data: one readable line, no traceback
+        print(e.message, file=sys.stderr)
+        sys.exit(1)

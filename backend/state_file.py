@@ -16,7 +16,9 @@ on it (the wrong shape). What happens then is the caller's policy:
 
 Incidents are always logged, then go to the StateFile's own `on_incident`, or else to
 the hook the application installed with `set_incident_hook` (the operator alert). This
-module knows nothing about where an alert ends up.
+module knows nothing about where an alert ends up. A strict store that re-reads its file
+while running and finds it damaged keeps its last good value and sends its own Incident
+(no backup) through `report`.
 """
 
 from __future__ import annotations
@@ -43,18 +45,27 @@ class StateFileError(Exception):
         self.path = path
         self.reason = reason
 
+    @property
+    def message(self) -> str:
+        """One readable line for the owner: command lines print it instead of a traceback."""
+        return f"{self.path} 已损坏，无法读取（{self.reason}）。请修复这个文件，或从备份恢复后再运行。"
+
 
 @dataclass(frozen=True)
 class Incident:
-    """A damaged runtime state file was set aside as `backup` and the store started empty."""
+    """A damaged runtime state file was set aside as `backup` and the store started empty.
+    `backup` None: a strict file went bad while running; it was left in place and its
+    store runs on the last good value it loaded."""
 
     path: Path
-    backup: Path
+    backup: Path | None
     reason: str
 
     @property
     def message(self) -> str:
         """The operator alert's text (the alert path adds its own warning sign)."""
+        if self.backup is None:
+            return f"{self.path.name} 损坏，继续使用损坏前读到的内容，文件未改动，请修复或从备份恢复"
         return f"{self.path.name} 损坏，已备份为 {self.backup.name}，已按空文件继续运行"
 
 
@@ -69,6 +80,16 @@ def set_incident_hook(hook: IncidentHook | None) -> IncidentHook | None:
     global _hook
     previous, _hook = _hook, hook
     return previous
+
+
+def report(incident: Incident, on_incident: IncidentHook | None = None) -> None:
+    """Hand an incident to `on_incident`, or else to the installed hook (None: nowhere).
+    Never raises: reporting must never break the store. The caller logs it."""
+    if hook := on_incident or _hook:
+        try:
+            hook(incident)
+        except Exception:  # noqa: BLE001
+            log.exception("could not report the incident with %s", incident.path)
 
 
 def _same(x: Any) -> Any:
@@ -138,13 +159,8 @@ class StateFile(Generic[T]):
         backup = self._backup_name()
         self.path.rename(backup)
         self._stamp = None
-        incident = Incident(self.path, backup, reason)
         log.error("%s is damaged (%s); kept it as %s and continued empty", self.path, reason, backup.name)
-        if hook := self.on_incident or _hook:
-            try:
-                hook(incident)
-            except Exception:  # noqa: BLE001 - reporting must never break the store
-                log.exception("could not report the incident with %s", self.path)
+        report(Incident(self.path, backup, reason), self.on_incident)
         return self.default()
 
     def _backup_name(self) -> Path:
