@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
 import logging
 import re
 import struct
@@ -33,6 +32,8 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+
+from backend.state_file import StateFile
 
 from .base import EventKind, Notifier, StreamEvent
 from .history import NotifyHistory
@@ -81,6 +82,16 @@ class QQSettings:
 
 # ---- groups ----
 
+def decode_groups(raw: Any) -> dict[str, dict[str, Any]]:
+    """The file's list of groups, keyed by openid; raises on anything else."""
+    if not isinstance(raw, list):
+        raise ValueError(f"expected a list of groups, got {type(raw).__name__}")
+    for g in raw:
+        if not (isinstance(g, dict) and isinstance(g.get("openid"), str)):
+            raise ValueError(f"not a group (needs an openid): {g!r}")
+    return {g["openid"]: g for g in raw}
+
+
 class QQGroups:
     """The groups the bot knows (data/qq_groups.json), keyed by group openid.
 
@@ -88,21 +99,23 @@ class QQGroups:
     older saves hold channel ids, still honoured], kinds: [event kind],
     status: "active" | "removed" (bot kicked) | "muted" (proactive messages turned off),
     added_at}. New groups start switched off with no streamers.
+
+    Operator data: a damaged file raises StateFileError (the service refuses to start)
+    instead of wiping the subscriptions; a missing one means no groups yet.
     """
 
     def __init__(self, path: Path):
-        self.path = path
-        try:
-            self._groups: dict[str, dict[str, Any]] = {
-                g["openid"]: g for g in json.loads(path.read_text(encoding="utf-8"))}
-        except FileNotFoundError:
-            self._groups = {}
+        self._file: StateFile[dict[str, dict[str, Any]]] = StateFile(
+            path, default=dict, policy="strict", decode=decode_groups,
+            encode=lambda groups: list(groups.values()))
+        self._groups = self._file.load()
+
+    @property
+    def path(self) -> Path:
+        return self._file.path
 
     def save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(list(self._groups.values()), ensure_ascii=False, indent=1), encoding="utf-8")
-        tmp.replace(self.path)
+        self._file.save(self._groups)
 
     def all(self) -> list[dict[str, Any]]:
         return [dict(g) for g in self._groups.values()]

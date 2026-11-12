@@ -241,7 +241,10 @@ def create_auth_router(auth: Auth, streamer_names: Callable[[], set[str]] = set)
             raise HTTPException(404, "没有这个用户")
         if is_self(request, target):
             raise HTTPException(400, "不能删除自己")
-        auth.users.delete(name)
+        try:
+            auth.users.delete(name)
+        except AuthError as e:
+            raise fail(e) from None
         auth.sessions.revoke_user(target["username"])
         return {"username": target["username"]}
 

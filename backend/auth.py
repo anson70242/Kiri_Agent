@@ -25,6 +25,11 @@ deliberately not trusted (tailscale serve may add its own X-Forwarded-For).
 
 The server and the CLI share the JSON files; the server re-reads a file when it changes
 on disk, so a user added (or disabled) with the CLI counts without a restart.
+
+The users file is operator data: damaged at start, it raises StateFileError (the server
+and the CLI refuse to run); damaged while the server runs, the server keeps the users it
+last read, alerts the owner and refuses account changes until the file is repaired. The
+sessions file is runtime state: damaged, it is kept as a backup and everyone logs in again.
 """
 
 from __future__ import annotations
@@ -36,6 +41,7 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import logging
 import re
 import secrets
 import sys
@@ -44,6 +50,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
+
+from backend.state_file import Incident, StateFile, StateFileError, report
+
+log = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -101,40 +111,6 @@ def check_password_rules(password: str) -> None:
         raise AuthError(422, "密码太长")
 
 
-# --- JSON files that two processes share -------------------------------------------------
-
-class _JsonFile:
-    """A JSON file kept in memory, re-read whenever it changes on disk."""
-
-    def __init__(self, path: Path, empty: Callable[[], Any]):
-        self.path = path
-        self.empty = empty
-        self._stamp: tuple[int, int] | None = None
-        self.data: Any = empty()
-        self.load()
-
-    def _disk_stamp(self) -> tuple[int, int] | None:
-        try:
-            st = self.path.stat()
-        except FileNotFoundError:
-            return None
-        return st.st_mtime_ns, st.st_size
-
-    def load(self) -> Any:
-        stamp = self._disk_stamp()
-        if stamp != self._stamp:
-            self._stamp = stamp
-            self.data = self.empty() if stamp is None else json.loads(self.path.read_text(encoding="utf-8"))
-        return self.data
-
-    def save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_name(self.path.name + ".tmp")
-        tmp.write_text(json.dumps(self.data, ensure_ascii=False, indent=1), encoding="utf-8")
-        tmp.replace(self.path)
-        self._stamp = self._disk_stamp()
-
-
 # --- users -----------------------------------------------------------------------------
 
 def public_user(u: dict[str, Any]) -> dict[str, Any]:
@@ -152,15 +128,54 @@ def streamers_of(u: dict[str, Any]) -> str | list[str]:
     return "all" if s == "all" else list(s or [])
 
 
+def decode_users(raw: Any) -> list[dict[str, Any]]:
+    """The file's accounts; raises on anything that isn't a list of them."""
+    if not isinstance(raw, list):
+        raise ValueError(f"expected a list of users, got {type(raw).__name__}")
+    for u in raw:
+        if not (isinstance(u, dict) and all(isinstance(u.get(k), str) for k in ("username", "role", "password_hash"))):
+            raise ValueError("not a user (needs username, role and password_hash)")
+    return raw
+
+
 class UserStore:
-    """data/users.json: [{username, role, password_hash, disabled, created_at, streamers}]."""
+    """data/users.json: [{username, role, password_hash, disabled, created_at, streamers}].
+
+    Re-read whenever the file changes on disk (the CLI writes it too). Damaged when this
+    store is built: StateFileError. Damaged later: the users last read stay in effect,
+    the incident is logged and reported once, and changes are refused until it is fixed."""
 
     def __init__(self, path: Path):
-        self.file = _JsonFile(path, list)
+        self.file: StateFile[list[dict[str, Any]]] = StateFile(path, default=list, policy="strict",
+                                                                decode=decode_users)
+        self._users = self.file.load()
+        self._damaged: str | None = None  # why the file on disk can't be read now
+
+    @property
+    def path(self) -> Path:
+        return self.file.path
 
     @property
     def users(self) -> list[dict[str, Any]]:
-        return self.file.load()
+        if self.file.changed():
+            try:
+                self._users, self._damaged = self.file.load(), None
+            except StateFileError as e:
+                if self._damaged is None:
+                    log.error("%s is damaged (%s); keeping the %d user(s) read before", e.path, e.reason,
+                              len(self._users))
+                    report(Incident(e.path, None, e.reason))
+                self._damaged = e.reason
+        return self._users
+
+    def _save(self) -> None:
+        self.file.save(self._users)
+
+    def _check_writable(self) -> None:
+        """Never overwrite a damaged users file: a person repairs it (or restores a backup)."""
+        self.users  # noqa: B018 - re-reads the file if it changed
+        if self._damaged is not None:
+            raise AuthError(503, f"{self.path.name} 已损坏，修复之前不能修改账号")
 
     def __bool__(self) -> bool:
         return bool(self.users)
@@ -182,16 +197,18 @@ class UserStore:
         if role not in ROLES:
             raise AuthError(422, "角色只能是 admin 或 member")
         check_password_rules(password)
+        self._check_writable()
         if self.get(name):
             raise AuthError(409, "用户名已存在")
         u = {"username": name, "role": role, "password_hash": hash_password(password), "disabled": False,
              "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
         self.users.append(u)
-        self.file.save()
+        self._save()
         return u
 
     def update(self, name: str, role: str | None = None, password: str | None = None,
                disabled: bool | None = None, streamers: str | list[str] | None = None) -> dict[str, Any]:
+        self._check_writable()
         u = self._need(name)
         if role is not None and role not in ROLES:
             raise AuthError(422, "角色只能是 admin 或 member")
@@ -204,13 +221,14 @@ class UserStore:
             u["disabled"] = disabled
         if streamers is not None:
             u["streamers"] = streamers
-        self.file.save()
+        self._save()
         return u
 
     def delete(self, name: str) -> None:
+        self._check_writable()
         u = self._need(name)
         self.users.remove(u)
-        self.file.save()
+        self._save()
 
     def authenticate(self, name: str, password: str) -> dict[str, Any] | None:
         """The user, if the name and password are right and the account is enabled."""
@@ -229,43 +247,67 @@ def _token_key(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+def decode_sessions(raw: Any) -> dict[str, dict[str, Any]]:
+    """The file's sessions; raises on anything that isn't a map of them."""
+    if not isinstance(raw, dict):
+        raise ValueError(f"expected a map of sessions, got {type(raw).__name__}")
+    for s in raw.values():
+        if not (isinstance(s, dict) and isinstance(s.get("username"), str)
+                and isinstance(s.get("expires"), (int, float)) and not isinstance(s.get("expires"), bool)):
+            raise ValueError("not a session (needs username and expires)")
+    return raw
+
+
 class SessionStore:
-    """data/sessions.json: {sha256(token): {username, expires}}. The token itself is only in the cookie."""
+    """data/sessions.json: {sha256(token): {username, expires}}. The token itself is only in the cookie.
+
+    Re-read whenever the file changes on disk (the CLI revokes sessions too). Runtime
+    state: a damaged file is kept as a backup (the owner is alerted) and everyone logs in again."""
 
     def __init__(self, path: Path, days: int = SESSION_DAYS, clock: Callable[[], float] = time.time):
-        self.file = _JsonFile(path, dict)
+        self.file: StateFile[dict[str, dict[str, Any]]] = StateFile(path, default=dict, policy="recover",
+                                                                     decode=decode_sessions)
+        self._sessions = self.file.load()
         self.ttl = days * 86400
         self.clock = clock
 
+    def _load(self) -> dict[str, dict[str, Any]]:
+        if self.file.changed():
+            self._sessions = self.file.load()
+        return self._sessions
+
+    def _save(self) -> None:
+        self.file.save(self._sessions)
+
     def create(self, username: str) -> str:
         now = self.clock()
-        sessions = self.file.load()
+        sessions = self._load()
         for k in [k for k, s in sessions.items() if s["expires"] <= now]:
             del sessions[k]
         token = secrets.token_urlsafe(32)
         sessions[_token_key(token)] = {"username": username, "expires": now + self.ttl}
-        self.file.save()
+        self._save()
         return token
 
     def username(self, token: str | None) -> str | None:
         if not token:
             return None
-        s = self.file.load().get(_token_key(token))
+        s = self._load().get(_token_key(token))
         return s["username"] if s and s["expires"] > self.clock() else None
 
     def delete(self, token: str | None) -> None:
-        if token and self.file.load().pop(_token_key(token), None):
-            self.file.save()
+        if token and self._load().pop(_token_key(token), None):
+            self._save()
 
     def revoke_user(self, username: str, keep: str | None = None) -> None:
         """End every session of `username` (except the one whose token is `keep`)."""
-        sessions = self.file.load()
+        sessions = self._load()
         key, keep_key = username.casefold(), _token_key(keep) if keep else None
         gone = [k for k, s in sessions.items() if s["username"].casefold() == key and k != keep_key]
         for k in gone:
             del sessions[k]
         if gone:
-            self.file.save()
+            self._save()
 
 
 # --- login rate limit ------------------------------------------------------------------
@@ -402,7 +444,11 @@ def main(argv: list[str] | None = None) -> int:
     e.add_argument("name")
     args = p.parse_args(argv)
 
-    auth = load_auth(args.config)
+    try:
+        auth = load_auth(args.config)
+    except StateFileError as err:
+        print(err.message, file=sys.stderr)
+        return 1
     try:
         if args.cmd == "add-user":
             if auth.users.get(args.name):
