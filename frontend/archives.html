@@ -29,6 +29,7 @@
   .nav a:hover { color: var(--topbar-text); }
   .nav a.active { color: var(--topbar-accent); border-bottom-color: var(--topbar-accent); font-weight: 600; }
   main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 48px; }
+  main:has(.detail) { padding-bottom: 16px; }
   header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; margin-bottom: 20px; }
   h1 { font-size: 22px; margin: 0; }
   .summary { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -89,11 +90,10 @@
   .langs button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
   .msg .ja { color: var(--muted); font-size: 12px; }
   .links a.all { background: var(--accent); color: #fff; border-color: var(--accent); }
-  .density { margin-top: 12px; }
   .density h3, .chat h3 { font-size: 13px; color: var(--muted); margin: 0 0 6px; font-weight: 600;
     display: flex; align-items: center; gap: 8px; }
   canvas { width: 100%; height: 48px; display: block; cursor: pointer; }
-  .chat { display: flex; flex-direction: column; height: min(88vh, 960px); }
+  .chat { display: flex; flex-direction: column; flex: 1; min-height: 0; }
   .chat label { margin-left: auto; font-weight: 400; display: flex; align-items: center; gap: 4px; cursor: pointer; }
   .chat label input { padding: 0; }
   .msgs { flex: 1; overflow-y: auto; font-size: 13px; border-top: 1px solid var(--border); }
@@ -103,18 +103,23 @@
   .msg .t:hover { text-decoration: underline; }
   .msg .u { color: var(--muted); margin-right: 6px; }
   .msg .sc { background: var(--up-bg); color: var(--up); border-radius: 4px; padding: 0 4px; margin-right: 6px; font-weight: 600; }
-  @media (max-width: 860px) { .chat { height: 60vh; } }
-  /* Left column = video panel + transcript panel, together as tall as the chat panel */
-  .leftcol { display: flex; flex-direction: column; gap: 14px; height: min(88vh, 960px); min-width: 0; }
-  .leftcol > .panel:first-child { flex: none; }
-  .leftcol video { max-height: 40vh; }
-  .leftcol .density { margin-top: 8px; }
-  .subs { flex: 1; min-height: 240px; display: flex; flex-direction: column; }
+  /* Detail fills the window: no page scroll. Left = video + subtitles (fills the rest),
+     right = chat density + chat (fills the rest). */
+  .detail header { margin-bottom: 12px; }
+  .leftcol, .rightcol { display: flex; flex-direction: column; gap: 12px; min-width: 0;
+    height: max(520px, calc(100vh - 56px - 24px - 16px - 80px)); }  /* topbar, padding, title + tags */
+  .leftcol > .panel:first-child, .rightcol > .density { flex: none; }
+  .leftcol video { max-height: 44vh; }
+  .subs { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  @media (max-width: 860px) {
+    .leftcol, .rightcol { height: auto; }
+    .subs { height: 40vh; flex: none; }
+    .chat { height: 60vh; flex: none; }
+  }
   .subs h3 { font-size: 13px; color: var(--muted); margin: 0 0 6px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
   .subs label { margin-left: auto; font-weight: 400; display: flex; align-items: center; gap: 4px; cursor: pointer; }
   .subs label input { padding: 0; }
   video::cue { font-size: 90%; background: rgba(0, 0, 0, .6); }
-  @media (max-width: 860px) { .leftcol { height: auto; } .subs { height: 40vh; flex: none; } }
 </style>
 </head>
 <body>
@@ -293,8 +298,6 @@ async function drawDetail(folder) {
         <div class="links">${links.map(([href, label]) => `<a href="${href}" download>⬇ ${label}</a>`).join("")}
           ${a.downloading ? "" : `<a class="all" href="/api/archives/zip?folder=${q}" download>⬇ 全部下载 (zip)</a>`}
           ${a.highlights_file ? `<a href="/highlights#${q}">🚦 看路灯表</a>` : ""}</div>
-        <div class="density" id="density" hidden><h3>弹幕密度（每分钟）<span class="meta" id="peak"></span></h3>
-          <canvas id="chart"></canvas></div>
       </div>
       <div class="panel subs"><h3>字幕 <span class="meta" id="submeta"></span>
           <span class="langs" id="langs" hidden>${["zh", "ja", "both"].map(l =>
@@ -302,9 +305,13 @@ async function drawDetail(folder) {
           <label><input type="checkbox" id="subfollow" checked>跟随播放</label></h3>
         <div class="msgs" id="subs"><div class="empty">${a.transcript_file ? "加载中…" : "还没有字幕"}</div></div></div>
       </div>
+      <div class="rightcol">
+      <div class="panel density" id="density" hidden><h3>弹幕密度（每分钟）<span class="meta" id="peak"></span></h3>
+        <canvas id="chart"></canvas></div>
       <div class="panel chat"><h3>弹幕 <span class="meta" id="chatmeta"></span>
           <label><input type="checkbox" id="follow" checked>跟随播放</label></h3>
         <div class="msgs" id="msgs"><div class="empty">${a.has_chat ? "加载中…" : "没有清洗后的弹幕"}</div></div></div>
+      </div>
     </div></div>`;
   showTranscript(a, folder);
   if (!a.has_chat) return;
