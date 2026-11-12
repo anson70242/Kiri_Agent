@@ -73,6 +73,13 @@ def test_an_archive_opened_from_its_video_names_artifacts_after_it(tmp_path):
     assert a.file(Artifact.HIGHLIGHTS) == folder / f"{STEM}.highlights.json"
 
 
+def test_an_archive_opened_from_a_video_of_any_format_names_artifacts_without_its_extension(tmp_path):
+    a = Archive.from_video(tmp_path / "x.mkv")
+    assert a.stem == "x"
+    assert a.save(Artifact.TRANSCRIPT, []) == tmp_path / "x.transcript.json"
+    assert Archive.from_video(tmp_path / "[20261105][A] 歌枠 Vol.2.mp4").stem == "[20261105][A] 歌枠 Vol.2"
+
+
 def test_presence_is_reported_per_artifact(tmp_path):
     folder = sample_archive(tmp_path, zh_transcript=None, highlights=None)
     a = Archive.from_folder(folder)

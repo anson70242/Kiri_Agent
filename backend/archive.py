@@ -110,7 +110,7 @@ class Archive:
 
     def __init__(self, folder: Path, stem: str | None, snapshot: _Snapshot, root: Path | None) -> None:
         self.folder = folder
-        self.stem = stem  # the video's file name without `.mp4`; None when there is no video
+        self.stem = stem  # what the artifacts are named after (the video's name less its extension); None without a video
         self.root = root  # the downloads root, when known
         self._entries = snapshot.entries
         self._folder_mtime = snapshot.folder_mtime
@@ -125,12 +125,13 @@ class Archive:
 
     @classmethod
     def from_video(cls, video: Path, root: Path | None = None) -> Archive:
-        """The archive `video` belongs to (neither need exist yet); artifacts are named after it."""
+        """The archive `video` belongs to (neither need exist yet); artifacts are named after
+        it without its extension, whatever the format (`x.mkv` -> `x.transcript.json`)."""
         try:
             snapshot = _scan(video.parent)
         except FileNotFoundError:
             snapshot = _Snapshot((), 0.0)
-        return cls(video.parent, Artifact.VIDEO.stem_of(video.name), snapshot, root)
+        return cls(video.parent, video.stem, snapshot, root)
 
     # ---- where it is ----
 
