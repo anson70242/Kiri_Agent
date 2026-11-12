@@ -29,3 +29,17 @@ _Avoid_: zh transcript, translation
 **Highlight table**:
 The 路灯表: the scored table of an archive's segments that editors pick clips from.
 _Avoid_: highlights, analysis
+
+### State files
+
+**State file**:
+A JSON file in the data directory holding state that survives restarts.
+_Avoid_: store file, data file
+
+**Operator data**:
+A state file a person entered and that cannot be regenerated: the roster, the users, the QQ group subscriptions. When damaged, the service refuses to start.
+_Avoid_: config, settings
+
+**Runtime state**:
+A state file the program generates as it runs: the queues, the live-stream state, the notification history, the sessions. When damaged, it is set aside as a backup, the owner is alerted, and the service continues empty.
+_Avoid_: cache
