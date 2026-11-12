@@ -4,11 +4,12 @@
     -> AutoDownloader.run (a download worker and a transcription worker, each one job
        at a time, in threads) -> Discord via LiveNotifier.send
 
+Streamers (the roster, backend/monitor/roster.py; set from the dashboard's gear):
+
+    { "name": "...", "platform": "youtube", "channel": "@...", "auto_download": true, "keep": 6 }
+
 config.json:
 
-    "monitor": { "streamers": [
-      { "name": "...", "platform": "youtube", "channel": "@...", "auto_download": true, "keep": 6 }
-    ]},
     "download": { "auto": {
       "keep": 6,              # archives kept per streamer folder; the oldest go first
       "retry_minutes": 15,
@@ -44,6 +45,7 @@ from backend.llm import LLMError, chat, load_llm
 from backend.translate import TranslateSettings
 from backend.translate import translate as translate_transcript
 from backend.monitor import StreamMonitor, Streamer, StreamStatus
+from backend.monitor.roster import load_roster
 from backend.notify import EventKind, LiveNotifier, StreamEvent, load_notifier
 
 from . import REPO_ROOT, download, downloader_for, load_settings
@@ -112,6 +114,7 @@ class AutoDownloader:
         retry_interval: float = 15 * 60,
         give_up: float = 12 * 3600,
         max_errors: int = 3,
+        default_keep: int = 6,  # for streamers without their own `keep`
         notify: Callable[[StreamEvent], None] | None = None,
         clock: Callable[[], float] = time.time,
         transcribe: Callable[[Path], Any] | None = None,  # video -> transcript; None: skip
@@ -128,6 +131,7 @@ class AutoDownloader:
         self.retry_interval = retry_interval
         self.give_up = give_up
         self.max_errors = max_errors
+        self.default_keep = default_keep
         self.notify = notify
         self.clock = clock
         # One worker per stage, so a long transcription never holds up downloads.
@@ -489,19 +493,15 @@ def failure_detail(job: Job) -> str:
 
 
 def load_auto(config: Path) -> AutoDownloader | None:
-    """AutoDownloader from config.json, or None if no streamer has `auto_download`."""
+    """AutoDownloader from config.json (streamers from the roster), or None if
+    `download.auto.enabled` is false."""
     cfg = json.loads(config.read_text(encoding="utf-8"))
     auto = (cfg.get("download") or {}).get("auto") or {}
     if auto.get("enabled") is False:
         return None
     default_keep = int(auto.get("keep", 6))
-    keep = {
-        Streamer(s.get("name") or s["channel"], s["platform"], s["channel"]).id: int(s.get("keep", default_keep))
-        for s in (cfg.get("monitor") or {}).get("streamers", [])
-        if s.get("auto_download")
-    }
-    if not keep:
-        return None
+    # Built even when nobody auto-downloads yet: the dashboard's gear can turn it on.
+    keep = load_roster(config).keep_map(default_keep)
     settings, streamers = load_settings(config)
     state = Path(auto.get("state_file") or "data/download_queue.json")
     asr_cfg = cfg.get("asr") or {}
@@ -522,6 +522,7 @@ def load_auto(config: Path) -> AutoDownloader | None:
         retry_interval=float(auto.get("retry_minutes", 15)) * 60,
         give_up=float(auto.get("give_up_hours", 12)) * 3600,
         max_errors=int(auto.get("max_errors", 3)),
+        default_keep=default_keep,
         transcribe=transcriber,
         analyze=load_analyzer(config, cfg) if transcriber else None,
         translate=load_translator(config, cfg) if transcriber else None,

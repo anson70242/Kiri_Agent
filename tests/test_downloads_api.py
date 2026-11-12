@@ -42,7 +42,7 @@ def test_dev_mode_never_downloads_or_notifies(tmp_path):
     assert app.state.notifier is None
 
 
-def test_downloads_when_auto_download_is_off(tmp_path):
-    cfg = write_config(tmp_path, auto=False)
+def test_downloads_when_nobody_auto_downloads(tmp_path):
+    cfg = write_config(tmp_path, auto=False)  # can still be switched on from the gear
     body = TestClient(create_app(cfg)).get("/api/downloads").json()
-    assert body == {"enabled": False, "active": [], "queue": []}
+    assert body == {"enabled": True, "active": [], "queue": []}

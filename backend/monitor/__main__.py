@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 from . import LiveState, StreamMonitor, Streamer, StreamStatus
+from .roster import load_roster
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -26,11 +27,7 @@ ICON = {
 
 def load_config(path: Path) -> tuple[list[Streamer], float]:
     cfg = json.loads(path.read_text(encoding="utf-8")).get("monitor", {})
-    streamers = [
-        Streamer(name=s.get("name") or s["channel"], platform=s["platform"], channel=s["channel"])
-        for s in cfg.get("streamers", [])
-    ]
-    return streamers, float(cfg.get("interval", 60))
+    return load_roster(path).streamers(), float(cfg.get("interval", 60))
 
 
 def fmt(st: StreamStatus) -> str:

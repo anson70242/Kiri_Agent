@@ -214,6 +214,13 @@ class StreamMonitor:
                 known = ", ".join(sorted(PlatformMonitor.registry)) or "none"
                 raise ValueError(f"{s.name}: unknown platform {s.platform!r} (known: {known})")
 
+    def set_streamers(self, streamers: Iterable[Streamer]) -> None:
+        """Replace the list while running; removed streamers lose their status."""
+        self.streamers = list(streamers)
+        for s in list(self.statuses):
+            if s not in self.streamers:
+                del self.statuses[s]
+
     def monitor_for(self, platform: str) -> PlatformMonitor:
         if platform not in self._monitors:
             self._monitors[platform] = PlatformMonitor.registry[platform](self.client)

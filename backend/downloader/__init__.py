@@ -19,6 +19,7 @@ from typing import Any
 from dotenv import load_dotenv
 
 from backend.monitor import Streamer
+from backend.monitor.roster import load_roster
 
 from . import twitch, youtube  # noqa: F401  (registers each PlatformDownloader)
 from .base import ChatNotReady, DownloadError, DownloadResult, DownloadSettings, PlatformDownloader, VideoInfo
@@ -46,7 +47,7 @@ def load_settings(config: Path) -> tuple[DownloadSettings, list[Streamer]]:
       "chat_retry": { "interval_minutes": 30, "give_up_hours": 48 }
     }
 
-    The streamers (from `monitor.streamers`) name the output folders: a video from a
+    The streamers (the roster, see backend/monitor/roster.py) name the output folders: a video from a
     configured channel goes under that streamer's name.
     """
     load_dotenv(REPO_ROOT / ".env")
@@ -69,11 +70,7 @@ def load_settings(config: Path) -> tuple[DownloadSettings, list[Streamer]]:
         chat_retry_interval=float(retry.get("interval_minutes", 30)) * 60,
         chat_retry_give_up=float(retry.get("give_up_hours", 48)) * 3600,
     )
-    streamers = [
-        Streamer(name=s.get("name") or s["channel"], platform=s["platform"], channel=s["channel"])
-        for s in (cfg.get("monitor") or {}).get("streamers", [])
-    ]
-    return settings, streamers
+    return settings, load_roster(config).streamers()
 
 
 def downloader_for(

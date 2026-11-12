@@ -65,9 +65,14 @@ uv run -m backend.monitor --once --json
 uv run -m backend.monitor.server       # web dashboard at http://127.0.0.1:8770
 ```
 
-Streamers go under `monitor.streamers` in `config.json`. `platform` is `youtube` or
-`twitch`; `channel` is a YouTube handle (`@foo`), channel id (`UC...`) or URL, or a
-Twitch login (`foo`) or URL.
+Streamers are managed on the dashboard (直播状态 page: ＋ 新增主播, and the ⚙ gear on
+each card for auto-download, archives to keep, and deleting). The list is saved in
+`data/streamers.json` (`monitor.streamers_file`), which deploys never touch;
+`monitor.streamers` in `config.json` only seeds it on the first start. `platform` is
+`youtube` or `twitch`; `channel` is a YouTube handle (`@foo`), channel id (`UC...`) or
+URL, or a Twitch login (`foo`) or URL. Deleting a streamer keeps their downloads.
+
+- [roster.py](backend/monitor/roster.py): the streamer list and per-streamer settings.
 
 - [base.py](backend/monitor/base.py): shared `Streamer`, `StreamStatus`, `LiveState`,
   `PlatformMonitor` base class, `StreamMonitor` poll loop.
@@ -174,7 +179,7 @@ From code: `download(url, *load_settings(config))` in
 ## Auto download
 
 When the monitor reports a stream ended (same rule as the "ended" Discord message), the
-archive of a streamer with `"auto_download": true` in `monitor.streamers` is queued and
+archive of a streamer with auto-download on (the ⚙ gear, or `"auto_download": true`) is queued and
 downloaded (video ≤ `download.max_height`, default 1080p, plus chat) by
 the dashboard server or `uv run -m backend.monitor`. See
 [auto.py](backend/downloader/auto.py).

@@ -12,12 +12,13 @@ import asyncio
 import contextlib
 import logging
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 
 from backend.downloader import load_settings
 from backend.downloader.auto import attach
@@ -25,16 +26,36 @@ from backend.downloader.auto import attach
 from . import StreamMonitor
 from .__main__ import REPO_ROOT, load_config
 from .archives import create_router
+from .base import LiveState, Streamer
+from .roster import RosterError, entry_id, load_roster
 
 PAGE = REPO_ROOT / "frontend" / "monitor.html"
 
+ChannelCheck = Callable[[Streamer], Awaitable[str | None]]  # error message, or None if it exists
 
-def create_app(config: Path, interval: float | None = None, dev: bool = False) -> FastAPI:
+
+class NewStreamer(BaseModel):
+    name: str = ""
+    platform: str
+    channel: str
+
+
+class StreamerSettings(BaseModel):
+    """The gear: per-streamer settings. Omitted fields stay as they are."""
+
+    auto_download: bool | None = None
+    keep: int | None = Field(None, ge=1, le=100)  # archives kept; oldest deleted first
+
+
+def create_app(config: Path, interval: float | None = None, dev: bool = False,
+               check_channel: ChannelCheck | None = None) -> FastAPI:
     """`dev`: local preview of the pages. Still shows live status, but never downloads,
-    transcribes, analyzes or sends Discord messages."""
-    streamers, cfg_interval = load_config(config)
+    transcribes, analyzes or sends Discord messages.
+    `check_channel`: replaces the real "does this channel exist" check (tests)."""
+    _, cfg_interval = load_config(config)
     interval = interval or cfg_interval
-    mon = StreamMonitor(streamers)
+    roster = load_roster(config)
+    mon = StreamMonitor(roster.streamers())
     notifier, auto = (None, None) if dev else attach(config, mon)
     if dev:
         print("Dev mode: no auto-download, no notifications")
@@ -58,6 +79,7 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False) -
 
     app = FastAPI(title="Kiri Live Monitor", lifespan=lifespan)
     app.state.notifier = notifier
+    app.state.auto = auto
     app.include_router(create_router(load_settings(config)[0].output_dir))
 
     def snapshot() -> dict:
@@ -88,6 +110,60 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False) -
         if not auto:
             return {"enabled": False, "active": [], "queue": []}
         return {"enabled": True, **auto.snapshot()}
+
+    async def live_check(s: Streamer) -> str | None:
+        """Real channel check; its result also fills the new card right away."""
+        st = await mon.monitor_for(s.platform).check(s)
+        if st.state is LiveState.UNKNOWN:
+            return st.error or "频道检查失败"
+        mon.statuses[s] = st
+        return None
+
+    verify = check_channel or live_check
+
+    def apply() -> None:
+        """Save the roster and hand the new list to everything that is running."""
+        roster.save()
+        mon.set_streamers(roster.streamers())
+        if auto:
+            auto.streamers = roster.streamers()
+            auto.keep = roster.keep_map(auto.default_keep)
+
+    @app.get("/api/streamers")
+    async def list_streamers() -> dict:
+        return {"streamers": roster.to_dicts()}
+
+    @app.post("/api/streamers", status_code=201)
+    async def add_streamer(body: NewStreamer) -> dict:
+        before = list(roster.entries)
+        try:
+            entry = roster.add(body.name, body.platform, body.channel)
+        except RosterError as e:
+            raise HTTPException(e.status, str(e)) from None
+        s = roster.streamers()[-1]
+        if err := await verify(s):
+            roster.entries = before
+            raise HTTPException(422, f"找不到这个频道: {err}")
+        apply()
+        return {"id": entry_id(entry)}
+
+    @app.patch("/api/streamers")
+    async def update_streamer(id: str, body: StreamerSettings) -> dict:
+        try:
+            entry = roster.update(id, **body.model_dump())
+        except RosterError as e:
+            raise HTTPException(e.status, str(e)) from None
+        apply()
+        return {"id": entry_id(entry)}
+
+    @app.delete("/api/streamers")
+    async def delete_streamer(id: str) -> dict:
+        try:
+            roster.remove(id)
+        except RosterError as e:
+            raise HTTPException(e.status, str(e)) from None
+        apply()
+        return {"id": id}
 
     @app.post("/api/refresh")
     async def refresh() -> dict:

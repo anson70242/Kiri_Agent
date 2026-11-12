@@ -454,8 +454,15 @@ def test_load_auto_from_config(tmp_path):
 
     assert ad.transcribe is None  # no "asr" section: download only
 
-    cfg.write_text(json.dumps({"monitor": {"streamers": [{"platform": "youtube", "channel": "@c"}]}}), encoding="utf-8")
-    assert load_auto(cfg) is None
+    # Nobody auto-downloads yet: still built, so the dashboard's gear can turn it on.
+    other = tmp_path / "other"
+    other.mkdir()
+    cfg2 = other / "config.json"
+    cfg2.write_text(json.dumps({"monitor": {"streamers": [{"platform": "youtube", "channel": "@c"}]}}), encoding="utf-8")
+    assert load_auto(cfg2).keep == {}
+
+    cfg2.write_text(json.dumps({"download": {"auto": {"enabled": False}}}), encoding="utf-8")
+    assert load_auto(cfg2) is None
 
 
 def test_load_auto_with_analysis(tmp_path, monkeypatch):

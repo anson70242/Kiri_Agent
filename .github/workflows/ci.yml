@@ -25,6 +25,9 @@ jobs:
       - name: Install Python and dependencies
         run: uv sync --locked
 
+      # No Chromium here: the browser tests (tests/test_monitor_page.py) skip themselves
+      # and run locally (`uv run playwright install chromium` once).
+
       # Tests that need ffmpeg (audio extraction) skip themselves when it's missing;
       # installing it with apt here hung the job, so they only run locally.
 

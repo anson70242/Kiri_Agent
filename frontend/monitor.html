@@ -56,11 +56,13 @@
   .avatar { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; flex: none;
     background: var(--off-bg); }
   .offline .avatar { filter: grayscale(.6); opacity: .8; }
-  .name { font-weight: 700; font-size: 17px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .name { font-weight: 700; font-size: 17px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    flex: 1; min-width: 0; }
+  .tags { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
   .platform { font-size: 12px; color: var(--muted); border: 1px solid var(--border); border-radius: 6px; padding: 0 6px; }
   .platform.youtube { color: var(--yt); border-color: color-mix(in srgb, var(--yt) 35%, transparent); }
   .platform.twitch { color: var(--tw); border-color: color-mix(in srgb, var(--tw) 35%, transparent); }
-  .state { margin-left: auto; white-space: nowrap; }
+  .state { white-space: nowrap; }
   .live .state { background: var(--live-bg); color: var(--live); }
   .upcoming .state { background: var(--up-bg); color: var(--up); }
   .offline .state, .checking .state { background: var(--off-bg); color: var(--off); }
@@ -107,6 +109,27 @@
   .sdot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--off); }
   .sdot.live { background: var(--live); } .sdot.upcoming { background: var(--up); }
   .menu .none { padding: 10px; color: var(--muted); font-size: 13px; }
+  /* Streamer management: gear + dialogs */
+  .gear { border: 0; background: transparent; padding: 2px 4px; font-size: 15px; line-height: 1; color: var(--muted);
+    border-radius: 6px; flex: none; }
+  .gear:hover { color: var(--accent); background: var(--off-bg); }
+  .badge { font-size: 12px; color: var(--accent); }
+  dialog { border: 1px solid var(--border); border-radius: 14px; padding: 20px; width: min(380px, calc(100vw - 32px));
+    color: var(--text); background: var(--card); box-shadow: 0 20px 48px rgba(23, 37, 84, .25); }
+  dialog::backdrop { background: rgba(23, 37, 84, .25); }
+  dialog h3 { margin: 0 0 14px; font-size: 17px; }
+  dialog form { display: flex; flex-direction: column; gap: 12px; }
+  dialog label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+  dialog label.row { flex-direction: row; align-items: center; gap: 8px; color: var(--text); font-size: 14px; }
+  dialog input:not([type=checkbox]), dialog select { font: inherit; font-size: 14px; padding: 7px 10px;
+    border: 1px solid var(--border); border-radius: 8px; color: var(--text); background: var(--card); }
+  dialog .hint { font-size: 12px; color: var(--muted); }
+  dialog .msg { color: var(--live); font-size: 13px; min-height: 1em; }
+  dialog .actions { display: flex; gap: 8px; justify-content: flex-end; }
+  dialog .actions .left { margin-right: auto; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.danger { color: var(--live); }
+  button.danger:hover { border-color: var(--live); }
 </style>
 </head>
 <body>
@@ -128,6 +151,7 @@
     <span class="meta" id="meta">加载中…</span>
     <button id="notify" hidden>开启开播提醒</button>
     <button id="refresh">立即刷新</button>
+    <button id="add">＋ 新增主播</button>
   </header>
   <div class="toolbar">
     <div class="search" id="search">
@@ -142,6 +166,34 @@
   </div>
   <div id="grid"></div>
 </main>
+<dialog id="add-dlg" aria-labelledby="add-h">
+  <h3 id="add-h">新增主播</h3>
+  <form method="dialog">
+    <label>名字 <input name="name" placeholder="显示用，可留空"></label>
+    <label>平台 <select name="platform"><option value="youtube">YouTube</option><option value="twitch">Twitch</option></select></label>
+    <label>频道 <input name="channel" required placeholder="@handle / UC… / Twitch 登录名"></label>
+    <div class="msg" role="alert"></div>
+    <div class="actions">
+      <button type="button" value="cancel">取消</button>
+      <button class="primary" type="submit">添加</button>
+    </div>
+  </form>
+</dialog>
+<dialog id="gear-dlg" aria-labelledby="gear-h">
+  <h3 id="gear-h"></h3>
+  <form method="dialog">
+    <label class="row"><input type="checkbox" name="auto_download"> 自动下载</label>
+    <span class="hint">下播后自动下载录播、转写、做路灯表和中文字幕</span>
+    <label>保留录播数 <input type="number" name="keep" min="1" max="100"></label>
+    <span class="hint">超过就删除最旧的</span>
+    <div class="msg" role="alert"></div>
+    <div class="actions">
+      <button type="button" class="danger left" name="delete">删除主播</button>
+      <button type="button" value="cancel">取消</button>
+      <button class="primary" type="submit">保存</button>
+    </div>
+  </form>
+</dialog>
 <script>
 const LABEL = { live: "直播中", upcoming: "待机中", offline: "未开播", unknown: "检测失败", checking: "检测中" };
 const ORDER = { live: 0, upcoming: 1, unknown: 2, checking: 3, offline: 4 };
@@ -179,9 +231,13 @@ function card(s) {
     ${cover}
     <div class="top">
       ${s.avatar ? `<img class="avatar" ${img(s.avatar)}>` : ""}
-      <span class="name" title="${esc(s.channel)}">${esc(s.name)}</span>
-      <span class="platform ${esc(s.platform)}">${esc(s.platform)}</span>
+      <span class="name" title="${esc(s.name)} · ${esc(s.channel)}">${esc(s.name)}</span>
+      <button class="gear" data-id="${esc(key(s))}" aria-label="设置 ${esc(s.name)}" title="设置">⚙</button>
+    </div>
+    <div class="tags">
       <span class="chip state"><span class="dot"></span>${LABEL[s.state] || s.state}</span>
+      <span class="platform ${esc(s.platform)}">${esc(s.platform)}</span>
+      ${settings[key(s)]?.auto_download ? `<span class="badge">⬇ 自动下载</span>` : ""}
     </div>
     ${title ? `<div class="title">${title}</div>` : ""}
     ${sub ? `<div class="sub">${sub}</div>` : ""}
@@ -213,6 +269,7 @@ const sortRows = list => [...list].sort((a, b) =>
   || byName.compare(a.name, b.name)
   || a.platform.localeCompare(b.platform));
 let lastData = null;
+let settings = {};  // "platform:channel" -> {auto_download, keep, ...} from /api/streamers
 
 function draw() {
   if (!lastData) return;
@@ -225,7 +282,7 @@ function draw() {
     ? `<section class="group"><h2>${title} · ${items.length}</h2><div class="grid ${cls}">${items.map(card).join("")}</div></section>`
     : "";
   document.getElementById("grid").innerHTML =
-    !all.length ? `<div class="empty">config.json 里 monitor.streamers 还没有主播</div>`
+    !all.length ? `<div class="empty">还没有主播，点右上角「＋ 新增主播」</div>`
     : !rows.length ? `<div class="empty">没有符合条件的主播</div>`
     : section("直播中 / 待机", active, "") + section("未开播", rest, "compact");
 }
@@ -369,7 +426,11 @@ function render(data) {
 
 async function load(method = "GET") {
   try {
-    const res = await fetch(method === "POST" ? "/api/refresh" : "/api/status", { method });
+    const [res, st] = await Promise.all([
+      fetch(method === "POST" ? "/api/refresh" : "/api/status", { method }),
+      fetch("/api/streamers"),
+    ]);
+    settings = Object.fromEntries((await st.json()).streamers.map(s => [s.id, s]));
     render(await res.json());
   } catch (e) {
     document.getElementById("meta").textContent = "连不上后端，确认 server 在运行";
@@ -387,6 +448,63 @@ if ("Notification" in window && Notification.permission === "default") {
 
 load();
 setInterval(load, POLL_MS);
+
+// ---- Streamer management ----
+async function send(method, url, body) {
+  const res = await fetch(url, { method, headers: { "Content-Type": "application/json" },
+    body: body && JSON.stringify(body) });
+  if (res.ok) return null;
+  const err = await res.json().catch(() => ({}));
+  const d = err.detail;
+  return typeof d === "string" ? d : Array.isArray(d) ? "设置不正确" : `出错了 (${res.status})`;
+}
+function wire(dlg, onSubmit) {
+  const form = dlg.querySelector("form"), msg = dlg.querySelector(".msg");
+  dlg.querySelector("button[value=cancel]").onclick = () => dlg.close();
+  form.onsubmit = async e => {
+    e.preventDefault();
+    const submit = form.querySelector("[type=submit]");
+    submit.disabled = true; msg.textContent = "";
+    const err = await onSubmit(form);
+    submit.disabled = false;
+    if (err) msg.textContent = err;
+    else { dlg.close(); await load(); }
+  };
+  return { form, msg };
+}
+
+const addDlg = document.getElementById("add-dlg");
+const add = wire(addDlg, f => send("POST", "/api/streamers",
+  { name: f.name.value, platform: f.platform.value, channel: f.channel.value }));
+document.getElementById("add").onclick = () => { add.form.reset(); add.msg.textContent = ""; addDlg.showModal(); };
+
+const gearDlg = document.getElementById("gear-dlg");
+let gearId = null;
+const idUrl = () => `/api/streamers?id=${encodeURIComponent(gearId)}`;
+const gear = wire(gearDlg, f => send("PATCH", idUrl(),
+  { auto_download: f.auto_download.checked, keep: f.keep.value ? +f.keep.value : null }));
+document.getElementById("grid").addEventListener("click", e => {
+  const b = e.target.closest(".gear");
+  if (!b) return;
+  gearId = b.dataset.id;
+  const s = settings[gearId] || {};
+  const row = lastData?.streamers.find(r => key(r) === gearId);
+  document.getElementById("gear-h").textContent = `${row?.name || gearId} · ${row?.platform || ""}`;
+  gear.form.auto_download.checked = !!s.auto_download;
+  gear.form.keep.value = s.keep ?? "";
+  gear.form.keep.placeholder = "默认 6";
+  gear.msg.textContent = "";
+  gearDlg.showModal();
+});
+gear.form.elements.delete.onclick = async () => {
+  const name = document.getElementById("gear-h").textContent;
+  if (!confirm(`删除「${name}」？
+不再监控，已下载的录播会保留。`)) return;
+  const err = await send("DELETE", idUrl());
+  if (err) { gear.msg.textContent = err; return; }
+  gearDlg.close();
+  await load();
+};
 
 </script>
 </body>
