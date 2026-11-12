@@ -10,12 +10,13 @@ import shutil
 import zipfile
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import TypeVar
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
 
-from backend.archive import Archive, ArchiveNotFound, ArtifactDamaged, ArtifactMissing, Artifact, Downloads
+from backend.archive import Archive, ArchiveNotFound, ArtifactDamaged, ArtifactMissing, Artifact, Downloads, read_file
 from backend.sheet import highlights_xlsx
 
 from .__main__ import REPO_ROOT
@@ -23,6 +24,8 @@ from .__main__ import REPO_ROOT
 PAGE = REPO_ROOT / "frontend" / "archives.html"
 HIGHLIGHTS_PAGE = REPO_ROOT / "frontend" / "highlights.html"
 XLSX_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+T = TypeVar("T")
 
 
 def _seconds(t: str) -> int:
@@ -121,6 +124,17 @@ def stream_zip(files: list[Path], extra: dict[str, bytes]) -> Iterator[bytes]:
     yield sink.drain()  # central directory
 
 
+def read_or_answer(read: Callable[[], T], missing: str, damaged: str) -> T:
+    """`read()` of an artifact, answering HTTP 404 `missing` when the archive lacks it and
+    500 `damaged` when it is not readable JSON."""
+    try:
+        return read()
+    except ArtifactMissing:
+        raise HTTPException(404, missing)
+    except ArtifactDamaged:
+        raise HTTPException(500, damaged)
+
+
 def create_router(output_dir: Path,
                   visible: Callable[[Request], set[str] | None] = lambda request: None) -> APIRouter:
     """`visible(request)`: the streamer (creator folder) names that request may see, or
@@ -161,12 +175,8 @@ def create_router(output_dir: Path,
 
     @router.get("/api/archives/chat")
     def chat(folder: str, request: Request) -> dict:
-        try:
-            messages = open_archive(folder, request).read_chat()
-        except ArtifactMissing:
-            raise HTTPException(404, "no parsed chat")
-        except ArtifactDamaged:
-            raise HTTPException(500, "chat file is not valid JSON")
+        messages = read_or_answer(lambda: open_archive(folder, request).read_chat(),
+                                  missing="no parsed chat", damaged="chat file is not valid JSON")
         density: list[int] = []
         for m in messages:
             minute = _seconds(m.get("time", "")) // 60
@@ -176,22 +186,20 @@ def create_router(output_dir: Path,
         return {"messages": messages, "density": density}
 
     def load_transcript(folder: str, lang: str, request: Request) -> list[dict]:
-        try:
-            return open_archive(folder, request).read_transcript(lang)
-        except ArtifactMissing:
-            raise HTTPException(404, "no transcript")
-        except ArtifactDamaged:
-            raise HTTPException(500, "transcript is not valid JSON")
+        return read_or_answer(lambda: open_archive(folder, request).read_transcript(lang),
+                              missing="no transcript", damaged="transcript is not valid JSON")
 
     # ---- 路灯表 ----
 
-    def load_highlights(archive: Archive) -> dict:
-        try:
-            return archive.read_highlights()
-        except ArtifactMissing:
-            raise HTTPException(404, "no 路灯表 for this archive")
-        except ArtifactDamaged:
-            raise HTTPException(500, "路灯表 is not valid JSON")
+    def load_highlights(archive: Archive) -> tuple[Path, dict]:
+        """The archive's 路灯表 file and its contents."""
+        def read() -> tuple[Path, dict]:
+            file = archive.file(Artifact.HIGHLIGHTS)
+            if file is None:
+                raise ArtifactMissing(Artifact.HIGHLIGHTS, archive.folder)
+            return file, read_file(file, Artifact.HIGHLIGHTS)
+
+        return read_or_answer(read, missing="no 路灯表 for this archive", damaged="路灯表 is not valid JSON")
 
     @router.get("/highlights", include_in_schema=False)
     def highlights_page() -> FileResponse:
@@ -217,15 +225,12 @@ def create_router(output_dir: Path,
 
     @router.get("/api/highlights/table")
     def highlights_table(folder: str, request: Request) -> dict:
-        return load_highlights(open_archive(folder, request))
+        return load_highlights(open_archive(folder, request))[1]
 
     @router.get("/api/highlights/xlsx")
     def highlights_xlsx_download(folder: str, request: Request) -> Response:
         """The 路灯表 as a formatted Excel sheet."""
-        archive = open_archive(folder, request)
-        table = load_highlights(archive)
-        file = archive.file(Artifact.HIGHLIGHTS)
-        assert file is not None  # it was just read
+        file, table = load_highlights(open_archive(folder, request))
         name = Artifact.HIGHLIGHTS.stem_of(file.name) + ".highlights.xlsx"
         return Response(highlights_xlsx(table), media_type=XLSX_TYPE,
                         headers={"Content-Disposition": attachment(name)})
