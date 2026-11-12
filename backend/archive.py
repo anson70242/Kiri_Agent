@@ -1,0 +1,332 @@
+"""Archive (录播): one stream's folder on disk and the artifacts in it.
+
+This module owns the on-disk layout; other code asks it instead of spelling an artifact
+suffix or counting folder levels:
+
+    <downloads root>/<creator>/<YYYYMMDD>/<title>/<stem><suffix>
+
+where the stem is `[YYYYMMDD][creator] title` made safe for file names.
+
+Lookup rule: an artifact is the file named video stem + its suffix; when that file is absent,
+the first file in sorted name order with that suffix. The video of an archive opened from a
+folder is its largest `.mp4`.
+
+An `Archive` is a snapshot of its folder taken when it is opened; open it again to see
+files written since. `Downloads` is the downloads root: listing every archive, and opening
+one by the folder reference a client sends.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+from dataclasses import dataclass
+from enum import Enum
+from pathlib import Path
+from typing import Any
+
+
+class Artifact(Enum):
+    """One kind of file of an archive, by its file name suffix(es)."""
+
+    VIDEO = (".mp4",)
+    RAW_CHAT = (".live_chat.json", ".chat.json")  # YouTube, Twitch: as downloaded
+    CHAT = (".chat_parsed.json",)  # cleaned chat
+    TRANSCRIPT = (".transcript.json",)  # Japanese subtitles (backend.asr)
+    ZH_TRANSCRIPT = (".zh.transcript.json",)  # Chinese subtitles (backend.translate)
+    HIGHLIGHTS = (".highlights.json",)  # 路灯表 (backend.analysis)
+
+    @property
+    def suffixes(self) -> tuple[str, ...]:
+        return self.value
+
+    def matches(self, name: str) -> bool:
+        """Whether a file name carries this artifact's suffix. The transcript's suffix is
+        also the end of the Chinese transcript's; those never count as the transcript."""
+        if self is Artifact.TRANSCRIPT and Artifact.ZH_TRANSCRIPT.matches(name):
+            return False
+        return name.endswith(self.suffixes)
+
+    def stem_of(self, name: str) -> str:
+        """`name` without this artifact's suffix (the stem it was named after)."""
+        for suffix in self.suffixes:
+            if name.endswith(suffix):
+                return name.removesuffix(suffix)
+        return name
+
+    @staticmethod
+    def transcript(lang: str) -> Artifact:
+        """The transcript in `lang`: "zh" is the Chinese transcript, anything else Japanese."""
+        return Artifact.ZH_TRANSCRIPT if lang == "zh" else Artifact.TRANSCRIPT
+
+
+DOWNLOADING_SUFFIX = ".part"  # a download in progress (the video, or Twitch raw chat being fetched)
+
+
+@dataclass(frozen=True)
+class _Entry:
+    name: str
+    size: int
+    mtime: float
+    mtime_ns: int
+
+
+@dataclass(frozen=True)
+class _Snapshot:
+    entries: tuple[_Entry, ...]  # the plain files directly in the folder, sorted by name
+    folder_mtime: float
+
+
+def _scan(folder: Path) -> _Snapshot:
+    """Raises OSError when the folder is gone (e.g. deleted while being listed)."""
+    folder_mtime = folder.stat().st_mtime
+    entries = []
+    with os.scandir(folder) as it:
+        for e in it:
+            if e.is_file():
+                st = e.stat()
+                entries.append(_Entry(e.name, st.st_size, st.st_mtime, st.st_mtime_ns))
+    return _Snapshot(tuple(sorted(entries, key=lambda e: e.name)), folder_mtime)
+
+
+def _largest_video(entries: tuple[_Entry, ...]) -> _Entry | None:
+    """The finished video: the largest `.mp4` (yt-dlp may leave format fragments around)."""
+    mp4s = [e for e in entries if Artifact.VIDEO.matches(e.name)]
+    return max(mp4s, key=lambda e: e.size) if mp4s else None
+
+
+DATE_RE = re.compile(r"\d{8}")  # YYYYMMDD
+DATED_NAME_RE = re.compile(r"\[(\d{8})\]")  # a file name's `[YYYYMMDD]` prefix
+
+
+class Archive:
+    """One archive folder. Open it with `from_folder` or `from_video`, or through `Downloads`."""
+
+    def __init__(self, folder: Path, stem: str | None, snapshot: _Snapshot, root: Path | None) -> None:
+        self.folder = folder
+        self.stem = stem  # the video's file name without `.mp4`; None when there is no video
+        self.root = root  # the downloads root, when known
+        self._entries = snapshot.entries
+        self._folder_mtime = snapshot.folder_mtime
+
+    @classmethod
+    def from_folder(cls, folder: Path, root: Path | None = None) -> Archive:
+        """The archive in `folder`; its video is the largest `.mp4` in it. Raises OSError
+        when the folder cannot be read."""
+        snapshot = _scan(folder)
+        video = _largest_video(snapshot.entries)
+        return cls(folder, Artifact.VIDEO.stem_of(video.name) if video else None, snapshot, root)
+
+    @classmethod
+    def from_video(cls, video: Path, root: Path | None = None) -> Archive:
+        """The archive `video` belongs to (neither need exist yet); artifacts are named after it."""
+        try:
+            snapshot = _scan(video.parent)
+        except FileNotFoundError:
+            snapshot = _Snapshot((), 0.0)
+        return cls(video.parent, Artifact.VIDEO.stem_of(video.name), snapshot, root)
+
+    # ---- where it is ----
+
+    @property
+    def ref(self) -> str:
+        """The folder reference (`creator/date/title`, relative to the downloads root): the
+        `folder` value in dashboard URLs."""
+        if self.root is None:
+            raise ValueError(f"no downloads root known for {self.folder}")
+        return self.folder.relative_to(self.root).as_posix()
+
+    @property
+    def creator(self) -> str:
+        """The streamer the archive is filed under: the top folder below the downloads root."""
+        if self.root is not None:
+            return self.folder.relative_to(self.root).parts[0]
+        return self.folder.parent.parent.name
+
+    @property
+    def date_folder(self) -> str:
+        """The name of the date folder, as on disk (`YYYYMMDD` for every archive the downloader made)."""
+        return self.folder.parent.name
+
+    @property
+    def title(self) -> str:
+        return self.folder.name
+
+    @property
+    def date(self) -> str:
+        """The archive's `YYYYMMDD`: from its date folder, else from the `[YYYYMMDD]` prefix of
+        its video's name or of any file's name (first in sorted order); "" when none says."""
+        if DATE_RE.fullmatch(self.date_folder):
+            return self.date_folder
+        names = ([self.stem] if self.stem is not None else []) + [e.name for e in self._entries]
+        for name in names:
+            if m := DATED_NAME_RE.match(name):
+                return m.group(1)
+        return ""
+
+    @property
+    def size(self) -> int:
+        """Total bytes of the files in the folder."""
+        return sum(e.size for e in self._entries)
+
+    @property
+    def mtime(self) -> float:
+        """When a file in it last changed (the folder's own time when it is empty)."""
+        return max((e.mtime for e in self._entries), default=self._folder_mtime)
+
+    def member(self, name: str) -> Path | None:
+        """The plain file `name` directly inside the archive, or None when there is none.
+        Raises ValueError for a name that is not a bare file name inside the folder."""
+        base = self.folder.resolve()
+        path = (base / name).resolve()
+        if not name or Path(name).name != name or path.parent != base:
+            raise ValueError(f"bad file name: {name!r}")
+        return path if path.is_file() else None
+
+    # ---- what it has ----
+
+    def files(self, artifact: Artifact) -> list[Path]:
+        """Every file in the archive with this artifact's suffix, in sorted name order."""
+        return [self.folder / e.name for e in self._entries if artifact.matches(e.name)]
+
+    def file(self, artifact: Artifact) -> Path | None:
+        """The artifact's file (see the lookup rule), or None when the archive lacks it."""
+        names = {e.name for e in self._entries}
+        if self.stem is not None:
+            for suffix in artifact.suffixes:
+                if self.stem + suffix in names:
+                    return self.folder / (self.stem + suffix)
+        if artifact is Artifact.VIDEO:
+            video = _largest_video(self._entries)
+            return self.folder / video.name if video else None
+        found = self.files(artifact)
+        return found[0] if found else None
+
+    def _entry(self, artifact: Artifact) -> _Entry | None:
+        file = self.file(artifact)
+        return next((e for e in self._entries if e.name == file.name), None) if file else None
+
+    @property
+    def video(self) -> Path | None:
+        return self.file(Artifact.VIDEO)
+
+    @property
+    def video_size(self) -> int:
+        """Bytes of the video; 0 without one."""
+        entry = self._entry(Artifact.VIDEO)
+        return entry.size if entry else 0
+
+    def has(self, artifact: Artifact) -> bool:
+        return self.file(artifact) is not None
+
+    def present(self) -> set[Artifact]:
+        """The artifacts this archive has."""
+        return {a for a in Artifact if self.has(a)}
+
+    @property
+    def downloading(self) -> bool:
+        """No video yet, or a download in progress (a `.part` file) in the folder."""
+        return self.video is None or any(Path(e.name).suffix == DOWNLOADING_SUFFIX for e in self._entries)
+
+    # ---- reading ----
+
+    def read(self, artifact: Artifact) -> Any:
+        """The artifact's JSON contents, parsed. Raises ArtifactMissing when the archive
+        lacks it, ArtifactDamaged when it is not readable JSON."""
+        path = self.file(artifact)
+        if path is None:
+            raise ArtifactMissing(artifact, self.folder)
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            raise ArtifactMissing(artifact, path) from None
+        except ValueError as e:  # bad JSON, or not UTF-8
+            raise ArtifactDamaged(artifact, path, str(e)) from None
+
+    def read_chat(self) -> list[dict]:
+        """The cleaned chat's messages (none when the file holds something other than a list)."""
+        data = self.read(Artifact.CHAT)
+        return data if isinstance(data, list) else []
+
+    def read_transcript(self, lang: str = "ja") -> Any:
+        """The transcript's segments: Japanese, or with `lang` "zh" the Chinese transcript."""
+        return self.read(Artifact.transcript(lang))
+
+    def read_highlights(self) -> Any:
+        """The highlight table (路灯表) as stored: a dict with "rows" when well formed."""
+        return self.read(Artifact.HIGHLIGHTS)
+
+    def chat_count(self) -> int:
+        """How many chat messages the archive has; 0 when it has no readable chat. Cached
+        until the chat file changes."""
+        entry = self._entry(Artifact.CHAT)
+        if entry is None:
+            return 0
+        path = self.folder / entry.name
+        cached = _chat_counts.get(path)
+        if cached and cached[0] == entry.mtime_ns:
+            return cached[1]
+        try:
+            n = len(self.read_chat())
+        except (ArtifactMissing, ArtifactDamaged, OSError):
+            n = 0
+        _chat_counts[path] = (entry.mtime_ns, n)
+        return n
+
+
+# chat file -> (mtime_ns, message count): listing every archive must not re-read every chat
+_chat_counts: dict[Path, tuple[int, int]] = {}
+
+
+class Downloads:
+    """The downloads root: every archive under it, and client-supplied folder references."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = root.resolve()
+
+    def list(self) -> list[Archive]:
+        """Every `<creator>/<date>/<title>/` archive, newest first by date, then by when a file
+        in it last changed. Folders that vanish while being listed are skipped."""
+        if not self.root.is_dir():
+            return []
+        archives = []
+        for folder in self.root.glob("*/*/*"):
+            if folder.is_dir():
+                try:
+                    archives.append(Archive.from_folder(folder, self.root))
+                except OSError:
+                    continue  # vanished mid-scan (e.g. yt-dlp renaming, or pruned)
+        archives.sort(key=lambda a: (a.date_folder, a.mtime), reverse=True)
+        return archives
+
+    def open(self, ref: str) -> Archive:
+        """The archive a client-supplied folder reference names. Raises ArchiveNotFound for
+        anything outside the root, the root itself, or what is not a folder."""
+        path = (self.root / ref).resolve()
+        if path == self.root or not path.is_relative_to(self.root) or not path.is_dir():
+            raise ArchiveNotFound(ref)
+        try:
+            return Archive.from_folder(path, self.root)
+        except FileNotFoundError:
+            raise ArchiveNotFound(ref) from None
+
+
+class ArchiveNotFound(LookupError):
+    """No archive under the downloads root by that folder reference."""
+
+
+class ArtifactMissing(LookupError):
+    """The archive has no such artifact."""
+
+    def __init__(self, artifact: Artifact, path: Path) -> None:
+        super().__init__(f"no {artifact.name.lower()} in {path}")
+        self.artifact, self.path = artifact, path
+
+
+class ArtifactDamaged(ValueError):
+    """The artifact's file exists but cannot be parsed."""
+
+    def __init__(self, artifact: Artifact, path: Path, reason: str) -> None:
+        super().__init__(f"{path.name}: {reason}")
+        self.artifact, self.path = artifact, path
