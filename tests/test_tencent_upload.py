@@ -10,6 +10,8 @@ import pytest
 from backend.sheet import HEADER
 from backend.tencent_docs import TencentDocsError, TencentSettings, upload_table
 
+from .helpers import bare_archive
+
 FILE_ID = "FAKEFILE"
 TOKEN = "tok-SECRET-123"
 
@@ -242,10 +244,8 @@ def test_a_missing_token_fails_fast_naming_it(tmp_path):
 def test_cli_uploads_an_archive_folder(tmp_path, monkeypatch, capsys):
     import backend.tencent_docs as td
 
-    folder = tmp_path / "downloads" / "鹿乃まほろ" / "20261111" / "T"
-    folder.mkdir(parents=True)
-    (folder / "[20261111][鹿乃まほろ] T.highlights.json").write_text(
-        json.dumps({"streamer": "鹿乃まほろ", "title": "T", "rows": [row(0)]}), encoding="utf-8")
+    folder = bare_archive(tmp_path / "downloads", "鹿乃まほろ", "20261111", "T",
+                          highlights={"streamer": "鹿乃まほろ", "title": "T", "rows": [row(0)]})
     fake = FakeDocs()
     real_upload = td.upload_table
     monkeypatch.setattr(td, "upload_table", lambda *a, **kw: real_upload(*a, **kw, client=fake.client()))

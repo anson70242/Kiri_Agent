@@ -43,7 +43,7 @@ with tarfile.open(fileobj=sys.stdout.buffer, mode="w|") as tar:
         if Artifact.VIDEO.matches(f.name) and minutes >= 0:
             if minutes == 0:
                 continue
-            fd, tmp = tempfile.mkstemp(suffix=".mp4"); os.close(fd)
+            fd, tmp = tempfile.mkstemp(suffix=f.suffix); os.close(fd)
             subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(f), "-t", str(minutes * 60),
                             "-c", "copy", tmp], check=True)
             tar.add(tmp, arcname=arc)
