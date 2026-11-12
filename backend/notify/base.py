@@ -8,18 +8,17 @@ restarts, and delivers events in order with retries.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import os
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from backend.monitor import LiveState, StreamStatus
+from backend.state_file import StateFile
 
 from .history import NotifyHistory
 
@@ -113,11 +112,15 @@ class LiveNotifier:
         self.notify_offline = notify_offline
         self.offline_grace = offline_grace
         self.state_file = state_file
+        # Runtime state: a damaged file is set aside as a backup (the owner is alerted)
+        # and counts as no saved state at all.
+        self._state = StateFile(state_file, default=dict, policy="recover", decode=decode_live_state,
+                                encode=encode_live_state) if state_file else None
         self.max_attempts = max_attempts
         self.retry_base_delay = retry_base_delay
         # streamer id -> current live broadcast, or None if known not live.
         # A missing key means "never seen" (first sighting).
-        self._live: dict[str, StreamStatus | None] = self._load_state()
+        self._live: dict[str, StreamStatus | None] = self._state.load() if self._state else {}
         # No saved state at all (first deploy, wiped volume): whoever is live now was
         # live before we existed, so don't flood the channel. With saved state, a
         # streamer missing from it was just added to the config and is announced.
@@ -284,27 +287,22 @@ class LiveNotifier:
 
     # ---- persistence ----
 
-    def _load_state(self) -> dict[str, StreamStatus | None]:
-        if not self.state_file or not self.state_file.exists():
-            return {}
-        try:
-            raw = json.loads(self.state_file.read_text(encoding="utf-8"))
-            return {
-                sid: StreamStatus.from_dict(v) if v else None
-                for sid, v in raw.get("streamers", {}).items()
-            }
-        except Exception:  # noqa: BLE001 - a corrupt file must not stop startup
-            log.exception("could not read %s; starting fresh", self.state_file)
-            return {}
-
     def _save_state(self) -> None:
-        if not self.state_file:
+        if not self._state:
             return
-        data = {"version": 1, "streamers": {k: v.to_dict() if v else None for k, v in self._live.items()}}
         try:
-            self.state_file.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self.state_file.with_suffix(".tmp")
-            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
-            os.replace(tmp, self.state_file)  # atomic: never a half-written file
+            self._state.save(self._live)
         except Exception:  # noqa: BLE001
             log.exception("could not save %s", self.state_file)
+
+
+def decode_live_state(raw: Any) -> dict[str, StreamStatus | None]:
+    """The live-stream state file's JSON -> streamer id -> live broadcast (None: not live);
+    raises if it isn't that shape."""
+    if not isinstance(raw, dict) or not isinstance(streamers := raw.get("streamers", {}), dict):
+        raise ValueError("expected {\"streamers\": {streamer id: status or null}}")
+    return {sid: StreamStatus.from_dict(v) if v else None for sid, v in streamers.items()}
+
+
+def encode_live_state(live: dict[str, StreamStatus | None]) -> dict[str, Any]:
+    return {"version": 1, "streamers": {k: v.to_dict() if v else None for k, v in live.items()}}
