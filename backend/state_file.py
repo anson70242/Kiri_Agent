@@ -15,8 +15,9 @@ on it (the wrong shape). What happens then is the caller's policy:
   "<name>.corrupt-<YYYYMMDD-HHMMSS>", report an Incident, and return default().
 
 Incidents are always logged, then go to the StateFile's own `on_incident`, or else to
-the hook the application installed with `set_incident_hook` (the operator alert). This
-module knows nothing about where an alert ends up. A strict store that re-reads its file
+the hook the application installed with `set_incident_hook` (the operator alert; for a
+command line tool, `print_incidents`: the terminal). This module knows nothing about
+the alert channels. A strict store that re-reads its file
 while running and finds it damaged keeps its last good value and sends its own Incident
 (no backup) through `report`.
 """
@@ -25,6 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -80,6 +82,17 @@ def set_incident_hook(hook: IncidentHook | None) -> IncidentHook | None:
     global _hook
     previous, _hook = _hook, hook
     return previous
+
+
+def print_incidents() -> IncidentHook | None:
+    """For a command line tool, whose user is the owner at the terminal: every incident's
+    message goes to stderr. Call it first thing, before any store loads. Returns the hook
+    it replaces."""
+    return set_incident_hook(_print_incident)
+
+
+def _print_incident(incident: Incident) -> None:
+    print(incident.message, file=sys.stderr)
 
 
 def report(incident: Incident, on_incident: IncidentHook | None = None) -> None:

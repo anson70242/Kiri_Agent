@@ -22,6 +22,8 @@ from datetime import datetime
 from pathlib import Path
 
 from . import REPO_ROOT, DownloadError, PendingChats, download, downloader_for, load_settings
+from backend.state_file import print_incidents
+
 from .chat_clean import clean_chat
 
 
@@ -75,6 +77,7 @@ def main() -> int:
     p.add_argument("--clean", nargs="+", type=Path, metavar="FILE",
                    help="clean already-downloaded .live_chat.json / .chat.json files")
     args = p.parse_args()
+    print_incidents()  # a damaged chat retry queue: tell the owner at the terminal
     if args.clean:
         logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")
         bad = 0

@@ -51,7 +51,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from backend.state_file import Incident, StateFile, StateFileError, report
+from backend.state_file import Incident, StateFile, StateFileError, print_incidents, report
 
 log = logging.getLogger(__name__)
 
@@ -443,6 +443,7 @@ def main(argv: list[str] | None = None) -> int:
     e = sub.add_parser("enable", help="unblock an account")
     e.add_argument("name")
     args = p.parse_args(argv)
+    print_incidents()  # a damaged sessions file: tell the owner at the terminal
 
     try:
         auth = load_auth(args.config)

@@ -190,3 +190,58 @@ def wait_for(condition, timeout: float = 5) -> bool:
             return False
         time.sleep(0.02)
     return True
+
+
+# ---- command line tools: the person at the terminal is the owner ----
+
+def test_the_user_command_line_tells_the_terminal_about_a_damaged_sessions_file(tmp_path, monkeypatch, capsys):
+    from backend import auth as auth_cli
+
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "sessions.json").write_text("{damaged", encoding="utf-8")
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"auth": {"enabled": True}}), encoding="utf-8")
+
+    assert auth_cli.main(["--config", str(cfg), "list"]) == 0
+    (backup,) = backups(tmp_path / "data", "sessions.json")
+    assert f"sessions.json 损坏，已备份为 {backup.name}，已按空文件继续运行" in capsys.readouterr().err
+
+
+def test_the_download_command_line_tells_the_terminal_about_a_damaged_chat_retry_queue(tmp_path, monkeypatch, capsys):
+    from backend.downloader import __main__ as downloader_cli
+
+    (tmp_path / "pending.json").write_text(DAMAGED, encoding="utf-8")
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({
+        "monitor": {"streamers": []},
+        "download": {"output_dir": str(tmp_path / "dl"),
+                     "chat_retry": {"state_file": str(tmp_path / "pending.json")}},
+    }), encoding="utf-8")
+    monkeypatch.setattr("sys.argv", ["backend.downloader", "--config", str(cfg), "--pending"])
+
+    assert downloader_cli.main() == 0
+    (backup,) = backups(tmp_path, "pending.json")
+    assert f"pending.json 损坏，已备份为 {backup.name}，已按空文件继续运行" in capsys.readouterr().err
+
+
+def test_the_notify_command_line_tells_the_terminal_about_damaged_notification_state(tmp_path, monkeypatch, capsys):
+    from backend.notify import __main__ as notify_cli
+
+    monkeypatch.setitem(Notifier.registry, "rec", AlertRecorder)
+    monkeypatch.setenv("KIRI_T_REC", "https://alerts.test/hook")
+    (tmp_path / "notify_state.json").write_text("{damaged", encoding="utf-8")
+    (tmp_path / "notify_log.json").write_text("[damaged", encoding="utf-8")
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({
+        "monitor": {"streamers": []},
+        "notify": {"state_file": str(tmp_path / "notify_state.json"), "log_file": str(tmp_path / "notify_log.json"),
+                   "rec": {"webhook_env": "KIRI_T_REC"}},
+    }), encoding="utf-8")
+    monkeypatch.setattr("sys.argv", ["backend.notify", "--config", str(cfg)])
+
+    assert asyncio.run(notify_cli.main()) == 0
+    err = capsys.readouterr().err
+    (state_backup,) = backups(tmp_path, "notify_state.json")
+    (log_backup,) = backups(tmp_path, "notify_log.json")
+    assert f"notify_state.json 损坏，已备份为 {state_backup.name}，已按空文件继续运行" in err
+    assert f"notify_log.json 损坏，已备份为 {log_backup.name}，已按空文件继续运行" in err
