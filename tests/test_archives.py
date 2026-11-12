@@ -1,6 +1,9 @@
 """Archives router: listing, chat, file serving, and path traversal."""
 
+import csv
+import io
 import json
+import zipfile
 
 import pytest
 from fastapi import FastAPI
@@ -30,6 +33,7 @@ def client(tmp_path):
         {"start": "00:05:00", "end": "00:10:00", "score": 5, "top_pick": None},
     ]}
     (done / f"{STEM}.highlights.json").write_text(json.dumps(table, ensure_ascii=False), encoding="utf-8")
+    (done / f"{STEM}.live_chat.json").write_text("{}", encoding="utf-8")  # raw chat: not in the zip
     partial = out / "柊優花/20261106/雑談"
     partial.mkdir(parents=True)
     (partial / "[20261106][柊優花] 雑談.mp4.part").write_bytes(b"xx")
@@ -92,6 +96,36 @@ def test_highlights_list_and_table(client):
     assert [r["start"] for r in table["rows"]] == ["00:00:00", "00:05:00"]
     assert client.get("/api/highlights/table", params={"folder": "柊優花/20261106/雑談"}).status_code == 404
     assert client.get("/api/highlights/table", params={"folder": "../.."}).status_code == 404
+
+
+def test_listing_says_which_archives_have_a_table(client):
+    newest, done = client.get("/api/archives").json()["archives"]
+    assert done["highlights_file"] == f"{STEM}.highlights.json"
+    assert newest["highlights_file"] is None
+
+
+def test_highlights_csv(client):
+    r = client.get("/api/highlights/csv", params={"folder": FOLDER})
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/csv")
+    assert "attachment" in r.headers["content-disposition"]
+    text = r.content.decode("utf-8-sig")  # BOM, so Excel opens it as UTF-8
+    rows = list(csv.reader(io.StringIO(text)))
+    assert rows[0] == ["开始", "结束", "话题分类", "内容摘要（话题日志）", "切片标题 / 高能点", "分数", "弹幕", "剪辑"]
+    assert rows[1][:2] == ["00:00:00", "00:05:00"]
+    assert rows[1][4] == "🏆 开场" and rows[1][5] == "8"
+    assert client.get("/api/highlights/csv", params={"folder": "柊優花/20261106/雑談"}).status_code == 404
+
+
+def test_zip_has_everything_but_raw_chat(client):
+    r = client.get("/api/archives/zip", params={"folder": FOLDER})
+    assert r.status_code == 200 and "attachment" in r.headers["content-disposition"]
+    names = zipfile.ZipFile(io.BytesIO(r.content)).namelist()
+    assert sorted(names) == sorted([
+        f"{STEM}.mp4", f"{STEM}.chat_parsed.json", f"{STEM}.transcript.json",
+        f"{STEM}.highlights.json", f"{STEM}.highlights.csv",
+    ])
+    assert zipfile.ZipFile(io.BytesIO(r.content)).read(f"{STEM}.mp4") == b"0123456789"
+    assert client.get("/api/archives/zip", params={"folder": "../.."}).status_code == 404
 
 
 def test_highlights_page(client):

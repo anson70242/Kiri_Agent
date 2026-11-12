@@ -59,6 +59,7 @@
   .dl { background: var(--up-bg); color: var(--up); }
   .ch { background: var(--ok-bg); color: var(--ok); }
   .nochat { background: var(--off-bg); color: var(--off); }
+  .hl { background: #fef3c7; color: #b45309; }
   .empty { color: var(--muted); text-align: center; padding: 40px; }
   /* Auto-download progress */
   #downloads:empty { display: none; }
@@ -83,6 +84,7 @@
   .links a { font-size: 13px; color: var(--accent); text-decoration: none; border: 1px solid var(--border);
     border-radius: 8px; padding: 4px 10px; }
   .links a:hover { border-color: var(--accent); }
+  .links a.all { background: var(--accent); color: #fff; border-color: var(--accent); }
   .density { margin-top: 12px; }
   .density h3, .chat h3 { font-size: 13px; color: var(--muted); margin: 0 0 6px; font-weight: 600;
     display: flex; align-items: center; gap: 8px; }
@@ -149,7 +151,8 @@ function badges(a) {
   return (a.downloading ? `<span class="chip dl">下载中</span>` : "")
     + (a.has_chat ? `<span class="chip ch">有弹幕 ${a.chat_count.toLocaleString()}</span>`
                   : `<span class="chip nochat">无弹幕</span>`)
-    + (a.transcript_file ? `<span class="chip ch">有字幕</span>` : "");
+    + (a.transcript_file ? `<span class="chip ch">有字幕</span>` : "")
+    + (a.highlights_file ? `<span class="chip hl">有路灯表</span>` : "");
 }
 
 // ---- List view ----
@@ -259,9 +262,13 @@ async function pollDownloads() {
 async function drawDetail(folder) {
   const a = data.archives.find(x => x.folder === folder);
   if (!a) { app.innerHTML = `<div class="empty">找不到这场录播 · <a href="#">返回列表</a></div>`; return; }
-  const files = [a.video && [a.video, "视频"], a.chat_file && [a.chat_file, "弹幕 (清洗后)"],
-                 a.raw_chat_file && [a.raw_chat_file, "弹幕 (原始)"],
-                 a.transcript_file && [a.transcript_file, "字幕"]].filter(Boolean);
+  const q = encodeURIComponent(a.folder);
+  const links = [
+    a.video && [fileUrl(a, a.video, true), "视频"],
+    a.chat_file && [fileUrl(a, a.chat_file, true), "弹幕"],
+    a.transcript_file && [fileUrl(a, a.transcript_file, true), "字幕"],
+    a.highlights_file && [`/api/highlights/csv?folder=${q}`, "路灯表 (CSV)"],
+  ].filter(Boolean);
   app.innerHTML = `<div class="detail">
     <header>
       <button onclick="location.hash=''">← 返回</button>
@@ -277,8 +284,9 @@ async function drawDetail(folder) {
         ${a.video && !a.downloading ? `<video id="video" controls preload="metadata" src="${fileUrl(a, a.video)}">${a.transcript_file
             ? `<track kind="subtitles" srclang="ja" label="日本語" default src="/api/archives/subtitles.vtt?folder=${encodeURIComponent(a.folder)}">` : ""}</video>`
           : `<div class="novideo">${a.downloading ? "下载中，完成后可播放" : "没有视频文件"}</div>`}
-        <div class="links">${files.map(([n, label]) =>
-          `<a href="${fileUrl(a, n, true)}" download>⬇ ${label}</a>`).join("")}</div>
+        <div class="links">${links.map(([href, label]) => `<a href="${href}" download>⬇ ${label}</a>`).join("")}
+          ${a.downloading ? "" : `<a class="all" href="/api/archives/zip?folder=${q}" download>⬇ 全部下载 (zip)</a>`}
+          ${a.highlights_file ? `<a href="/highlights#${q}">🚦 看路灯表</a>` : ""}</div>
         <div class="density" id="density" hidden><h3>弹幕密度（每分钟）<span class="meta" id="peak"></span></h3>
           <canvas id="chart"></canvas></div>
       </div>

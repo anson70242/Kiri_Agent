@@ -5,12 +5,17 @@ backend/downloader/base.py VideoInfo.folder). Every path a client sends is resol
 and must stay inside output_dir.
 """
 
+import csv
+import io
 import json
 import shutil
+import zipfile
+from collections.abc import Iterator
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, StreamingResponse
 
 from .__main__ import REPO_ROOT
 
@@ -80,6 +85,7 @@ def _archive(root: Path, folder: Path) -> dict:
         "raw_chat_file": raw_chat.name if raw_chat else None,
         "chat_count": _chat_count(chat) if chat else 0,
         "transcript_file": transcript.name if transcript else None,
+        "highlights_file": next((f.name for f in files if f.name.endswith(HIGHLIGHTS_SUFFIX)), None),
         "size": sum(f.stat().st_size for f in files),
         "mtime": max((f.stat().st_mtime for f in files), default=folder.stat().st_mtime),
     }
@@ -88,6 +94,74 @@ def _archive(root: Path, folder: Path) -> dict:
 def _vtt_time(seconds: float) -> str:
     ms = round(max(0.0, float(seconds)) * 1000)
     return f"{ms // 3_600_000:02d}:{ms // 60_000 % 60:02d}:{ms // 1000 % 60:02d}.{ms % 1000:03d}"
+
+
+CSV_HEADER = ["开始", "结束", "话题分类", "内容摘要（话题日志）", "切片标题 / 高能点", "分数", "弹幕", "剪辑"]
+
+
+def highlights_csv(table: dict) -> str:
+    """路灯表 rows as CSV; multi-line cells (one topic-log entry / highlight per line)."""
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow(CSV_HEADER)
+    for r in table.get("rows") or []:
+        log = [f"{e.get('start', '')}–{e.get('end', '')} {e.get('title', '')} {e.get('detail', '')}".strip()
+               for e in r.get("timeline") or []]
+        picks = []
+        if tp := r.get("top_pick"):
+            span = f"{tp['start']}–{tp['end']} " if tp.get("start") and tp.get("end") else ""
+            picks.append(f"🏆 {span}{tp.get('title', '')}")
+        picks += [f"{h.get('time', '')} [{h.get('type', '')}] {h.get('title', '')}" for h in r.get("highlights") or []]
+        score = r.get("score")
+        w.writerow([r.get("start", ""), r.get("end", ""), "\n".join(r.get("topics") or []), "\n".join(log),
+                    "\n".join(picks), "" if score is None else score, r.get("chat_level", ""), ""])
+    return out.getvalue()
+
+
+def attachment(filename: str) -> str:
+    """Content-Disposition for a download with a non-ASCII (Japanese) file name."""
+    return f"attachment; filename*=UTF-8''{quote(filename)}"
+
+
+class _Sink:
+    """Write-only, unseekable buffer: zipfile writes into it, the generator drains it."""
+
+    def __init__(self) -> None:
+        self.buf = bytearray()
+        self.pos = 0
+
+    def write(self, b: bytes) -> int:
+        self.buf += b
+        self.pos += len(b)
+        return len(b)
+
+    def tell(self) -> int:
+        return self.pos
+
+    def flush(self) -> None:
+        pass
+
+    def drain(self) -> bytes:
+        data = bytes(self.buf)
+        self.buf.clear()
+        return data
+
+
+def stream_zip(files: list[Path], extra: dict[str, bytes]) -> Iterator[bytes]:
+    """A zip (stored, ZIP64) of `files` plus in-memory `extra` files, produced chunk by
+    chunk, so a multi-GB video never needs a temp file or memory of its size."""
+    sink = _Sink()
+    with zipfile.ZipFile(sink, "w", zipfile.ZIP_STORED, allowZip64=True) as zf:  # type: ignore[arg-type]
+        for f in files:
+            with f.open("rb") as src, zf.open(f.name, "w", force_zip64=True) as dst:
+                while chunk := src.read(1 << 20):
+                    dst.write(chunk)
+                    if len(sink.buf) >= 1 << 20:
+                        yield sink.drain()
+            yield sink.drain()
+        for name, data in extra.items():
+            zf.writestr(name, data)
+    yield sink.drain()  # central directory
 
 
 def list_archives(root: Path) -> list[dict]:
@@ -197,6 +271,36 @@ def create_router(output_dir: Path) -> APIRouter:
             return json.loads(file.read_text(encoding="utf-8"))
         except ValueError:
             raise HTTPException(500, "路灯表 is not valid JSON")
+
+    @router.get("/api/highlights/csv")
+    def highlights_csv_download(folder: str) -> Response:
+        """The 路灯表 as CSV (UTF-8 with BOM, so Excel opens it right)."""
+        file = highlights_file(resolve_folder(folder))
+        if not file:
+            raise HTTPException(404, "no 路灯表 for this archive")
+        try:
+            table = json.loads(file.read_text(encoding="utf-8"))
+        except ValueError:
+            raise HTTPException(500, "路灯表 is not valid JSON")
+        name = file.name.removesuffix(HIGHLIGHTS_SUFFIX) + ".highlights.csv"
+        return Response(highlights_csv(table).encode("utf-8-sig"), media_type="text/csv; charset=utf-8",
+                        headers={"Content-Disposition": attachment(name)})
+
+    @router.get("/api/archives/zip")
+    def zip_download(folder: str) -> StreamingResponse:
+        """Everything of one archive except the raw chat, zipped on the fly (no temp file)."""
+        path = resolve_folder(folder)
+        files = sorted(f for f in path.iterdir() if f.is_file() and f.suffix != ".part"
+                       and not f.name.endswith(RAW_CHAT_SUFFIXES))
+        extra: dict[str, bytes] = {}
+        if table := highlights_file(path):
+            try:
+                csv_name = table.name.removesuffix(HIGHLIGHTS_SUFFIX) + ".highlights.csv"
+                extra[csv_name] = highlights_csv(json.loads(table.read_text(encoding="utf-8"))).encode("utf-8-sig")
+            except ValueError:
+                pass
+        return StreamingResponse(stream_zip(files, extra), media_type="application/zip",
+                                 headers={"Content-Disposition": attachment(path.name + ".zip")})
 
     @router.get("/api/archives/transcript")
     def transcript(folder: str) -> dict:
