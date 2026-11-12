@@ -46,11 +46,6 @@ class ASRError(Exception):
     """Audio extraction or the whisper request failed."""
 
 
-def transcript_path(video: Path) -> Path:
-    """Where `transcribe` writes the transcript. Only the tests still ask; ask the Archive module."""
-    return Archive.from_video(video).save_path(Artifact.TRANSCRIPT)
-
-
 def transcribe(video: Path, settings: ASRSettings, client: httpx.Client | None = None) -> Path:
     """Transcribe `video` and save its transcript in its archive, next to it."""
     with tempfile.TemporaryDirectory() as tmp:

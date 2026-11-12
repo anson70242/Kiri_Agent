@@ -295,18 +295,15 @@ class Archive:
             snapshot = _Snapshot((), 0.0)
         return cls(path.parent, artifact.stem_of(path.name), snapshot, root)
 
-    def save_path(self, artifact: Artifact) -> Path:
-        """The file `save` writes the artifact to: the video stem + the artifact's suffix."""
+    def save(self, artifact: Artifact, content: Any) -> Path:
+        """Write the artifact's content atomically (through `<name>.tmp`, then a rename) to the
+        file named after the archive's stem (see `artifact_name`) and return that file. The
+        archive sees the new file afterwards."""
         if artifact in (Artifact.VIDEO, Artifact.RAW_CHAT):
             raise ValueError(f"the {artifact.name.lower()} is downloaded, not saved through the archive")
         if self.stem is None:
             raise ValueError(f"no video stem to name a {artifact.name.lower()} after in {self.folder}")
-        return self.folder / (self.stem + artifact.suffixes[0])
-
-    def save(self, artifact: Artifact, content: Any) -> Path:
-        """Write the artifact's content atomically (through `<name>.tmp`, then a rename) and
-        return its file. The archive sees the new file afterwards."""
-        out = self.save_path(artifact)
+        out = self.folder / artifact_name(self.stem, artifact)
         tmp = out.with_name(out.name + SAVING_SUFFIX)
         tmp.write_text(self._serialize(artifact, content), encoding="utf-8")
         tmp.replace(out)

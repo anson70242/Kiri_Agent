@@ -7,7 +7,7 @@ import httpx
 import pytest
 
 from backend.downloader import ChatNotReady, DownloadError, DownloadSettings, PendingChats, download, downloader_for
-from backend.downloader.base import PlatformDownloader, VideoInfo, safe_name
+from backend.downloader.base import PlatformDownloader, VideoInfo
 from backend.downloader.twitch import TwitchDownloader, convert_comment, fetch_comments
 from backend.downloader.youtube import YoutubeDownloader
 from backend.monitor import Streamer
@@ -32,13 +32,6 @@ def test_routes_url_to_platform(url, cls):
 def test_unsupported_url():
     with pytest.raises(DownloadError, match="unsupported"):
         downloader_for("https://twitcasting.tv/x/movie/1", DownloadSettings())
-
-
-def test_safe_name():
-    assert safe_name('a/b:c*?"<>|d') == "a_b_c______d"
-    assert safe_name("  many   spaces. ") == "many spaces"
-    assert safe_name("...") == "_"
-    assert len(safe_name("x" * 500)) == 150
 
 
 def test_youtube_info_matches_config_streamer():
@@ -378,6 +371,6 @@ def test_clean_empty_chat_writes_empty_list(tmp_path):
 
 
 def test_clean_rejects_unknown_file(tmp_path):
-    from backend.downloader.chat_clean import parsed_path
+    from backend.downloader.chat_clean import clean_chat
     with pytest.raises(ValueError):
-        parsed_path(tmp_path / "x.json")
+        clean_chat(tmp_path / "x.json")

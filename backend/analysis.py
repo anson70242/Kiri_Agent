@@ -177,11 +177,6 @@ def build_segments(
 
 # ---- the passes ----
 
-def highlights_path(video: Path) -> Path:
-    """Where `analyze` writes the highlight table. Kept for callers not yet on the Archive module."""
-    return Archive.from_video(video).save_path(Artifact.HIGHLIGHTS)
-
-
 def analyze(
     video: Path,
     complete: Complete,

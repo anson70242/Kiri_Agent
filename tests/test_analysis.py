@@ -4,7 +4,8 @@ import json
 
 import pytest
 
-from backend.analysis import AnalysisError, AnalysisSettings, analyze, build_segments, chat_levels, highlights_path
+from backend.analysis import AnalysisError, AnalysisSettings, analyze, build_segments, chat_levels
+from backend.archive import Archive, Artifact
 
 
 def tr(start, text, dur=2.0):
@@ -112,7 +113,7 @@ def test_analyze_writes_the_table(tmp_path):
 
     out = analyze(video, llm, streamer="鹿乃まほろ", title="土豆")
 
-    assert out == highlights_path(video) == tmp_path / "[20261111][鹿乃まほろ] 土豆.highlights.json"
+    assert out == tmp_path / "[20261111][鹿乃まほろ] 土豆.highlights.json"
     data = json.loads(out.read_text(encoding="utf-8"))
     first, second = data["rows"]
     assert (first["start"], first["end"], second["start"]) == ("00:00:00", "00:05:00", "00:05:00")
@@ -146,7 +147,7 @@ def test_limit_analyzes_only_the_first_minutes(tmp_path):
     llm = FakeLLM(SCORES[:1])
     analyze(video, llm, streamer="A", title="t", settings=AnalysisSettings(limit_seconds=300))
 
-    rows = json.loads(highlights_path(video).read_text(encoding="utf-8"))["rows"]
+    rows = Archive.from_video(video).read_highlights()["rows"]
     assert [r["start"] for r in rows] == ["00:00:00"]
     assert len(llm.calls) == 2  # 1 segment + scoring
     assert "まだチュートリアル" not in llm.calls[0][-1]["content"]  # 00:06:40: beyond the limit, not even context
@@ -155,14 +156,14 @@ def test_limit_analyzes_only_the_first_minutes(tmp_path):
 def test_bad_json_is_retried(tmp_path):
     video = make_archive(tmp_path)
     analyze(video, FakeLLM(SCORES, bad_first=2), streamer="A", title="t")
-    assert highlights_path(video).exists()
+    assert Archive.from_video(video).has(Artifact.HIGHLIGHTS)
 
 
 def test_bad_json_every_time_fails(tmp_path):
     video = make_archive(tmp_path)
     with pytest.raises(AnalysisError, match="JSON"):
         analyze(video, FakeLLM(SCORES, bad_first=99), streamer="A", title="t")
-    assert not highlights_path(video).exists()
+    assert not Archive.from_video(video).has(Artifact.HIGHLIGHTS)
 
 
 def test_no_transcript_fails(tmp_path):
