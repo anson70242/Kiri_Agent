@@ -110,7 +110,7 @@ class Archive:
 
     def __init__(self, folder: Path, stem: str | None, snapshot: _Snapshot, root: Path | None) -> None:
         self.folder = folder
-        self.stem = stem  # the video's file name without `.mp4`; None when there is no video
+        self.stem = stem  # what the artifacts are named after (the video's name less its extension); None without a video
         self.root = root  # the downloads root, when known
         self._entries = snapshot.entries
         self._folder_mtime = snapshot.folder_mtime
@@ -125,12 +125,13 @@ class Archive:
 
     @classmethod
     def from_video(cls, video: Path, root: Path | None = None) -> Archive:
-        """The archive `video` belongs to (neither need exist yet); artifacts are named after it."""
+        """The archive `video` belongs to (neither need exist yet); artifacts are named after
+        it without its extension, whatever the format (`x.mkv` -> `x.transcript.json`)."""
         try:
             snapshot = _scan(video.parent)
         except FileNotFoundError:
             snapshot = _Snapshot((), 0.0)
-        return cls(video.parent, Artifact.VIDEO.stem_of(video.name), snapshot, root)
+        return cls(video.parent, video.stem, snapshot, root)
 
     # ---- where it is ----
 
@@ -294,18 +295,15 @@ class Archive:
             snapshot = _Snapshot((), 0.0)
         return cls(path.parent, artifact.stem_of(path.name), snapshot, root)
 
-    def save_path(self, artifact: Artifact) -> Path:
-        """The file `save` writes the artifact to: the video stem + the artifact's suffix."""
+    def save(self, artifact: Artifact, content: Any) -> Path:
+        """Write the artifact's content atomically (through `<name>.tmp`, then a rename) to the
+        file named after the archive's stem (see `artifact_name`) and return that file. The
+        archive sees the new file afterwards."""
         if artifact in (Artifact.VIDEO, Artifact.RAW_CHAT):
             raise ValueError(f"the {artifact.name.lower()} is downloaded, not saved through the archive")
         if self.stem is None:
             raise ValueError(f"no video stem to name a {artifact.name.lower()} after in {self.folder}")
-        return self.folder / (self.stem + artifact.suffixes[0])
-
-    def save(self, artifact: Artifact, content: Any) -> Path:
-        """Write the artifact's content atomically (through `<name>.tmp`, then a rename) and
-        return its file. The archive sees the new file afterwards."""
-        out = self.save_path(artifact)
+        out = self.folder / artifact_name(self.stem, artifact)
         tmp = out.with_name(out.name + SAVING_SUFFIX)
         tmp.write_text(self._serialize(artifact, content), encoding="utf-8")
         tmp.replace(out)

@@ -112,6 +112,13 @@ def sample_archive(root: Path, creator: str = "柊優花", date: str = "20261105
     return folder
 
 
+def bare_archive(root: Path, creator: str = "柊優花", date: str = "20261105", title: str = "歌枠",
+                 **artifacts: object) -> Path:
+    """`sample_archive` with only the artifacts given (none by default), e.g.
+    `bare_archive(root, "A", stem="v", video=b"x")`."""
+    return sample_archive(root, creator, date, title, **{**dict.fromkeys(_ARTIFACT_FILES), **artifacts})
+
+
 # Ports Chromium refuses to open (ERR_UNSAFE_PORT), for the browser tests' servers.
 CHROME_UNSAFE = {1719, 1720, 1723, 2049, 3659, 4045, 4190, 5060, 5061, 6000, 6566, 6665, 6666, 6667, 6668,
                  6669, 6679, 6697, 10080}

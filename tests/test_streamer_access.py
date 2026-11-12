@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from backend.monitor.server import create_app
 
+from .helpers import bare_archive
 from .test_auth import ORIGIN, cli, login
 
 FOLDERS = {"A": "A/20261110/歌枠", "B": "B/20261109/雑談", "Old": "Old/20261001/昔"}
@@ -31,10 +32,7 @@ def write_config(tmp_path):
         "download": {"output_dir": str(tmp_path / "dl"), "auto": {"state_file": str(tmp_path / "queue.json")}},
     }), encoding="utf-8")
     for folder in FOLDERS.values():  # an archive per streamer, "Old" one no longer in the list
-        d = tmp_path / "dl" / folder
-        d.mkdir(parents=True)
-        (d / "v.mp4").write_bytes(b"video")
-        (d / "v.highlights.json").write_text(json.dumps({"rows": []}), encoding="utf-8")
+        bare_archive(tmp_path / "dl", *folder.split("/"), stem="v", video=b"video", highlights={"rows": []})
     return cfg
 
 

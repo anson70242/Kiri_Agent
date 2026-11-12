@@ -133,22 +133,12 @@ def parse_twitch(path: Path) -> list[ChatLine]:
 PARSERS = dict(zip(Artifact.RAW_CHAT.suffixes, (parse_youtube, parse_twitch), strict=True))
 
 
-def raw_chat_archive(raw: Path) -> Archive:
-    """The archive of a raw chat file, its artifacts named after it. Raises ValueError for
-    a file that is not a raw chat."""
+def clean_chat(raw: Path) -> Path:
+    """Parse a raw chat file (type from its suffix) and save the cleaned chat in its archive,
+    named after the raw chat. Raises ValueError for a file that is not a raw chat."""
     if not Artifact.RAW_CHAT.matches(raw.name):
         raise ValueError(f"not a raw chat file: {raw.name}")
-    return Archive.from_file(raw)
-
-
-def parsed_path(raw: Path) -> Path:
-    """Where `clean_chat` writes the cleaned chat. Only the tests still ask; ask the Archive module."""
-    return raw_chat_archive(raw).save_path(Artifact.CHAT)
-
-
-def clean_chat(raw: Path) -> Path:
-    """Parse a raw chat file (type from its suffix) and save the cleaned chat in its archive."""
-    archive = raw_chat_archive(raw)
+    archive = Archive.from_file(raw)
     parser = next(p for s, p in PARSERS.items() if raw.name.endswith(s))
     lines = parser(raw)
     out = archive.save(Artifact.CHAT, lines)

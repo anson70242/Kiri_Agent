@@ -94,11 +94,6 @@ class TranslateSettings:
     limit_seconds: int | None = None  # only translate the start of the stream (trial runs)
 
 
-def zh_path(video: Path) -> Path:
-    """Where `translate` writes the Chinese transcript. Only the tests still ask; ask the Archive module."""
-    return Archive.from_video(video).save_path(Artifact.ZH_TRANSCRIPT)
-
-
 def translate(video: Path, complete: Complete, settings: TranslateSettings | None = None) -> Path:
     """Translate the transcript of `video`'s archive and save its Chinese transcript."""
     s = settings or TranslateSettings()

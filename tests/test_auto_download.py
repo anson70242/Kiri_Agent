@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from backend.archive import Archive, Artifact
 from backend.downloader import auto as auto_mod
 from backend.downloader.auto import AutoDownloader, Outcome, load_auto
 from backend.downloader.base import DownloadError, DownloadResult, DownloadSettings, VideoInfo
@@ -18,7 +19,7 @@ from backend.downloader.youtube import YoutubeDownloader
 from backend.notify import EventKind, LiveNotifier, StreamEvent
 from backend.notify.discord import DiscordNotifier
 
-from .helpers import A, B, T0, later, live, off
+from .helpers import A, B, T0, bare_archive, later, live, off
 
 HOUR = 3600
 
@@ -449,9 +450,7 @@ def test_prune_keeps_newest(tmp_path):
     creator = ad.settings.output_dir / "A"
     folders = []
     for i, date in enumerate(["20261101", "20261102", "20261102", "20261105"]):
-        f = creator / date / f"title{i}"
-        f.mkdir(parents=True)
-        (f / "v.mp4").write_bytes(b"x")
+        f = bare_archive(ad.settings.output_dir, "A", date, f"title{i}", stem="v", video=b"x")
         os.utime(f, (1000 + i, 1000 + i))
         folders.append(f)
     queue = PendingChats(ad.settings.pending_file)
@@ -611,10 +610,8 @@ def test_downloaded_message_links_to_the_archive_page(tmp_path):
     ad, _, sent = make(tmp_path)
     ad.site_url = "https://kiri.example/"  # SITE_URL in .env
     ad.on_ended(ended())
-    folder = tmp_path / "dl" / "A" / "20261110" / "歌枠 (Vol.2)!"
-    folder.mkdir(parents=True)
-    video = folder / "v.mp4"
-    video.write_bytes(b"x")
+    folder = bare_archive(tmp_path / "dl", "A", "20261110", "歌枠 (Vol.2)!", stem="v", video=b"x")
+    video = Archive.from_folder(folder).video
     info = VideoInfo("youtube", "v1", "u", "t", "@a", "A", "20261110")
     ad.finish(ad.next_due(), Outcome("done", result=DownloadResult(info, folder, video=video)))
 
@@ -634,11 +631,9 @@ def test_no_site_url_no_link(tmp_path):
 
 def run_pipeline(tmp_path, translate_ok=True, site_url=""):
     """A stream through download -> transcribe -> analyze + translate; returns the events sent."""
-    folder = tmp_path / "dl" / "A" / "20261110" / "歌枠"
-    folder.mkdir(parents=True)
-    video = folder / "v.mp4"
-    video.write_bytes(b"x")
-    (folder / "v.chat_parsed.json").write_text("[]", encoding="utf-8")
+    folder = bare_archive(tmp_path / "dl", "A", "20261110", "歌枠", stem="v", video=b"x", chat=[])
+    archive = Archive.from_folder(folder)
+    video = archive.video
 
     def transcribe(v):
         (folder / "v.transcript.json").write_text("[]", encoding="utf-8")
@@ -657,7 +652,7 @@ def run_pipeline(tmp_path, translate_ok=True, site_url=""):
     ad.site_url = site_url
     ad.on_ended(ended())
     info = VideoInfo("youtube", "v1", "u", "t", "@a", "A", "20261110")
-    ad.finish(ad.next_due(), Outcome("done", result=DownloadResult(info, folder, video=video, chat=folder / "v.chat_parsed.json")))
+    ad.finish(ad.next_due(), Outcome("done", result=DownloadResult(info, folder, video=video, chat=archive.file(Artifact.CHAT))))
     for _ in range(10):
         job = ad.next_due()
         if job is None:

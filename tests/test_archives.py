@@ -1,7 +1,6 @@
 """Archives router: listing, chat, file serving, and path traversal."""
 
 import io
-import json
 import zipfile
 
 import openpyxl
@@ -11,6 +10,8 @@ from fastapi.testclient import TestClient
 
 from backend.monitor.archives import create_router
 
+from .helpers import sample_archive
+
 FOLDER = "柊優花/20261105/歌枠"
 STEM = "[20261105][柊優花] 歌枠"
 
@@ -18,25 +19,14 @@ STEM = "[20261105][柊優花] 歌枠"
 @pytest.fixture
 def client(tmp_path):
     out = tmp_path / "downloads"
-    done = out / FOLDER
-    done.mkdir(parents=True)
-    (done / f"{STEM}.mp4").write_bytes(b"0123456789")
-    chat = [
-        {"time": "00:00:05", "user": "a", "msg": "hi"},
-        {"time": "00:00:30", "user": "b", "msg": "yo"},
-        {"time": "00:02:10", "user": "c", "msg": "8888", "sc": "¥500"},
-    ]
-    (done / f"{STEM}.chat_parsed.json").write_text(json.dumps(chat), encoding="utf-8")
-    (done / f"{STEM}.transcript.json").write_text('[{"start": 1.0, "end": 2.0, "text": "やっほー"}]', encoding="utf-8")
     table = {"streamer": "柊優花", "title": "歌枠", "rows": [
         {"start": "00:00:00", "end": "00:05:00", "score": 8, "top_pick": {"title": "开场"}, "timeline": [
             {"start": "00:00", "end": "02:00", "title": "开场", "detail": "打招呼"},
             {"start": "02:00", "end": "05:00", "title": "杂谈", "detail": "聊天"}]},
         {"start": "00:05:00", "end": "00:10:00", "score": 5, "top_pick": None},
     ]}
-    (done / f"{STEM}.highlights.json").write_text(json.dumps(table, ensure_ascii=False), encoding="utf-8")
-    (done / f"{STEM}.live_chat.json").write_text("{}", encoding="utf-8")  # raw chat: not in the zip
-    (done / f"{STEM}.zh.transcript.json").write_text('[{"start": 1.0, "end": 2.0, "text": "哈喽"}]', encoding="utf-8")
+    # every artifact (helpers.CHAT has 3 messages); the raw chat is not in the zip
+    sample_archive(out, *FOLDER.split("/"), highlights=table, raw_chat={})
     partial = out / "柊優花/20261106/雑談"
     partial.mkdir(parents=True)
     (partial / "[20261106][柊優花] 雑談.mp4.part").write_bytes(b"xx")

@@ -23,7 +23,6 @@ import yt_dlp
 from yt_dlp.utils import DownloadError as YtdlpError
 
 from backend.archive import Artifact, artifact_name, name_archive
-from backend.archive import safe_name as safe_name  # re-exported: older callers import it from here
 from backend.monitor import Streamer
 
 from .chat_clean import clean_chat

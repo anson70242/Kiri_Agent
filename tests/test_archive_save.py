@@ -77,7 +77,7 @@ def test_downloads_are_not_saved_through_the_archive(tmp_path):
 def test_an_archive_opened_from_its_raw_chat_names_artifacts_after_it(tmp_path):
     for raw_name in (f"{STEM}.live_chat.json", f"{STEM}.chat.json"):
         a = Archive.from_file(tmp_path / raw_name)
-        assert a.save_path(Artifact.CHAT) == tmp_path / f"{STEM}.chat_parsed.json"
+        assert a.save(Artifact.CHAT, []) == tmp_path / f"{STEM}.chat_parsed.json"
     assert Archive.from_file(tmp_path / f"{STEM}.zh.transcript.json").stem == STEM
     with pytest.raises(ValueError):
         Archive.from_file(tmp_path / "x.json")
