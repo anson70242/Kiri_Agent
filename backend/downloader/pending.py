@@ -11,7 +11,6 @@ same file name even if the title changes in the meantime.
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from collections.abc import Callable, Iterable
@@ -20,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.monitor import Streamer
+from backend.state_file import StateFile
 
 from .base import ChatNotReady, DownloadError, DownloadSettings, VideoInfo
 
@@ -43,6 +43,13 @@ class PendingChat:
         return cls(**d | {"info": VideoInfo(**d["info"]), "output_dir": Path(d["output_dir"])})
 
 
+def decode_entries(raw: Any) -> list[PendingChat]:
+    """The chat retry queue file's JSON -> entries; raises if it isn't a list of entries."""
+    if not isinstance(raw, list):
+        raise ValueError(f"expected a list of queued chats, got {type(raw).__name__}")
+    return [PendingChat.from_dict(d) for d in raw]
+
+
 @dataclass
 class RetryReport:
     done: list[tuple[PendingChat, Path]] = field(default_factory=list)
@@ -59,6 +66,9 @@ class PendingChats:
         clock: Callable[[], float] = time.time,
     ):
         self.path = path
+        # Runtime state: a damaged queue is set aside as a backup (the owner is alerted).
+        self._store = StateFile(path, default=list, policy="recover", decode=decode_entries,
+                                encode=lambda entries: [e.to_dict() for e in entries])
         self.interval = interval
         self.give_up = give_up
         self.clock = clock
@@ -72,21 +82,10 @@ class PendingChats:
     # ---- storage ----
 
     def load(self) -> list[PendingChat]:
-        try:
-            raw = json.loads(self.path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            return []
-        except (OSError, ValueError) as e:
-            log.error("can't read %s (%s); treating the queue as empty", self.path, e)
-            return []
-        return [PendingChat.from_dict(d) for d in raw]
+        return self._store.load()
 
     def save(self, entries: Iterable[PendingChat]) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_name(self.path.name + ".tmp")
-        data = [e.to_dict() for e in entries]
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(self.path)
+        self._store.save(list(entries))
 
     # ---- queue ----
 
