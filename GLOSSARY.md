@@ -28,7 +28,7 @@ _Avoid_: zh transcript, translation
 
 **Highlight table**:
 The 路灯表: the scored table of an archive's segments that editors pick clips from.
-_Avoid_: highlights, analysis
+_Avoid_: analysis, score sheet
 
 ### State files
 
