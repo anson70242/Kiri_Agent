@@ -10,16 +10,20 @@ Tencent Docs) so a team can split up the clipping work. A human still makes the 
 
 | Step | What it does | Status |
 | --- | --- | --- |
-| [Live monitor](#live-monitor) | Polls YouTube / Twitch channels, web dashboard | done |
+| [Live monitor](#live-monitor) | Polls YouTube / Twitch channels; streamers managed on the dashboard | done |
 | [Notifications](#go-live-notifications) | Discord message on go-live and stream end | done |
 | [Downloader](#downloader) | VOD + chat replay via yt-dlp and Twitch GQL; members / sub-only with cookies | done |
 | Chat cleaning | Raw chat → `{"time","user","msg"}` lines | done |
 | [Auto download](#auto-download) | Stream ends → archive downloaded, old ones pruned, Discord report | done |
-| Chat density | Messages per minute, spikes, Super Chats → candidate highlight times | planned |
 | [Transcription](#transcription) | Downloaded VOD → `<stem>.transcript.json` via faster-whisper on the GPU | done |
-| [Segment analysis](#analysis-路灯表) | 5-minute topic logs, whole-stream scoring, highlights → `<stem>.highlights.json` | done |
-| Highlight report | Ranked timeline for editors | planned |
-| [Sheet upload](#upload-to-tencent-docs) | 路灯表 → a new sheet in a Tencent Docs spreadsheet (per streamer, automatic); Google Sheets | partly |
+| [Segment analysis](#analysis-路灯表) | 5-minute topic logs, chat density, whole-stream scoring, highlights → 路灯表 | done |
+| [Chinese subtitles](#chinese-subtitles) | Transcript → `<stem>.zh.transcript.json`, shown on the video, SRT download | done |
+| [Dashboard](#dashboard) | 直播状态 / 录播 / 路灯表 pages; 路灯表 as a formatted Excel download | done |
+| [Sheet upload](#upload-to-tencent-docs) | 路灯表 → a sheet in a Tencent Docs spreadsheet, per streamer, automatic | done (waiting for credentials) |
+| Google Sheets | The same upload for Google Sheets | planned |
+
+Each finished stage starts the next, per stream: download → transcribe → analyze and
+translate side by side → upload. Every stage retries and reports to Discord.
 
 ## Setup
 
@@ -28,7 +32,8 @@ uv sync
 cp .env.example .env      # then fill in what you use
 ```
 
-Python 3.13+, [uv](https://docs.astral.sh/uv/), and ffmpeg (for downloads).
+Python 3.13+, [uv](https://docs.astral.sh/uv/), and ffmpeg (for downloads). For the
+browser tests, once: `uv run playwright install chromium`.
 
 ## Agent
 
@@ -65,15 +70,14 @@ uv run -m backend.monitor --once --json
 uv run -m backend.monitor.server       # web dashboard at http://127.0.0.1:8770
 ```
 
-Streamers are managed on the dashboard (直播状态 page: ＋ 新增主播, and the ⚙ gear on
-each card for auto-download, archives to keep, and deleting). The list is saved in
+Streamers are managed on the dashboard (see [Dashboard](#dashboard)). The list is saved in
 `data/streamers.json` (`monitor.streamers_file`), which deploys never touch;
 `monitor.streamers` in `config.json` only seeds it on the first start. `platform` is
 `youtube` or `twitch`; `channel` is a YouTube handle (`@foo`), channel id (`UC...`) or
-URL, or a Twitch login (`foo`) or URL. Deleting a streamer keeps their downloads.
+URL, or a Twitch login (`foo`) or URL. Adding a streamer checks that the channel
+exists; deleting one keeps their downloads.
 
 - [roster.py](backend/monitor/roster.py): the streamer list and per-streamer settings.
-
 - [base.py](backend/monitor/base.py): shared `Streamer`, `StreamStatus`, `LiveState`,
   `PlatformMonitor` base class, `StreamMonitor` poll loop.
 - [youtube.py](backend/monitor/youtube.py): `YouTubeMonitor`, scrapes `/<channel>/live`; no API key.
@@ -136,8 +140,8 @@ uv lock --upgrade-package yt-dlp && uv sync     # update to the latest yt-dlp ni
 
 Files go to `downloads/<streamer>/<YYYYMMDD>/<title>/[date][streamer] title.mp4`, with
 chat next to it: `.live_chat.json` (YouTube, raw yt-dlp format) or `.chat.json` (Twitch,
-TwitchDownloaderCLI's layout). A channel listed in `monitor.streamers` uses that
-streamer's name; any other channel uses its display name.
+TwitchDownloaderCLI's layout). A channel in the streamer list uses that streamer's
+name; any other channel uses its display name.
 
 Every downloaded chat is also cleaned into `.chat_parsed.json` (AutoKiri's format, one
 message per line; `sc` only on YouTube Super Chats / Stickers), see
@@ -230,6 +234,7 @@ prompts adapted from AutoKiri's clip_highlight). Uses the `llm` settings (see LL
    `highlights`, `top_pick`, `score`, `reason`, `chat_count`, `chat_ratio`, `chat_level`
    (高/中/低: top 20% / bottom 30% of segments by density).
 
+The table is shown on the 路灯表 page and downloads as Excel (see [Dashboard](#dashboard)).
 Discord then gets the top 5 segments. A 5 h stream takes about 3 minutes with
 `gemini-3-flash`. By hand: `uv run -m backend.analysis <video> --streamer NAME --title T`
 (`--no-proxy` when running on the proxy machine itself).
@@ -245,15 +250,40 @@ moves. Missing lines are asked again, then kept in Japanese. Output
 switches 中 / 日 / 双语 in the subtitle panel, and offers SRT downloads. A 5 h stream is
 about 120k tokens. By hand: `uv run -m backend.translate <video>`.
 
+## Dashboard
+
+`uv run -m backend.monitor.server` (on the server: through Tailscale, see Deploy). Three pages:
+
+- **直播状态** ([monitor.html](frontend/monitor.html)): who is live / upcoming / offline,
+  with covers and a tag search. ＋ 新增主播 adds a streamer; the ⚙ gear on each card sets
+  自动下载, 保留录播数 (archives kept), 自动上传到腾讯文档 + the target spreadsheet, and
+  deletes the streamer. Cards show ⬇ 自动下载 / ⬆ 自动上传 when on.
+- **录播** ([archives.html](frontend/archives.html)): downloaded archives with pipeline
+  progress. Each archive plays with Chinese (default) / Japanese subtitles, a 中 / 日 / 双语
+  subtitle panel, chat replay and a chat density chart. Downloads: video, chat, SRT
+  (中 / 日), 路灯表 (Excel), or everything as one zip (raw chat left out).
+- **路灯表** ([highlights.html](frontend/highlights.html)): each stream's table, filterable
+  by score, chat level and "only with clips"; topic-log entries expand.
+
+The Excel 路灯表 ([sheet.py](backend/sheet.py)) is ready to read as opened: frozen header,
+wide wrapped 内容摘要 / 切片标题 columns (left-aligned, everything else centred), score
+colours, 🏆 rows highlighted, an empty 剪辑 column for the team. Importing it into Tencent
+Docs or Google Sheets by hand keeps that formatting.
+
+API: `/api/status`, `/api/streamers` (GET / POST / PATCH / DELETE), `/api/downloads`,
+`/api/archives/*`, `/api/highlights/*` (see [server.py](backend/monitor/server.py) and
+[archives.py](backend/monitor/archives.py)).
+
 ## Upload to Tencent Docs
 
 [tencent_docs.py](backend/tencent_docs.py) adds a 路灯表 as a new sheet (tab) of an existing
 docs.qq.com spreadsheet, with the same columns and cell text as the Excel download.
 
 Automatic, per streamer: in the ⚙ gear, tick 自动上传到腾讯文档 and paste the target
-spreadsheet's link. Once the 路灯表 is ready it is uploaded (a pipeline stage after the
-analysis: retried like the others, 📤 / ❗ on Discord). Uploading the same stream again
-replaces its sheet. By hand:
+spreadsheet's link (each streamer can use its own spreadsheet, or share one). Once the
+路灯表 is ready it is uploaded (a pipeline stage after the analysis: retried like the
+others, 📤 / ❗ on Discord with the sheet link). Uploading the same stream again replaces
+its sheet. By hand:
 
 ```sh
 uv run -m backend.tencent_docs downloads/<creator>/<YYYYMMDD>/<title>/ --sheet <link or FILE_ID>
@@ -262,13 +292,15 @@ uv run -m backend.tencent_docs <.highlights.json> --sheet <link> --title "202611
 
 Credentials (shared by every streamer): `TENCENT_DOCS_ACCESS_TOKEN` /
 `TENCENT_DOCS_CLIENT_ID` / `TENCENT_DOCS_OPEN_ID` in `.env` (Tencent Docs Open Platform;
-registering needs a mainland ID). Without them the upload stage is skipped (logged).
+registering needs a mainland ID). Without them the upload stage is skipped (logged). After
+changing them on the server: `docker compose up -d --force-recreate kiri` (a plain
+restart doesn't re-read `.env`).
 
 Limits of the v3 API: the sheet is named `<YYYYMMDD> <creator> <title>`, cut to 31
 characters (a re-upload deletes the old sheet first; only when it is the spreadsheet's only
 sheet does the new one get ` (2)`). New sheets
-always land last (no move). Values only: no colours, bold, wrap, column widths or frozen
-header, so open the Excel download for those. At most 10000 cells per sheet (~1200
+always land last (no move). Values only: no colours, alignment, wrap, column widths or
+frozen header (import the Excel download by hand when those matter). At most 10000 cells per sheet (~1200
 segments). The access token expires after about 30 days: then every call fails with
 `API error 400006`; get a new one and update `.env`.
 
@@ -289,10 +321,14 @@ chat over ssh (`--minutes 0`: no video, `--full`: whole video) into `downloads/`
 ## Tests
 
 ```sh
-uv run pytest                          # everything offline (~40s)
+uv run pytest                          # everything offline (~50s)
 uv run pytest -m network -s            # real YouTube / Twitch checks
 STRESS_SEEDS=1000 uv run pytest tests/test_random_sequences.py   # longer stress run
 ```
+
+The dashboard's browser tests ([test_monitor_page.py](tests/test_monitor_page.py), Playwright)
+need Chromium (`uv run playwright install chromium`); without it they skip themselves,
+which is what CI does (CI runs the code tests only).
 
 ## Deploy
 
@@ -310,6 +346,8 @@ One-time server setup (Docker, deploy user, SSH key, GitHub secrets, Tailscale):
 
 ## Configuration
 
-`config.json` holds everything safe to commit (`monitor`, `notify`, `download`);
-secrets go in `.env` (see [.env.example](.env.example)): LLM endpoint and key,
-`DISCORD_WEBHOOK_URL`, `TWITCH_OAUTH`, `LLM_PROXY` / `LLM_PROXY_TOKEN`, `TENCENT_DOCS_*`.
+`config.json` holds everything safe to commit: `monitor`, `notify`, `llm`, `analysis`,
+`translate`, `asr`, `upload`, `download`. Secrets go in `.env` (see
+[.env.example](.env.example)): LLM keys, `DISCORD_WEBHOOK_URL`, `TWITCH_OAUTH`,
+`LLM_PROXY` / `LLM_PROXY_TOKEN`, `TENCENT_DOCS_*`. Everything the dashboard edits lives
+in `data/` (streamer list, queues, notify state), which deploys never touch.
