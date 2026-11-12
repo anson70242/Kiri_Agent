@@ -1,4 +1,4 @@
-"""Uploading a 路灯表 to Tencent Docs, against a fake docs.qq.com (httpx.MockTransport)."""
+"""Uploading a 路灯表 to Tencent Docs, against a fake docs.qq.com MCP endpoint (httpx.MockTransport)."""
 
 from __future__ import annotations
 
@@ -11,11 +11,11 @@ from backend.sheet import HEADER
 from backend.tencent_docs import TencentDocsError, TencentSettings, upload_table
 
 FILE_ID = "FAKEFILE"
-SECRETS = {"access_token": "tok-SECRET-123", "client_id": "cid-SECRET", "open_id": "oid-SECRET"}
+TOKEN = "tok-SECRET-123"
 
 
 def settings(**kw) -> TencentSettings:
-    return TencentSettings(**{**SECRETS, "file_id": FILE_ID, "retry_delay": 0, **kw})
+    return TencentSettings(**{"token": TOKEN, "file_id": FILE_ID, "retry_delay": 0, **kw})
 
 
 def row(i: int, **kw) -> dict:
@@ -26,126 +26,177 @@ def row(i: int, **kw) -> dict:
 
 
 class FakeDocs:
-    """Records every request; answers like the v3 spreadsheet API (HTTP 200, status in `code`)."""
+    """Records every MCP tool call; answers like docs.qq.com/openapi/mcp (JSON-RPC over HTTP)."""
 
-    def __init__(self, sheets=("工作表1",), errors=None):
-        self.sheets = [{"sheetId": f"s{i}", "title": t} for i, t in enumerate(sheets)]
+    def __init__(self, sheets=("工作表1",), errors=None, rows=200):
+        self.sheets = [{"sheet_id": f"s{i}", "sheet_name": t, "row_count": rows} for i, t in enumerate(sheets)]
+        self.calls: list[tuple[str, dict]] = []
         self.requests: list[httpx.Request] = []
-        self.errors = list(errors or [])  # (predicate(kind), body) answered once each
+        self.errors = dict(errors or {})  # tool -> JSON-RPC error message, answered once
+        self.expired = False
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
-        kind = self.kind(request)
-        for i, (match, body) in enumerate(self.errors):
-            if match(kind):
-                del self.errors[i]
-                return httpx.Response(200, json=body)
-        if request.method == "GET":
-            return httpx.Response(200, json={"properties": self.sheets})
-        out = []
-        for req in json.loads(request.content)["requests"]:
-            if add := req.get("addSheetRequest"):
-                props = {"sheetId": "NEW1", "title": add["title"], "rowCount": add["rowCount"],
-                         "columnCount": add["columnCount"]}
-                self.sheets.append(props)
-                out.append({"addSheetResponse": {"properties": props}})
-            elif "deleteSheetRequest" in req:
-                sid = req["deleteSheetRequest"]["sheetId"]
-                self.sheets = [s for s in self.sheets if s["sheetId"] != sid]
-                out.append({})
-            else:
-                out.append({})
-        return httpx.Response(200, json={"code": 0, "message": "", "responses": out})
-
-    @staticmethod
-    def kind(request: httpx.Request) -> str:
-        if request.method == "GET":
-            return "list"
-        return next(iter(json.loads(request.content)["requests"][0]))
+        if self.expired:
+            return httpx.Response(401, json={"error": "invalid_token", "error_description": "invalid or expired token"})
+        body = json.loads(request.content)
+        assert body["method"] == "tools/call"
+        tool, args = body["params"]["name"], body["params"]["arguments"]
+        assert args["file_id"] == FILE_ID
+        self.calls.append((tool, args))
+        if msg := self.errors.pop(tool, None):
+            return httpx.Response(200, json={"jsonrpc": "2.0", "id": body["id"],
+                                             "error": {"code": -32603, "message": msg}})
+        result: dict = {"error": "", "trace_id": "t"}
+        if tool == "sheet.get_sheet_info":
+            result["sheets"] = self.sheets
+        elif tool == "sheet.add_sheet":
+            new = {"sheet_id": "NEW1", "sheet_name": args["name"], "row_count": 200}
+            self.sheets.insert(args.get("index", len(self.sheets)), new)
+            result["sheet_id"] = "NEW1"
+        elif tool == "sheet.delete_sheet":
+            self.sheets = [s for s in self.sheets if s["sheet_id"] != args["sheet_id"]]
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": body["id"], "result": {
+            "content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}]}})
 
     def client(self) -> httpx.Client:
         return httpx.Client(transport=httpx.MockTransport(self.handle))
 
-    def bodies(self, kind: str) -> list[dict]:
-        return [json.loads(r.content)["requests"][0][kind] for r in self.requests if self.kind(r) == kind]
+    def tools(self) -> list[str]:
+        return [t for t, _ in self.calls]
+
+    def args(self, tool: str) -> list[dict]:
+        return [a for t, a in self.calls if t == tool]
 
     def written(self) -> list[list]:
-        """All updateRangeRequest cells, as plain values, placed at their start rows."""
-        grid: dict[int, list] = {}
-        for body in self.bodies("updateRangeRequest"):
-            g = body["gridData"]
-            for i, r in enumerate(g["rows"]):
-                grid[g["startRow"] + i] = [next(iter(c["cellValue"].values())) for c in r["values"]]
-        return [grid[i] for i in sorted(grid)]
+        """All set_range_value cells as plain values, laid out as a grid."""
+        grid: dict[tuple[int, int], object] = {}
+        for a in self.args("sheet.set_range_value"):
+            for v in a["values"]:
+                key = {"NUMBER": "number_value", "STRING": "string_value"}[v["value_type"].upper()]
+                grid[v["row"], v["col"]] = v[key]
+        rows = 1 + max(r for r, _ in grid)
+        return [[grid.get((r, c), "") for c in range(len(HEADER))] for r in range(rows)]
+
+    def style(self, r: int, c: int) -> dict:
+        """The style one cell ends up with. Like the real set_cell_style, the last call
+        covering a cell replaces its whole style: fields it leaves out go back to default
+        (seen live: a later font colour wiped the cell's alignment and wrapping)."""
+        out: dict = {}
+        for a in self.args("sheet.set_cell_style"):
+            if a["start_row"] <= r <= a["end_row"] and a["start_col"] <= c <= a["end_col"]:
+                out = {k: v for k, v in a.items() if k not in
+                       ("file_id", "sheet_id", "start_row", "end_row", "start_col", "end_col")}
+        return out
 
 
-def test_upload_creates_a_sheet_and_writes_header_and_rows():
-    fake = FakeDocs()
-    table = {"streamer": "鹿乃まほろ", "title": "T", "rows": [row(0, top_pick={"start": "00:01:00", "end": "00:02:00",
-                                                                             "title": "名场面"}), row(5)]}
-    url = upload_table(table, settings(), sheet_title="20261111 鹿乃まほろ T", client=fake.client())
+def table3() -> dict:
+    return {"streamer": "鹿乃まほろ", "title": "T", "rows": [
+        row(0, score=8, chat_level="高", top_pick={"start": "00:01:00", "end": "00:02:00", "title": "名场面"}),
+        row(5, score=5),
+        row(10, score=3, chat_level="低"),
+    ]}
+
+
+def test_upload_adds_a_first_sheet_with_the_table_and_its_formatting():
+    fake = FakeDocs(sheets=["工作表1", "20261108 X Y"])
+    url = upload_table(table3(), settings(), sheet_title="20261111 鹿乃まほろ T", client=fake.client())
 
     assert url == f"https://docs.qq.com/sheet/{FILE_ID}?tab=NEW1"
-    kinds = [fake.kind(r) for r in fake.requests]
-    assert kinds[:2] == ["list", "addSheetRequest"] and set(kinds[2:]) == {"updateRangeRequest"}
-    assert fake.bodies("addSheetRequest")[0]["title"] == "20261111 鹿乃まほろ T"
-    assert all(b["sheetId"] == "NEW1" for b in fake.bodies("updateRangeRequest"))
-
-    grid = fake.written()
-    assert grid[0] == HEADER
-    assert len(grid) == 3
-    assert grid[1][0] == "00:00:00" and grid[1][2] == "杂谈\n游戏"
-    assert grid[1][3] == "00:00:00–00:02:00 【开场】 打招呼\n\n00:02:00–00:05:00 【猫】 猫来了"
-    assert grid[1][4].startswith("🏆 00:01:00–00:02:00 名场面")
-    assert grid[1][5] == 5  # the score goes up as a number, not text
+    (add,) = fake.args("sheet.add_sheet")
+    assert add["name"] == "20261111 鹿乃まほろ T" and add["index"] == 0  # newest first
+    assert [s["sheet_name"] for s in fake.sheets][0] == "20261111 鹿乃まほろ T"
+    assert all(a["sheet_id"] == "NEW1" for t, a in fake.calls if t not in ("sheet.get_sheet_info", "sheet.add_sheet"))
     for r in fake.requests:
-        assert r.headers["Access-Token"] == SECRETS["access_token"]
-        assert r.headers["Client-Id"] == SECRETS["client_id"]
-        assert r.headers["Open-Id"] == SECRETS["open_id"]
-    assert fake.requests[0].url.path == f"/openapi/spreadsheet/v3/files/{FILE_ID}"
-    assert fake.requests[1].url.path == f"/openapi/spreadsheet/v3/files/{FILE_ID}/batchUpdate"
+        assert r.headers["Authorization"] == TOKEN
+        assert str(r.url) == "https://docs.qq.com/openapi/mcp"
 
-
-def test_a_long_table_is_written_in_batches_and_the_sheet_fits_the_cell_limit():
-    from backend.tencent_docs import MAX_CELLS, ROWS_PER_BATCH
-
-    fake = FakeDocs()
-    n = ROWS_PER_BATCH * 2 + 7  # 10 h of 5-minute segments would be 120
-    table = {"rows": [row(i % 50, score=i) for i in range(n)]}
-    upload_table(table, settings(), sheet_title="t", client=fake.client())
-
-    writes = fake.bodies("updateRangeRequest")
-    assert len(writes) == 3
-    assert [w["gridData"]["startRow"] for w in writes] == [0, ROWS_PER_BATCH, ROWS_PER_BATCH * 2]
-    assert all(len(w["gridData"]["rows"]) <= ROWS_PER_BATCH for w in writes)
     grid = fake.written()
-    assert len(grid) == n + 1 and grid[0] == HEADER and [g[5] for g in grid[1:]] == list(range(n))
-    add = fake.bodies("addSheetRequest")[0]
-    assert add["rowCount"] >= n + 1 and add["columnCount"] >= len(HEADER)
-    assert add["rowCount"] * add["columnCount"] <= MAX_CELLS
+    assert grid[0] == HEADER and len(grid) == 4
+    assert grid[1][2] == "杂谈\n游戏"
+    assert grid[1][3] == "00:00:00–00:02:00 【开场】 打招呼\n\n00:02:00–00:05:00 【猫】 猫来了"
+    assert grid[1][4] == "🏆 00:01:00–00:02:00 名场面"
+    assert grid[1][5] == 8 and grid[3][5] == 3  # scores as numbers, so they sort and filter
 
-
-def test_a_table_too_big_for_one_sheet_is_refused_before_any_request():
-    fake = FakeDocs()
-    with pytest.raises(TencentDocsError, match="10000"):
-        upload_table({"rows": [row(0)] * 1300}, settings(), sheet_title="t", client=fake.client())
-    assert fake.requests == []
+    # Same look as the Excel download.
+    for c in range(8):  # the whole header, 剪辑 included
+        head = fake.style(0, c)
+        assert head["bold"] and head["bg_color"].endswith("E8EFFB") and head["vertical_align"] == "center"
+    assert fake.style(0, 0)["horizontal_align"] == "center"
+    for r in (1, 2, 3):  # every body cell keeps its full look, coloured or not
+        for c in range(8):
+            s = fake.style(r, c)
+            assert s["vertical_align"] == "center" and s["wrap_text"], (r, c)
+            want = "left" if c in (3, 4) else "general" if c == 7 else "center"
+            assert s["horizontal_align"] == want, (r, c)
+    for c in range(8):
+        assert fake.style(1, c)["bg_color"].endswith("FFFBEB")  # the 🏆 row
+        assert "bg_color" not in fake.style(2, c)
+    assert fake.style(1, 5)["font_color"].endswith("E11D48")  # score 8
+    assert fake.style(2, 5)["font_color"].endswith("C2410C")  # score 5
+    assert fake.style(3, 5)["font_color"].endswith("5A6B8C")  # score 3
+    assert fake.style(1, 6)["bold"] and fake.style(1, 6)["font_color"].endswith("E11D48")  # chat 高
+    assert "font_color" not in fake.style(3, 6)
+    # Few calls: neighbouring cells with the same look share one.
+    assert len(fake.args("sheet.set_cell_style")) <= 16
+    widths = {d["index"]: d["size"] for a in fake.args("sheet.set_dimension_size") for d in a["dimensions"]
+              if d["dimension_type"] == "col"}
+    assert widths[3] > widths[4] > max(w for c, w in widths.items() if c not in (3, 4))
+    assert fake.args("sheet.set_freeze")[0]["row_count"] == 1
 
 
 def test_uploading_again_replaces_the_old_sheet():
     fake = FakeDocs(sheets=["工作表1", "20261111 A T"])
     upload_table({"rows": [row(0)]}, settings(), sheet_title="20261111 A T", client=fake.client())
-    assert [fake.kind(r) for r in fake.requests][:3] == ["list", "deleteSheetRequest", "addSheetRequest"]
-    assert fake.bodies("deleteSheetRequest") == [{"sheetId": "s1"}]
-    assert [s["title"] for s in fake.sheets] == ["工作表1", "20261111 A T"]
+    assert fake.tools()[:3] == ["sheet.get_sheet_info", "sheet.delete_sheet", "sheet.add_sheet"]
+    assert fake.args("sheet.delete_sheet")[0]["sheet_id"] == "s1"
+    assert sorted(s["sheet_name"] for s in fake.sheets) == ["20261111 A T", "工作表1"]
 
 
 def test_the_only_sheet_is_never_deleted():
     # A spreadsheet can't be left with no sheet: keep it and number the new one.
     fake = FakeDocs(sheets=["20261111 A T"])
     upload_table({"rows": [row(0)]}, settings(), sheet_title="20261111 A T", client=fake.client())
-    assert fake.bodies("deleteSheetRequest") == []
-    assert fake.bodies("addSheetRequest")[0]["title"] == "20261111 A T (2)"
+    assert fake.args("sheet.delete_sheet") == []
+    assert fake.args("sheet.add_sheet")[0]["name"] == "20261111 A T (2)"
+
+
+def test_a_long_stream_gets_more_rows():
+    # A new sheet has 200 rows; a 20-hour stream needs 241 (header + 240 segments).
+    fake = FakeDocs()
+    upload_table({"rows": [row(i % 50) for i in range(240)]}, settings(), sheet_title="t", client=fake.client())
+    (ins,) = fake.args("sheet.insert_dimension")
+    assert ins["dimension_type"] == "row" and ins["count"] >= 41
+    assert len(fake.written()) == 241
+
+
+def test_an_expired_token_is_a_clear_error_and_never_shows_the_token():
+    fake = FakeDocs()
+    fake.expired = True
+    with pytest.raises(TencentDocsError) as e:
+        upload_table({"rows": [row(0)]}, settings(), sheet_title="t", client=fake.client())
+    assert "TENCENT_DOCS_MCP_TOKEN" in str(e.value)  # says what to renew
+    assert TOKEN not in str(e.value) and TOKEN not in repr(settings())
+
+
+def test_a_failed_write_deletes_the_half_filled_sheet():
+    msg = "tool execution failed (tool: sheet.set_range_value): type:business, code:608651, msg:bad cells"
+    fake = FakeDocs(errors={"sheet.set_range_value": msg})
+    with pytest.raises(TencentDocsError, match="608651"):
+        upload_table({"rows": [row(0)]}, settings(), sheet_title="t", client=fake.client())
+    assert fake.args("sheet.delete_sheet") == [{"file_id": FILE_ID, "sheet_id": "NEW1"}]
+    assert [s["sheet_name"] for s in fake.sheets] == ["工作表1"]
+
+
+def test_sheet_title_is_date_creator_title_trimmed_and_safe():
+    from backend.tencent_docs import MAX_TITLE, sheet_title, unique_title
+
+    t = sheet_title({"streamer": "鹿乃まほろ", "title": "【Potato Please】60,000個のじゃがいもの皮って何時間で剥けますか？【鹿乃まほろ/ミリプロ】"},
+                    "20261111")
+    assert t.startswith("20261111 鹿乃まほろ 【Potato Please】") and len(t) <= MAX_TITLE
+    assert "/" not in sheet_title({"title": "a/b[c]:d"})
+    long = "x" * MAX_TITLE
+    assert unique_title(long, {long}) == "x" * (MAX_TITLE - 4) + " (2)"
 
 
 @pytest.mark.parametrize("text, file_id", [
@@ -163,53 +214,6 @@ def test_file_id_from_a_link_or_an_id(text, file_id):
     assert parse_file_id(text) == file_id
 
 
-def test_sheet_title_is_date_creator_title_trimmed_and_safe():
-    from backend.tencent_docs import MAX_TITLE, sheet_title, unique_title
-
-    t = sheet_title({"streamer": "鹿乃まほろ", "title": "【Potato Please】60,000個のじゃがいもの皮って何時間で剥けますか？【鹿乃まほろ/ミリプロ】"},
-                    "20261111")
-    assert t.startswith("20261111 鹿乃まほろ 【Potato Please】") and len(t) <= MAX_TITLE
-    assert "/" not in sheet_title({"title": "a/b[c]:d"})
-    long = "x" * MAX_TITLE
-    assert unique_title(long, {long}) == "x" * (MAX_TITLE - 4) + " (2)"
-
-
-def test_an_expired_token_is_a_clear_error_and_never_shows_the_token():
-    expired = {"code": 400006, "message": "Authentication Internal Error"}
-    fake = FakeDocs(errors=[(lambda k: k == "list", expired)])
-    with pytest.raises(TencentDocsError) as e:
-        upload_table({"rows": [row(0)]}, settings(), sheet_title="t", client=fake.client())
-    assert e.value.code == 400006
-    assert "400006" in str(e.value) and "token" in str(e.value).lower()
-    for secret in SECRETS.values():
-        assert secret not in str(e.value) and secret not in repr(settings())
-    assert [fake.kind(r) for r in fake.requests] == ["list"]
-
-
-def test_a_failed_write_deletes_the_half_filled_sheet():
-    fake = FakeDocs(errors=[(lambda k: k == "updateRangeRequest", {"code": 400001, "message": "bad cells"})])
-    with pytest.raises(TencentDocsError, match="400001"):
-        upload_table({"rows": [row(0)]}, settings(), sheet_title="t", client=fake.client())
-    assert fake.bodies("deleteSheetRequest") == [{"sheetId": "NEW1"}]
-    assert [s["title"] for s in fake.sheets] == ["工作表1"]
-
-
-def test_a_backend_timeout_on_a_write_is_retried():
-    flaky = {"code": 500001, "message": "read tcp: i/o timeout"}
-    fake = FakeDocs(errors=[(lambda k: k == "updateRangeRequest", flaky)])
-    url = upload_table({"rows": [row(0)]}, settings(), sheet_title="t", client=fake.client())
-    assert url.endswith("?tab=NEW1")
-    assert len(fake.bodies("updateRangeRequest")) == 2 and fake.bodies("deleteSheetRequest") == []
-
-
-def test_creating_the_sheet_is_not_retried():
-    flaky = {"code": 500001, "message": "i/o timeout"}
-    fake = FakeDocs(errors=[(lambda k: k == "addSheetRequest", flaky)])
-    with pytest.raises(TencentDocsError, match="500001"):
-        upload_table({"rows": [row(0)]}, settings(), sheet_title="t", client=fake.client())
-    assert len(fake.bodies("addSheetRequest")) == 1
-
-
 # ---- settings ----
 
 def write_config(tmp_path, tencent: dict | None) -> object:
@@ -218,32 +222,19 @@ def write_config(tmp_path, tencent: dict | None) -> object:
     return path
 
 
-ENV = {"TENCENT_DOCS_ACCESS_TOKEN": "t", "TENCENT_DOCS_CLIENT_ID": "c", "TENCENT_DOCS_OPEN_ID": "o"}
-
-
-def test_credentials_come_from_env_named_in_config(tmp_path):
+def test_the_token_comes_from_the_env_var_named_in_config(tmp_path):
     from backend.tencent_docs import load_credentials
 
-    cfg = write_config(tmp_path, {"access_token_env": "MY_TOKEN"})
-    s = load_credentials(cfg, env={**ENV, "MY_TOKEN": "mine"})
-    assert (s.access_token, s.client_id, s.open_id) == ("mine", "c", "o")
+    cfg = write_config(tmp_path, {"token_env": "MY_TOKEN"})
+    assert load_credentials(cfg, env={"MY_TOKEN": "mine"}).token == "mine"
+    assert load_credentials(write_config(tmp_path, None), env={"TENCENT_DOCS_MCP_TOKEN": "t"}).token == "t"
 
 
-@pytest.mark.parametrize("drop", list(ENV))
-def test_a_missing_credential_fails_fast_naming_it(tmp_path, drop):
+def test_a_missing_token_fails_fast_naming_it(tmp_path):
     from backend.tencent_docs import load_credentials
 
-    env = {k: v for k, v in ENV.items() if k != drop}
-    with pytest.raises(TencentDocsError, match=drop):
-        load_credentials(write_config(tmp_path, {}), env=env)
-
-
-def test_no_upload_section_names_every_credential(tmp_path):
-    from backend.tencent_docs import load_credentials
-
-    with pytest.raises(TencentDocsError) as e:
-        load_credentials(write_config(tmp_path, None), env={})
-    assert all(name in str(e.value) for name in ENV)
+    with pytest.raises(TencentDocsError, match="TENCENT_DOCS_MCP_TOKEN"):
+        load_credentials(write_config(tmp_path, {}), env={})
 
 
 # ---- CLI ----
@@ -260,11 +251,11 @@ def test_cli_uploads_an_archive_folder(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(td, "upload_table", lambda *a, **kw: real_upload(*a, **kw, client=fake.client()))
     monkeypatch.setattr(td, "load_credentials", lambda cfg: settings(file_id=""))
 
-    assert td.main([str(folder), "--sheet", "https://docs.qq.com/sheet/CLI?tab=x"]) == 0
-    assert fake.bodies("addSheetRequest")[0]["title"] == "20261111 鹿乃まほろ T"
+    assert td.main([str(folder), "--sheet", f"https://docs.qq.com/sheet/{FILE_ID}?tab=x"]) == 0
+    assert fake.args("sheet.add_sheet")[0]["name"] == "20261111 鹿乃まほろ T"
     out = capsys.readouterr().out
-    assert "https://docs.qq.com/sheet/CLI?tab=NEW1" in out
-    assert SECRETS["access_token"] not in out
+    assert f"https://docs.qq.com/sheet/{FILE_ID}?tab=NEW1" in out
+    assert TOKEN not in out
 
 
 def test_cli_reports_missing_settings(tmp_path, capsys):
@@ -272,6 +263,6 @@ def test_cli_reports_missing_settings(tmp_path, capsys):
 
     f = tmp_path / "x.highlights.json"
     f.write_text("{}", encoding="utf-8")
-    cfg = write_config(tmp_path, {"access_token_env": "KIRI_TEST_NO_SUCH_TOKEN"})  # never in a real .env
+    cfg = write_config(tmp_path, {"token_env": "KIRI_TEST_NO_SUCH_TOKEN"})  # never in a real .env
     assert td.main([str(f), "--sheet", "FAKEFILE", "--config", str(cfg)]) == 1
     assert "KIRI_TEST_NO_SUCH_TOKEN" in capsys.readouterr().err

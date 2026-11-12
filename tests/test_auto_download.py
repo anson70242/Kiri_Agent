@@ -587,7 +587,7 @@ def test_video_format_caps_height():
 
 
 def test_load_auto_uploads_only_with_credentials(tmp_path, monkeypatch):
-    names = {"access_token_env": "KIRI_T_TOKEN", "client_id_env": "KIRI_T_CLIENT", "open_id_env": "KIRI_T_OPEN"}
+    names = {"token_env": "KIRI_T_TOKEN"}  # never in a real .env
     cfg = tmp_path / "config.json"
     cfg.write_text(json.dumps({
         "monitor": {"streamers": [{"name": "A", "platform": "youtube", "channel": "@a", "auto_download": True,

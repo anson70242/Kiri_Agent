@@ -18,7 +18,7 @@
 | [路灯表分析](#路灯表分析) | 5 分钟话题日志、弹幕密度、全场评分、高能点 → 路灯表 | 完成 |
 | [中文字幕](#中文字幕) | 日文字幕 → `<stem>.zh.transcript.json`，显示在影片上，可下载 SRT | 完成 |
 | [网页](#网页) | 直播状态 / 录播 / 路灯表三个页面；路灯表可下载成排好版的 Excel | 完成 |
-| [上传腾讯文档](#上传腾讯文档) | 路灯表 → 腾讯文档表格里的一个子表，按主播设定、自动上传 | 完成（等凭证） |
+| [上传腾讯文档](#上传腾讯文档) | 路灯表 → 腾讯文档表格里的一个子表（带格式），按主播设定、自动上传 | 完成 |
 | Google Sheets | 同样的上传，换成 Google Sheets | 计划中 |
 
 每一场直播按顺序跑：下载 → 转写 → 分析和翻译同时进行 → 上传。每一步失败都会重试，并在 Discord 报告。
@@ -238,8 +238,9 @@ API：`/api/status`、`/api/streamers`（GET / POST / PATCH / DELETE）、`/api/
 
 ## 上传腾讯文档
 
-[tencent_docs.py](backend/tencent_docs.py) 把路灯表加成一份现有 docs.qq.com 表格里的新子表，
-栏位和文字与 Excel 下载完全一样。
+[tencent_docs.py](backend/tencent_docs.py) 通过腾讯文档官方的 MCP 接口，把路灯表加成一份现有表格里的新子表，
+排在最前面（最新的一场永远是第一个子表）。栏位、文字和格式都和 Excel 下载一样：表头冻结、列宽、
+置中 / 靠左、自动换行、分数颜色、🏆 行标黄。
 
 自动上传按主播设定：在齿轮 ⚙ 里勾「自动上传到腾讯文档」，贴上目标表格的链接（每个主播可以用自己的表格，
 也可以共用一份）。路灯表做好后就会上传（分析之后的一个阶段：和其他阶段一样会重试，
@@ -250,15 +251,15 @@ uv run -m backend.tencent_docs downloads/<主播>/<YYYYMMDD>/<标题>/ --sheet <
 uv run -m backend.tencent_docs <.highlights.json> --sheet <链接> --title "20261111 xx"
 ```
 
-凭证（所有主播共用）：在 `.env` 填 `TENCENT_DOCS_ACCESS_TOKEN` / `TENCENT_DOCS_CLIENT_ID` /
-`TENCENT_DOCS_OPEN_ID`（腾讯文档开放平台；注册需要大陆身份证）。没填的话会跳过上传（只记日志）。
-在服务器上改完后要用 `docker compose up -d --force-recreate kiri` 重启（单纯 restart 不会重新读 `.env`）。
+凭证（所有主播共用）：一个个人 MCP token，用拥有（或能编辑）这些表格的 QQ / 微信账号，
+到 <https://docs.qq.com/open/auth/mcp.html> 扫码就能拿到，不需要开发者注册，也不需要大陆身份证。
+填进 `.env` 的 `TENCENT_DOCS_MCP_TOKEN`；没填的话会跳过上传（只记日志）。token 过期后上传会失败，
+Discord 会收到「rejected the token」，换一个新的即可。在服务器上改完后要用
+`docker compose up -d --force-recreate kiri` 重启（单纯 restart 不会重新读 `.env`）。
 
-v3 API 的限制：子表名是 `<YYYYMMDD> <主播> <标题>`，截到 31 个字符（重传会先删掉旧的子表；
-只有它是整份表格唯一的子表时，新的才会加上 ` (2)`）。新子表总是排在最后（不能移动）。
-只能写入数值：颜色、对齐、换行、列宽、冻结表头都带不过去（需要这些格式时，手动导入 Excel）。
-每个子表最多 10000 格（约 1200 段）。access token 大约 30 天过期，之后每次调用都会返回
-`API error 400006`，换一个新的填进 `.env` 即可。
+细节：子表名是 `<YYYYMMDD> <主播> <标题>`，截到 31 个字符；重传会先删掉旧的子表，只有它是整份表格
+唯一的子表时，新的才会加上 ` (2)`。上传一场约 10 秒，调用接口约 10 次加上每段同色的连续行各一次
+（5 小时的直播约 50 次）。免费账号每天 2000 次（官方 MCP 说明页），足够每天传几十场。
 
 ## 本地预览
 
@@ -300,7 +301,7 @@ docker compose up -d --build     # 在本地跑容器（需要 .env）
 
 `config.json` 放所有可以提交的设定：`monitor`、`notify`、`llm`、`analysis`、`translate`、`asr`、
 `upload`、`download`。密钥放在 `.env`（见 [.env.example](.env.example)）：LLM key、`DISCORD_WEBHOOK_URL`、
-`TWITCH_OAUTH`、`LLM_PROXY` / `LLM_PROXY_TOKEN`、`TENCENT_DOCS_*`。网页上改的东西都存在 `data/`
+`TWITCH_OAUTH`、`LLM_PROXY` / `LLM_PROXY_TOKEN`、`TENCENT_DOCS_MCP_TOKEN`。网页上改的东西都存在 `data/`
 （主播名单、队列、提醒状态），部署不会动它。
 
 ## 授权

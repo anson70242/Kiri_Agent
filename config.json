@@ -40,11 +40,7 @@
   "translate": { "group": 80, "context": 5 },
   "asr": { "url": "http://whisper:8000", "language": "ja", "vad": true },
   "upload": {
-    "tencent": {
-      "access_token_env": "TENCENT_DOCS_ACCESS_TOKEN",
-      "client_id_env": "TENCENT_DOCS_CLIENT_ID",
-      "open_id_env": "TENCENT_DOCS_OPEN_ID"
-    }
+    "tencent": { "token_env": "TENCENT_DOCS_MCP_TOKEN" }
   },
   "download": {
     "output_dir": "downloads",
