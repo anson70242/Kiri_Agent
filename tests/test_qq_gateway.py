@@ -49,7 +49,7 @@ def test_a_mention_registers_the_group_and_replies_with_its_subscriptions(tmp_pa
     dispatch(gw, "GROUP_AT_MESSAGE_CREATE", {"group_openid": "G1", "id": "MSG2", "content": "",
                                              "author": {"member_role": "owner"}})
     text = fake.messages[-1][1]["markdown"]["content"]
-    assert "本群已订阅：A、B" in text and "开播" in text
+    assert "本群已订阅：\n- A (YouTube)\n- B (Twitch)\n" in text and "开播" in text
 
 
 def test_being_added_registers_the_group(tmp_path):
@@ -179,3 +179,15 @@ def test_after_registering_only_owner_and_admins_get_an_answer(tmp_path):
     for role, msg_id in (("owner", "M3"), ("admin", "M4")):
         dispatch(gw, "GROUP_AT_MESSAGE_CREATE", {"group_openid": "G1", "id": msg_id, "author": {"member_role": role}})
     assert [b["msg_id"] for _, b in fake.messages] == ["M1", "M3", "M4"]
+
+
+def test_the_status_lists_each_person_once_with_their_platforms(tmp_path):
+    fake = FakeQQ()
+    groups = QQGroups(tmp_path / "qq_groups.json")
+    gw = QQGateway(QQSettings("APP1", SECRET), groups, client=fake.client(), alert=lambda t: None,
+                   names=lambda: {"youtube:@a": "A", "twitch:a_tw": "A", "twitch:b": "B", "youtube:@c": "C"})
+    groups.register("G1")
+    # saved before subscriptions went per person: one entry per channel, plus a newer name
+    groups.update("G1", streamers=["youtube:@a", "twitch:a_tw", "B"], enabled=True)
+    dispatch(gw, "GROUP_AT_MESSAGE_CREATE", {"group_openid": "G1", "id": "M1", "author": {"member_role": "owner"}})
+    assert "本群已订阅：\n- A (YouTube / Twitch)\n- B (Twitch)\n" in fake.messages[-1][1]["markdown"]["content"]

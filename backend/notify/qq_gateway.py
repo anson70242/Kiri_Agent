@@ -35,6 +35,25 @@ log = logging.getLogger(__name__)
 GROUP_EVENTS = 1 << 25
 
 
+PLATFORMS = {"youtube": "YouTube", "twitch": "Twitch"}
+
+
+def subscribed_people(subs: list[str], names: dict[str, str]) -> list[str]:
+    """Each subscribed person once, with their platforms: "柊優花 (YouTube / Twitch)".
+    `names`: channel id ("platform:channel") -> person. A subscription is a person's name
+    (all their channels) or, from older saves, one channel id."""
+    people: dict[str, list[str]] = {}
+    for s in subs:
+        person = names.get(s, s)
+        channels = [s] if s in names else [i for i, n in names.items() if n == s]
+        plats = people.setdefault(person, [])
+        for i in channels:
+            p = PLATFORMS.get(i.split(":", 1)[0], i.split(":", 1)[0])
+            if p not in plats:
+                plats.append(p)
+    return [f"{person} ({' / '.join(plats)})" if plats else person for person, plats in people.items()]
+
+
 def default_connect(url: str):
     import websockets
 
@@ -96,11 +115,13 @@ class QQGateway:
         self.alert(f"QQ 群「{g.get('name') or group}」{why}，通知已暂停。")
 
     def status_text(self, g: dict[str, Any]) -> str:
-        names = self.names()
-        streamers = [names.get(s, s) for s in g.get("streamers") or []]
+        streamers = subscribed_people(g.get("streamers") or [], self.names())
         kinds = [KIND_LABELS.get(k, k) for k in g.get("kinds") or []]
-        lines = ["已登记本群 ✅",
-                 f"本群已订阅：{'、'.join(streamers) if streamers else '（还没有）'}"]
+        lines = ["已登记本群 ✅"]
+        if streamers:  # one person a line: easier to read than a comma list
+            lines += ["本群已订阅：", *(f"- {p}" for p in streamers)]
+        else:
+            lines.append("本群已订阅：（还没有）")
         if streamers:
             lines.append(f"通知类型：{'、'.join(kinds) if kinds else '（无）'}")
         if not g.get("enabled") or not streamers:

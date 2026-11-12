@@ -154,7 +154,6 @@
     <div class="summary" id="summary"></div>
     <div class="spacer"></div>
     <span class="meta" id="meta">加载中…</span>
-    <button id="notify" hidden>开启开播通知</button>
     <button id="refresh">立即刷新</button>
     <button id="add" class="admin-only">＋ 新增主播</button>
   </header>
@@ -206,7 +205,6 @@
 const LABEL = { live: "直播中", upcoming: "待机中", offline: "未开播", unknown: "检测失败", checking: "检测中" };
 const ORDER = { live: 0, upcoming: 1, unknown: 2, checking: 3, offline: 4 };
 const POLL_MS = 15000;
-let prevStates = null;
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -422,17 +420,6 @@ function render(data) {
   document.getElementById("meta").textContent = data.last_refresh
     ? `后端每 ${data.interval} 秒检测 · 上次 ${clock(data.last_refresh)}` : "首次检测中…";
 
-  // Notify on offline -> live transitions (not on first load).
-  const now = Object.fromEntries(rows.map(r => [key(r), r]));
-  if (prevStates && "Notification" in window && Notification.permission === "granted") {
-    for (const r of rows) {
-      if (r.state === "live" && prevStates[key(r)] && prevStates[key(r)] !== "live") {
-        const n = new Notification(`${r.name} 开播了`, { body: r.title || "" });
-        if (r.url) n.onclick = () => window.open(r.url, "_blank");
-      }
-    }
-  }
-  prevStates = Object.fromEntries(Object.entries(now).map(([k, r]) => [k, r.state]));
 }
 
 async function load(method = "GET") {
@@ -450,12 +437,6 @@ async function load(method = "GET") {
 
 const btn = document.getElementById("refresh");
 btn.onclick = async () => { btn.disabled = true; await load("POST"); btn.disabled = false; };
-
-const nbtn = document.getElementById("notify");
-if ("Notification" in window && Notification.permission === "default") {
-  nbtn.hidden = false;
-  nbtn.onclick = async () => { await Notification.requestPermission(); nbtn.hidden = true; };
-}
 
 load();
 setInterval(load, POLL_MS);
