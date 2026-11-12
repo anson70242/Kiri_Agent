@@ -105,6 +105,23 @@ DATE_RE = re.compile(r"\d{8}")  # YYYYMMDD
 DATED_NAME_RE = re.compile(r"\[(\d{8})\]")  # a file name's `[YYYYMMDD]` prefix
 
 
+def _dated(date_folder: str, names: list[str]) -> str:
+    """`date_folder` when it is a `YYYYMMDD`, else the `[YYYYMMDD]` prefix of the first of
+    `names` that has one; "" when none says."""
+    if DATE_RE.fullmatch(date_folder):
+        return date_folder
+    for name in names:
+        if m := DATED_NAME_RE.match(name):
+            return m.group(1)
+    return ""
+
+
+def file_date(path: Path) -> str:
+    """The `YYYYMMDD` of one artifact file: its archive's date folder, else the `[YYYYMMDD]`
+    prefix of the file's own name (never another file's); "" when neither says."""
+    return _dated(path.parent.parent.name, [path.name])
+
+
 class Archive:
     """One archive folder. Open it with `from_folder` or `from_video`, or through `Downloads`."""
 
@@ -163,13 +180,8 @@ class Archive:
     def date(self) -> str:
         """The archive's `YYYYMMDD`: from its date folder, else from the `[YYYYMMDD]` prefix of
         its video's name or of any file's name (first in sorted order); "" when none says."""
-        if DATE_RE.fullmatch(self.date_folder):
-            return self.date_folder
         names = ([self.stem] if self.stem is not None else []) + [e.name for e in self._entries]
-        for name in names:
-            if m := DATED_NAME_RE.match(name):
-                return m.group(1)
-        return ""
+        return _dated(self.date_folder, names)
 
     @property
     def size(self) -> int:

@@ -266,3 +266,35 @@ def test_cli_reports_missing_settings(tmp_path, capsys):
     cfg = write_config(tmp_path, {"token_env": "KIRI_TEST_NO_SUCH_TOKEN"})  # never in a real .env
     assert td.main([str(f), "--sheet", "FAKEFILE", "--config", str(cfg)]) == 1
     assert "KIRI_TEST_NO_SUCH_TOKEN" in capsys.readouterr().err
+
+
+def cli_sheet_name(monkeypatch, path) -> str:
+    """The sheet title the command line tool gives an upload of `path` (no --title)."""
+    import backend.tencent_docs as td
+
+    fake = FakeDocs()
+    real_upload = td.upload_table
+    monkeypatch.setattr(td, "upload_table", lambda *a, **kw: real_upload(*a, **kw, client=fake.client()))
+    monkeypatch.setattr(td, "load_credentials", lambda cfg: settings(file_id=""))
+    assert td.main([str(path), "--sheet", FILE_ID]) == 0
+    return fake.args("sheet.add_sheet")[0]["name"]
+
+
+def test_cli_dates_a_table_outside_a_date_folder_by_its_own_name(tmp_path, monkeypatch, capsys):
+    clips = tmp_path / "clips"
+    clips.mkdir()
+    (clips / "[20250101][B] old.mp4").write_bytes(b"x" * 100)  # a bigger, older video beside it
+    table = clips / "[20261105][A] t.highlights.json"
+    table.write_text(json.dumps({"streamer": "A", "title": "t", "rows": []}), encoding="utf-8")
+
+    assert cli_sheet_name(monkeypatch, table) == "20261105 A t"
+
+
+def test_cli_leaves_the_date_out_when_the_table_names_none(tmp_path, monkeypatch, capsys):
+    clips = tmp_path / "clips"
+    clips.mkdir()
+    (clips / "[20250101][B] old.mp4").write_bytes(b"x" * 100)
+    table = clips / "t.highlights.json"
+    table.write_text(json.dumps({"streamer": "A", "title": "t", "rows": []}), encoding="utf-8")
+
+    assert cli_sheet_name(monkeypatch, table) == "A t"

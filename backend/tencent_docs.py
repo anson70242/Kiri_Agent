@@ -46,7 +46,7 @@ from typing import Any
 import httpx
 from dotenv import load_dotenv
 
-from backend.archive import Archive, Artifact
+from backend.archive import Archive, Artifact, file_date
 from backend.sheet import (HEAD_COLOR, HEAD_FONT_COLOR, HEADER, HIGH_CHAT_COLOR, HOT_COLOR, WIDTHS, cells,
                            score_style)
 
@@ -304,8 +304,8 @@ def find_table(path: Path) -> Path:
 
 
 def archive_date(file: Path) -> str:
-    """The YYYYMMDD of the archive holding `file` (see Archive.date); "" when none is known."""
-    return Archive.from_folder(file.parent).date
+    """The YYYYMMDD of the highlight table `file` (see archive.file_date); "" when none is known."""
+    return file_date(file)
 
 
 def main(argv: list[str] | None = None) -> int:
