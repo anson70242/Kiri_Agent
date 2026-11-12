@@ -75,6 +75,17 @@ def test_wrapped_or_junk_replies(tmp_path):
     assert json.loads(out.read_text(encoding="utf-8"))[9]["text"] == "中文9"
 
 
+def test_limit_translates_only_the_start(tmp_path):
+    video = make_transcript(tmp_path, 200)  # line i starts at i seconds
+    llm = FakeLLM()
+    out = translate(video, llm, TranslateSettings(group=80, limit_seconds=100))
+
+    zh = json.loads(out.read_text(encoding="utf-8"))
+    assert len(zh) == 200  # every line still there, timing unchanged
+    assert zh[99]["text"] == "中文99" and zh[100]["text"] == "日本語100"  # the rest stays Japanese
+    assert len(llm.calls) == 2  # 80 + 20
+
+
 def test_nothing_usable_fails(tmp_path):
     video = make_transcript(tmp_path, 10)
     with pytest.raises(TranslateError):

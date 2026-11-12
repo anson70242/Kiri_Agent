@@ -90,6 +90,7 @@ class TranslateSettings:
     group: int = 80  # lines per LLM call
     context: int = 5  # lines of context shown before and after a group
     retries: int = 3  # attempts per group (missing lines are asked again)
+    limit_seconds: int | None = None  # only translate the start of the stream (trial runs)
 
 
 def zh_path(video: Path) -> Path:
@@ -105,14 +106,15 @@ def translate(video: Path, complete: Complete, settings: TranslateSettings | Non
     lines: list[dict[str, Any]] = json.loads(src.read_text(encoding="utf-8"))
 
     texts: dict[int, str] = {}
-    for start in range(0, len(lines), s.group):
-        ids = list(range(start, min(start + s.group, len(lines))))
+    count = len(lines) if not s.limit_seconds else sum(1 for x in lines if x["start"] < s.limit_seconds)
+    for start in range(0, count, s.group):
+        ids = list(range(start, min(start + s.group, count)))
         texts.update(translate_group(lines, ids, complete, s))
-        log.info("translate %s: %d/%d lines", video.name, ids[-1] + 1, len(lines))
+        log.info("translate %s: %d/%d lines", video.name, ids[-1] + 1, count)
 
     out = zh_path(video)
     zh = [{"start": x["start"], "end": x["end"], "text": texts.get(i, x["text"])} for i, x in enumerate(lines)]
-    missing = sum(1 for i in range(len(lines)) if i not in texts)
+    missing = sum(1 for i in range(count) if i not in texts)
     if missing:
         log.warning("translate %s: %d lines kept in Japanese", video.name, missing)
     body = ",\n".join("  " + json.dumps(x, ensure_ascii=False) for x in zh)
@@ -187,6 +189,7 @@ def main() -> int:
     p.add_argument("video", type=Path)
     p.add_argument("--config", type=Path, default=Path(__file__).resolve().parents[1] / "config.json")
     p.add_argument("--no-proxy", action="store_true", help="ignore llm.proxy (running on the proxy machine itself)")
+    p.add_argument("--minutes", type=int, help="only translate the first N minutes (the rest stays Japanese)")
     args = p.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -201,7 +204,8 @@ def main() -> int:
     if args.no_proxy:
         llm.proxy = None
     t = json.loads(args.config.read_text(encoding="utf-8")).get("translate") or {}
-    settings = TranslateSettings(group=int(t.get("group", 80)), context=int(t.get("context", 5)))
+    settings = TranslateSettings(group=int(t.get("group", 80)), context=int(t.get("context", 5)),
+                                 limit_seconds=args.minutes * 60 if args.minutes else None)
     try:
         print(translate(args.video, functools.partial(chat, llm, response_format={"type": "json_object"}), settings))
     except TranslateError as e:
