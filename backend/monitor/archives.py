@@ -115,7 +115,8 @@ CSV_HEADER = ["开始", "结束", "话题分类", "内容摘要（话题日志�
 
 
 def highlights_csv(table: dict) -> str:
-    """路灯表 rows as CSV; multi-line cells (one topic-log entry / highlight per line)."""
+    """路灯表 rows as CSV; multi-line cells (one highlight per line; topic-log entries
+    separated by a blank line)."""
     out = io.StringIO()
     w = csv.writer(out)
     w.writerow(CSV_HEADER)
@@ -128,7 +129,7 @@ def highlights_csv(table: dict) -> str:
             picks.append(f"🏆 {span}{tp.get('title', '')}")
         picks += [f"{h.get('time', '')} [{h.get('type', '')}] {h.get('title', '')}" for h in r.get("highlights") or []]
         score = r.get("score")
-        w.writerow([r.get("start", ""), r.get("end", ""), "\n".join(r.get("topics") or []), "\n".join(log),
+        w.writerow([r.get("start", ""), r.get("end", ""), "\n".join(r.get("topics") or []), "\n\n".join(log),
                     "\n".join(picks), "" if score is None else score, r.get("chat_level", ""), ""])
     return out.getvalue()
 
