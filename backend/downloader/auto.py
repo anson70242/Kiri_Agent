@@ -42,7 +42,7 @@ from typing import Any, Literal
 from urllib.parse import quote
 
 from backend.analysis import AnalysisSettings, analyze
-from backend.archive import Archive, Artifact, ArtifactDamaged, ArtifactMissing, Downloads
+from backend.archive import Archive, Artifact, ArtifactDamaged, ArtifactMissing, Downloads, read_file
 from backend.asr import ASRSettings, transcribe
 from backend.llm import LLMError, chat, load_llm
 from backend.tencent_docs import (
@@ -618,7 +618,7 @@ def load_uploader(config: Path) -> Callable[[Path, str, str, str], str] | None:
         return None
 
     def run(table: Path, file_id: str, streamer: str, title: str) -> str:
-        data = json.loads(table.read_text(encoding="utf-8"))
+        data = read_file(table, Artifact.HIGHLIGHTS)
         data.setdefault("streamer", streamer)
         data.setdefault("title", title)
         return upload_table(data, dataclasses.replace(creds, file_id=file_id),

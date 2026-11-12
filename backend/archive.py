@@ -255,12 +255,7 @@ class Archive:
         path = self.file(artifact)
         if path is None:
             raise ArtifactMissing(artifact, self.folder)
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            raise ArtifactMissing(artifact, path) from None
-        except ValueError as e:  # bad JSON, or not UTF-8
-            raise ArtifactDamaged(artifact, path, str(e)) from None
+        return read_file(path, artifact)
 
     def read_chat(self) -> list[dict]:
         """The cleaned chat's messages (none when the file holds something other than a list)."""
@@ -331,6 +326,18 @@ class Archive:
             return json.dumps(content, ensure_ascii=False, indent=1)
         body = ",\n".join("  " + json.dumps(x, ensure_ascii=False) for x in content)
         return f"[\n{body}\n]\n" if content else "[]\n"
+
+
+def read_file(path: Path, artifact: Artifact) -> Any:
+    """The JSON contents of `path`, read as `artifact` (a file a person points at, which
+    need not sit in an archive). Raises ArtifactMissing when it is gone, ArtifactDamaged
+    when it is not readable JSON."""
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise ArtifactMissing(artifact, path) from None
+    except ValueError as e:  # bad JSON, or not UTF-8
+        raise ArtifactDamaged(artifact, path, str(e)) from None
 
 
 # chat file -> (mtime_ns, message count): listing every archive must not re-read every chat

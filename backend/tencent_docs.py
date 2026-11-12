@@ -46,7 +46,7 @@ from typing import Any
 import httpx
 from dotenv import load_dotenv
 
-from backend.archive import Archive, Artifact, file_date
+from backend.archive import Archive, Artifact, file_date, read_file
 from backend.sheet import (HEAD_COLOR, HEAD_FONT_COLOR, HEADER, HIGH_CHAT_COLOR, HOT_COLOR, WIDTHS, cells,
                            score_style)
 
@@ -324,7 +324,7 @@ def main(argv: list[str] | None = None) -> int:
             raise TencentDocsError(f"not a Tencent Docs spreadsheet link or id: {args.sheet}")
         settings = dataclasses.replace(load_credentials(args.config), file_id=file_id)
         file = find_table(args.path)
-        table = json.loads(file.read_text(encoding="utf-8"))
+        table = read_file(file, Artifact.HIGHLIGHTS)
         url = upload_table(table, settings, sheet_title=args.title or sheet_title(table, archive_date(file)))
     except (TencentDocsError, ValueError) as e:
         print(f"Error: {e}", file=sys.stderr)
