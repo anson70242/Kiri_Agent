@@ -110,7 +110,7 @@ def _same(x: Any) -> Any:
 
 
 class StateFile(Generic[T]):
-    """One JSON state file. `decode` turns the parsed JSON into the owner's value (raise
+    """One JSON state file. `decode` turns the parsed JSON into the caller's value (raise
     on the wrong shape), `encode` turns it back into something json.dumps takes."""
 
     def __init__(self, path: Path, default: Callable[[], T], policy: Policy,
@@ -136,7 +136,7 @@ class StateFile(Generic[T]):
             return self._damaged(e)
         try:
             value = self.decode(json.loads(text))
-        except Exception as e:  # noqa: BLE001 - not JSON, or not the records the owner expects
+        except Exception as e:  # noqa: BLE001 - not JSON, or not the records the caller expects
             return self._damaged(e)
         self._stamp = stamp
         return value
