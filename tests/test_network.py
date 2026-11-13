@@ -1,4 +1,5 @@
-"""Real YouTube / Twitch / TwitCasting checks. Run with: uv run pytest -m network"""
+"""Real YouTube / Twitch / TwitCasting checks, and the metadata of a TwitCasting replay when
+the TwitCasting cookies file is present. Run with: uv run pytest -m network"""
 
 import asyncio
 import json
@@ -8,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from backend.downloader import downloader_for, load_settings
 from backend.monitor import LiveState, StreamMonitor, Streamer
 from backend.monitor.base import make_client
 from backend.monitor.twitcasting import TwitCastingMonitor
@@ -115,3 +117,20 @@ def test_twitcasting_offline_channel_is_offline():
     print(st)
     assert st.state is LiveState.OFFLINE, st
     assert st.avatar
+
+
+PUBLISHED_REPLAY = "https://twitcasting.tv/shino_nome22/movie/841887581"  # published on 2026-11-13
+
+
+def test_twitcasting_published_replay_metadata_with_the_cookies_file():
+    """Reads (never downloads) a published replay with the owner's login. Skipped without
+    the cookies file (CI has none). yt-dlp writes refreshed cookies back to the file."""
+    settings, streamers = load_settings(CONFIG)
+    cookies = settings.twitcasting_cookies_file
+    if not (cookies and cookies.is_file()):
+        pytest.skip(f"no TwitCasting cookies file at {cookies}")
+    info = downloader_for(PUBLISHED_REPLAY, settings, streamers).info(PUBLISHED_REPLAY)
+    print(info)
+    assert (info.platform, info.id, info.channel) == ("twitcasting", "841887581", "shino_nome22")
+    assert re.fullmatch(r".+ \d{6}", info.title) and " / " not in info.title
+    assert info.duration and info.duration > 60

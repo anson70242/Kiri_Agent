@@ -373,7 +373,7 @@ class FakeDL:
     def __init__(self, status="was_live", vod="https://youtu.be/v1"):
         self.status, self.vod = status, vod
 
-    def find_vod(self, url, channel, started_at):
+    def find_replay(self, url, channel, live_id, started_at):
         return self.vod
 
     def info(self, url):

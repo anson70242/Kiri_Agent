@@ -19,8 +19,8 @@ config.json:
     }}
 
 Rules:
-- Not ready yet (YouTube still processing, Twitch archive not listed): retried every
-  `retry_minutes` until `give_up_hours` after the stream ended.
+- Not ready yet (YouTube still processing, Twitch archive not listed, TwitCasting replay
+  not published): retried every `retry_minutes` until `give_up_hours` after the stream ended.
 - Any other failure: retried until `max_errors`, then a failure message on Discord.
 - Success: a Discord message, then the streamer folder is trimmed to `keep` archives.
 - Jobs live in `state_file`, so a restart resumes them (yt-dlp resumes partial files).
@@ -55,7 +55,7 @@ from backend.notify import EventKind, LiveNotifier, StreamEvent, load_notifier
 from backend.state_file import StateFile, expect_list
 
 from . import REPO_ROOT, download, downloader_for, load_settings
-from .base import DownloadError, DownloadResult, DownloadSettings
+from .base import DownloadError, DownloadResult, DownloadSettings, ReplayUnpublished
 from .pending import PendingChats
 
 log = logging.getLogger(__name__)
@@ -254,7 +254,7 @@ class AutoDownloader:
         s = job.status
         try:
             dl = downloader_for(s.url or "", self.settings, self.streamers)
-            url = dl.find_vod(s.url or "", s.streamer.channel, s.started_at)
+            url = dl.find_replay(s.url or "", s.streamer.channel, s.stream_id, s.started_at)
             if not url:
                 return Outcome("wait", "archive not listed yet")
             info = dl.info(url)
@@ -265,6 +265,8 @@ class AutoDownloader:
                 "started": self.clock(), "stage": "download",
                 "percent": None, "downloaded": 0, "total": None, "speed": None, "eta": None}
             result = download(url, self.settings, self.streamers, info=info, progress=self._on_progress)
+        except ReplayUnpublished as e:
+            return Outcome("wait", str(e))  # for now, like a replay that is not ready yet
         except DownloadError as e:
             return Outcome("error", str(e))
         finally:
@@ -549,7 +551,14 @@ def top_segments_detail(archive: Archive, n: int = 5) -> str:
 
 def failure_detail(job: Job) -> str:
     text = f"试了 {job.attempts} 次仍失败：\n```{job.last_error[:1500]}```"
-    if any(h in job.last_error.lower() for h in AUTH_HINTS):
+    error = job.last_error.lower()
+    if job.status.streamer.platform == "twitcasting":
+        if "login" in error:
+            text += "\n可能是 TwitCasting 的登录 cookies 过期：更新服务器上的 `data/twitcasting_cookies.txt`（见 docs/deploy.md）。"
+        elif "not supported" in error:
+            text += "\n不支持有合言葉（密码）或会员限定的 TwitCasting 直播。"
+        return text
+    if any(h in error for h in AUTH_HINTS):
         if job.status.streamer.platform == "twitch":
             text += "\n可能需要更新服务器 `.env` 里的 `TWITCH_OAUTH`。"
         else:

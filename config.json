@@ -34,6 +34,7 @@
     "output_dir": "downloads",
     "cookies_file": "data/youtube_cookies.txt",
     "cookies_from_browser": "firefox",
+    "twitcasting_cookies_file": "data/twitcasting_cookies.txt",
     "twitch_oauth_env": "TWITCH_OAUTH",
     "ffmpeg": "",
     "max_height": 1080,

@@ -123,7 +123,7 @@ Discord 收到一次提醒；机器人连续 10 分钟连不上也提醒一次�
 
 ## 下载器
 
-下载 YouTube / Twitch 的录播和弹幕回放。不需要外部 exe：影片和资料用 `yt-dlp` Python 套件
+下载 YouTube / Twitch 的录播和弹幕回放，以及 TwitCasting 的回放（弹幕还不支持）。不需要外部 exe：影片和资料用 `yt-dlp` Python 套件
 （nightly 预发布版，因为 YouTube 常常改），它的 JS 运行环境是 `deno` pip 套件，Twitch 弹幕直接从
 Twitch 的 GQL API 拿。只需要另外装 ffmpeg（在 PATH 里，或设 `download.ffmpeg`）。
 
@@ -154,6 +154,9 @@ Super Chat / 贴图才有 `sc`），见 [chat_clean.py](backend/downloader/chat_
   没有的话用 `download.cookies_from_browser`（默认 `firefox`；留空表示不用）。服务器没有浏览器，
   所以用 cookie 文件：见 [docs/deploy.md](docs/deploy.md) 的「YouTube 会限 cookie」。
 - Twitch 订阅限定录播：在 `.env` 设 `TWITCH_OAUTH`（twitch.tv 的 `auth-token` cookie）。
+- TwitCasting：回放一律要登录，每次都带 `download.twitcasting_cookies_file`（`data/twitcasting_cookies.txt`）的 cookie，
+  见 [docs/deploy.md](docs/deploy.md) 的「TwitCasting 回放要登录 cookie」。只收回放网址 `twitcasting.tv/<ID>/movie/<数字>`；
+  录播标题是这一场自己的标题加开播时间 `HHmmss`。合言葉和会员限定的直播不支持。
 - 正在直播的不能下载。YouTube 刚下播时还在处理，处理完之前也不能下载（晚点再跑）。
 
 YouTube 的弹幕回放常常要下播几小时后才出现。还没出现时，会排进 `data/pending_chat.json`，
@@ -176,7 +179,7 @@ uv run -m backend.downloader <url> --wait       # 下载后，等晚到的弹幕
 的录播会排进队列下载（影片不超过 `download.max_height`，默认 1080p，加弹幕），
 由网页服务器或 `uv run -m backend.monitor` 执行。见 [auto.py](backend/downloader/auto.py)。
 
-- 还没好（YouTube 还在处理、Twitch 录播还没列出）：每 `download.auto.retry_minutes`（15）分钟重试，
+- 还没好（YouTube 还在处理、Twitch 录播还没列出、TwitCasting 回放还没公开）：每 `download.auto.retry_minutes`（15）分钟重试，
   最多 `give_up_hours`（12）小时。
 - 其他失败（cookie 过期、影片被删、网络）重试 `max_errors`（3）次，然后在 Discord 报失败；
   看起来是 cookie 过期时会附上提示。
