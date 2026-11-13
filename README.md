@@ -290,7 +290,9 @@ uv run -m backend.monitor.server --dev --reload    # http://127.0.0.1:8770
 ## 测试
 
 ```sh
-uv run pytest                          # 全部离线测试（约 50 秒）
+uv run pytest                          # 离线测试，跳过慢的压力测试（约 50 秒）
+uv run pytest -m "not network"         # 全部离线测试，CI 跑的就是这个
+uv run ruff check                      # 检查没用到的 import 和变量
 uv run pytest -m network -s            # 连真实的 YouTube / Twitch 检查
 STRESS_SEEDS=1000 uv run pytest tests/test_random_sequences.py   # 更长的压力测试
 ```

@@ -21,10 +21,25 @@ dependencies = [
 dev = [
     "playwright>=1.65.1",
     "pytest>=9.2.0",
+    "ruff>=0.17.5",
 ]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
-markers = ["network: hits real YouTube / Twitch (run with -m network)"]
-addopts = "-m 'not network'"
+markers = [
+    "network: hits real YouTube / Twitch (run with -m network)",
+    "slow: takes tens of seconds; skipped by default, CI runs it (-m 'not network' runs everything offline)",
+]
+addopts = "-m 'not network and not slow'"
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+# Pyflakes: unused imports and names, undefined names, f-strings without placeholders.
+select = ["F"]
+
+[tool.ruff.lint.per-file-ignores]
+# pytest fixtures are imported by name and then taken as test arguments.
+"tests/*" = ["F811"]

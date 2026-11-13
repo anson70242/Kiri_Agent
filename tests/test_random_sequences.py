@@ -11,6 +11,8 @@ import asyncio
 import os
 import random
 
+import pytest
+
 from backend.monitor import LiveState, StreamMonitor, Streamer
 from backend.notify import LiveNotifier
 
@@ -43,6 +45,7 @@ def check_invariants(events, label):
         assert events[-1][0] is OFFLINE, f"{label}: never reported ended: {events}"
 
 
+@pytest.mark.slow
 def test_random_sequences_keep_events_consistent():
     async def one(seed: int):
         rng = random.Random(seed)

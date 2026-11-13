@@ -8,7 +8,6 @@ import re
 from datetime import timedelta
 
 import httpx
-import pytest
 
 from backend.notify import EventKind, StreamEvent
 from backend.notify.qq import QQGroups, QQNotifier, QQSettings
