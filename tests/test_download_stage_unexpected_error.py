@@ -107,19 +107,44 @@ def test_a_cancelled_worker_still_stops(tc, monkeypatch):
     assert (job.attempts, job.errors) == (0, 0)
 
 
-def test_a_failing_cleanup_of_old_archives_does_not_fail_the_download(tc, monkeypatch, caplog):
+def break_prune(monkeypatch) -> None:
     def broken_prune(self, protect, keep):
         raise PermissionError("old archive is open in another program")
 
     monkeypatch.setattr(Downloads, "prune", broken_prune)
+
+
+def test_a_failing_cleanup_of_old_archives_does_not_fail_the_download(tc, monkeypatch, caplog):
+    break_prune(monkeypatch)
     ad, clock, sent = auto(tc)
     transcribed = []
     ad.transcribe = transcribed.append
     with caplog.at_level(logging.WARNING):
         run_worker_once(ad)
 
-    assert [e.kind for e in sent] == [EventKind.DOWNLOADED]
+    assert [e.kind for e in sent] == [EventKind.DOWNLOADED, EventKind.PRUNE_FAILED]  # the notice: ticket 11
     assert "清理" not in sent[0].detail  # nothing reported as pruned
     (job,) = ad.load()
     assert (job.stage, job.errors) == ("transcribe", 0)
     assert any(r.exc_info and r.exc_info[0] is PermissionError for r in caplog.records)
+
+
+# ---- the notice (ticket 11) ----
+
+def test_a_failing_cleanup_of_old_archives_sends_one_notice_after_the_downloaded_message(tc, monkeypatch):
+    break_prune(monkeypatch)
+    ad, clock, sent = auto(tc)
+    run_worker_once(ad)
+
+    assert [e.kind for e in sent] == [EventKind.DOWNLOADED, EventKind.PRUNE_FAILED, EventKind.READY]
+    notice = sent[1]
+    assert notice.status.streamer == MIKA
+    assert "PermissionError: old archive is open in another program" in notice.detail
+    assert "旧录播" in notice.detail and "不受影响" in notice.detail
+
+
+def test_a_cleanup_that_succeeds_or_has_nothing_to_delete_sends_no_notice(tc, monkeypatch):
+    ad, clock, sent = auto(tc)
+    run_worker_once(ad)
+
+    assert [e.kind for e in sent] == [EventKind.DOWNLOADED, EventKind.READY]

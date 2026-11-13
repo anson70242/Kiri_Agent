@@ -131,6 +131,7 @@ class Outcome:
     message: str = ""
     result: DownloadResult | None = None
     pruned: list[Path] = field(default_factory=list)
+    prune_error: str = ""  # done, but deleting old archives raised this (type: message)
 
 
 class AutoDownloader:
@@ -297,9 +298,9 @@ class AutoDownloader:
             self._active["download"] = None
         try:
             pruned = self.prune(result.output_dir, self.keep.get(s.streamer.id, 6))
-        except Exception:  # noqa: BLE001 - the video is there: a failed cleanup must not fail the download
+        except Exception as e:  # noqa: BLE001 - the video is there: a failed cleanup must not fail the download
             log.exception("pruning old archives failed after downloading: %s %s", s.streamer.name, s.url)
-            pruned = []
+            return Outcome("done", result=result, prune_error=f"{type(e).__name__}: {e}")
         return Outcome("done", result=result, pruned=pruned)
 
     def attempt_transcribe(self, job: Job) -> Outcome:
@@ -441,6 +442,9 @@ class AutoDownloader:
                 ref = Downloads(self.settings.output_dir).ref(outcome.result.output_dir)
                 detail += "\n" + archive_link(self.site_url, ref)
             self._send(EventKind.DOWNLOADED, job, detail)
+            if outcome.prune_error:
+                self._send(EventKind.PRUNE_FAILED, job, "删除这位主播超出保留数量的旧录播时出错，旧录播没有删掉；"
+                           f"这场新录播不受影响。\n```{outcome.prune_error[:1500]}```")
             video = outcome.result.video if outcome.result else None
             if self.transcribe and video:
                 current.video = str(video)

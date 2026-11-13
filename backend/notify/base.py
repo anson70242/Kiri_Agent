@@ -32,6 +32,8 @@ class EventKind(StrEnum):
     # the replay of a live is not published; it is downloaded if it appears in time
     REPLAY_UNPUBLISHED = "replay_unpublished"
     DOWNLOAD_FAILED = "download_failed"  # auto-download gave up
+    # deleting a creator's old archives after a download failed; the new archive is fine
+    PRUNE_FAILED = "prune_failed"
     TRANSCRIBE_FAILED = "transcribe_failed"  # speech-to-text of a downloaded archive gave up
     ANALYZED = "analyzed"  # 路灯表 ready (detail: the top segments)
     ANALYZE_FAILED = "analyze_failed"  # 路灯表 analysis gave up

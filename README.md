@@ -187,7 +187,8 @@ uv run -m backend.downloader <url> --wait       # 下载后，等晚到的弹幕
 - 其他失败（cookie 过期、影片被删、网络）重试 `max_errors`（3）次，然后在 Discord 报失败；
   看起来是 cookie 过期时会附上提示。
 - 成功：Discord（和订阅的 QQ 群）消息附上文件大小、弹幕状态，以及这场录播在网站上的页面链接（服务器 `.env` 设了 `SITE_URL` 才有，例如公网后的 `https://<IP>`）。然后这个主播的文件夹只保留 `keep` 场
-  （每个主播可以设，默认 `download.auto.keep` = 6），最旧的先删。
+  （每个主播可以设，默认 `download.auto.keep` = 6），最旧的先删。删旧录播出错时（例如文件被别的程序打开），
+  新录播照常往下处理，Discord 另收一条「旧录播没能删除」提醒（QQ 群要在通知页勾选才收得到）。
 - 队列存在 `data/download_queue.json`，所以重启（部署）后会接着跑；晚到的弹幕走上面的弹幕重试队列。
 
 ## 字幕转写
