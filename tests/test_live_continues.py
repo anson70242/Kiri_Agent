@@ -145,14 +145,13 @@ def test_saved_live_that_stops_after_a_restart_is_not_continued_by_a_new_live(tm
 
 
 def test_restart_inside_a_sitting_keeps_it_quiet_and_each_live_reaches_the_listeners_once(tmp_path):
-    # The sitting's first live is not saved: after the restart the current live stands for
-    # the sitting, so its "ended" carries that live's own id and start time.
+    # The sitting's first live is saved too (tests/test_sitting_restart.py has the details).
     f = tmp_path / "s.json"
     a, b = cast("a1", 0), cast("b1", 2)
     first, first_ended = asyncio.run(session(f, [(off(), None), (a, off()), (b, a)]))
     second, second_ended = asyncio.run(session(f, [(b, None), (off(), b)]))
     assert first.events == [ev(LIVE, "a1")]
-    assert second.events == [ev(OFFLINE, "b1")]
+    assert second.events == [ev(OFFLINE, "a1")]
     assert [e.status.stream_id for e in first_ended + second_ended] == ["a1", "b1"]
 
 
