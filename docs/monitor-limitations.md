@@ -49,7 +49,7 @@ Discord 返回 4xx（Webhook 被删、网址错误）视为永久失败：只记
 
 ## 平台相关
 
-- **YouTube、Twitch 和 TwitCasting 都是读公开网页，不是官方 API。** 平台改版可能让检测失效。失效时会显示「检测失败」，不会误判成下播，但在修好之前收不到通知。改版后跑 `uv run pytest -m network -s` 可以检查。
+- **YouTube、Twitch 和 TwitCasting 都是读公开网页，不是官方 API。** 平台改版可能让检测失效。失效时会显示「检测失败」，不会误判成下播，但在修好之前收不到通知。改版后跑 `uv run pytest -m network -s` 可以检查。TwitCasting 各页面上核对过哪些标记、哪些情况没见过、怎么重新抓样本，见 `docs/research/twitcasting-pages.md`。
 - **YouTube 没有观看人数**：页面里没有，要用 Data API。
 - **Twitch 的观看人数可能不是实时的**：取自页面描述，测试时间隔约 10 分钟的两次都是同一个数字，可能被 Twitch 缓存了。
 - **TwitCasting 支持开播 / 下播通知**：每次检测读一次频道页 `twitcasting.tv/<ID>`，看 `<body data-is-onlive>`。卡片和通知有标题、封面、头像和开播时间。
