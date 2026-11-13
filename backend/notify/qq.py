@@ -332,15 +332,24 @@ class QQNotifier(Notifier):
         targets = self.groups.targets(event)
         if not targets:
             return
-        cover = await self.cover(event.status) if event.kind in COVER_KINDS else None
+        cover, reused = await self.cover(event.status) if event.kind in COVER_KINDS else (None, False)
         text = message(event, cover.line if cover else None)
         summary = text.splitlines()[0].replace("**", "")
         for i, g in enumerate(targets):
             if i and self.gap:
                 await asyncio.sleep(self.gap)
+            if await self.deliver(g, text, summary, quiet=reused) or cover is None or not reused:
+                continue
+            # QQ may not take a reference from an earlier message (never checked live):
+            # upload the kept image again, or send the text alone.
+            log.info("qq: a reused cover was refused; uploading it again")
+            cover, reused = await self.upload_cover(live_key(event.status), cover.data), False
+            text = message(event, cover.line if cover else None)
             await self.deliver(g, text, summary)
 
-    async def deliver(self, group: dict[str, Any], text: str, summary: str) -> bool:
+    async def deliver(self, group: dict[str, Any], text: str, summary: str, quiet: bool = False) -> bool:
+        """Send to one group, retrying a little; logs and records the outcome.
+        `quiet`: a failure is neither logged nor recorded (the caller tries again)."""
         error = ""
         for attempt in range(self.tries):
             try:
@@ -353,34 +362,40 @@ class QQNotifier(Notifier):
                     break  # a rule (e.g. proactive messages off): retrying won't help
                 if attempt + 1 < self.tries:
                     await asyncio.sleep(2)
+        if quiet:
+            return False
         log.warning("qq: %s not delivered to %s: %s", summary, group.get("name") or group["openid"], error)
         self.history.add("qq", group["openid"], summary, False, error)
         return False
 
-    async def cover(self, status: StreamStatus) -> Cover | None:
-        """The live's cover in the media library, or None (then the message is text only).
-        A live's cover is uploaded once and reused for its later messages: by then its
-        address may show another picture (a Twitch preview shows whatever is on now)."""
+    async def cover(self, status: StreamStatus) -> tuple[Cover | None, bool]:
+        """The live's cover in the media library (None: the message is text only), and
+        whether it was uploaded for an earlier message. A live's cover is uploaded once
+        and reused for its later messages: by then its address may show another picture
+        (a Twitch preview shows whatever the channel shows now)."""
         key = live_key(status)
         if key and (known := self._covers.get(key)):
             self._covers.move_to_end(key)
-            return known
+            return known, True
         if not status.thumbnail:
-            return None
+            return None, False
         try:
             r = await self.client.get(status.thumbnail, follow_redirects=True, timeout=20)
             r.raise_for_status()
         except httpx.HTTPError as e:
             log.warning("qq: cover not used (%s)", e)
-            return None
-        return await self.upload_cover(key, r.content)
+            return None, False
+        return await self.upload_cover(key, r.content), False
 
     async def upload_cover(self, key: tuple[str, str] | None, data: bytes) -> Cover | None:
-        """Upload a cover's image and remember it for the live `key` (None: not kept)."""
+        """Upload a cover's image and keep it for the live `key` (None: not kept). A
+        failed upload forgets what was kept for that live."""
         try:
             ref = await self.api.upload_image(data, "image/png" if data[:4] == b"\x89PNG" else "image/jpeg")
         except (QQError, httpx.HTTPError, KeyError) as e:
             log.warning("qq: cover not used (%s)", e)
+            if key:
+                self._covers.pop(key, None)
             return None
         w, h = image_size(data) or (480, 270)
         scale = min(1.0, 480 / w) if w else 1.0

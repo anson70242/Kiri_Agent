@@ -105,6 +105,54 @@ def test_a_live_without_a_stream_id_fetches_its_cover_each_time(tmp_path):
     assert fake.fetches == 2
 
 
+class RefusesReferences(CoverQQ):
+    """Refuses messages that carry one of `refused` (a reference QQ won't take again)."""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.refused: set[str] = set()
+        self.refusals = 0
+        self.uploads_fail = False
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        if self.uploads_fail and request.url.path == "/v2/media-images/prepare":
+            return httpx.Response(500, json={"code": 500000, "message": "server error"})
+        if request.url.path.endswith("/messages") and any(r in request.content.decode() for r in self.refused):
+            self.refusals += 1
+            return httpx.Response(400, json={"code": 40034999, "message": "图片资源无效"})
+        return super().handle(request)
+
+
+TWO_GROUPS = ({**SUBSCRIBED, "kinds": ALL_KINDS}, {**SUBSCRIBED, "openid": "G2", "kinds": ALL_KINDS})
+
+
+def test_a_refused_reference_is_uploaded_again_from_the_kept_image(tmp_path):
+    fake = RefusesReferences()
+    n = notifier(tmp_path, fake, *TWO_GROUPS)
+    send(n, StreamEvent(EventKind.LIVE, live(A, thumbnail=COVER)))
+    fake.refused.add("qqbot-media://image/v1/COVER1")
+    fake.cover_ok = False  # the address went stale: the kept image is what is uploaded
+    send(n, StreamEvent(EventKind.DOWNLOADED, live(A, thumbnail=COVER), detail="x"))
+    send(n, StreamEvent(EventKind.READY, live(A, thumbnail=COVER), detail="x"))
+
+    for group in ("G1", "G2"):
+        _, downloaded, ready = fake.texts(group)
+        assert "(qqbot-media://image/v1/COVER2)" in downloaded and "(qqbot-media://image/v1/COVER2)" in ready
+    assert fake.uploads == 2 and fake.refusals == 1
+    assert all(e["ok"] for e in n.history.entries())  # the refused try is not a failed delivery
+
+
+def test_a_refused_reference_that_cannot_be_uploaded_again_leaves_the_text(tmp_path):
+    fake = RefusesReferences()
+    n = qq(tmp_path, fake)
+    send(n, StreamEvent(EventKind.LIVE, live(A, thumbnail=COVER)))
+    fake.refused.add("qqbot-media://image/v1/COVER1")
+    fake.uploads_fail = True
+    send(n, StreamEvent(EventKind.DOWNLOADED, live(A, thumbnail=COVER), detail="x"))
+    downloaded = fake.texts("G1")[1]
+    assert downloaded.startswith("📥 **A** 回放已下载\ntitle v1\n") and "![" not in downloaded
+
+
 class UploadRefused(CoverQQ):
     def handle(self, request: httpx.Request) -> httpx.Response:
         if request.url.path == "/v2/media-images/prepare":
