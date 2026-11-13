@@ -54,7 +54,7 @@ from backend.translate import TranslateSettings
 from backend.translate import translate as translate_transcript
 from backend.monitor import StreamMonitor, Streamer, StreamStatus
 from backend.monitor.roster import load_roster
-from backend.notify import EventKind, LiveNotifier, StreamEvent, load_notifier
+from backend.notify import EventKind, Link, LiveNotifier, StreamEvent, load_notifier
 from backend.state_file import StateFile, expect_list
 
 from . import REPO_ROOT, download, downloader_for, load_settings
@@ -388,7 +388,8 @@ class AutoDownloader:
         self._finish(job, outcome)
         video = job.video or (str(outcome.result.video) if outcome.result and outcome.result.video else None)
         if video and not any(j.stream_key == job.stream_key for j in self.load()):
-            self._send(EventKind.READY, job, ready_detail(Path(video), self.site_url, self.settings.output_dir))
+            self._send(EventKind.READY, job, ready_detail(Path(video)),
+                       ready_links(Path(video), self.site_url, self.settings.output_dir))
 
     def _finish(self, job: Job, outcome: Outcome) -> None:
         jobs = self.load()  # reload: on_ended may have added jobs meanwhile
@@ -415,7 +416,7 @@ class AutoDownloader:
             self.save(rest)
             if outcome.message:
                 log.info("uploaded: %s %s", name, outcome.message)
-                self._send(EventKind.UPLOADED, job, outcome.message)
+                self._send(EventKind.UPLOADED, job, "", (Link(SHEET_LABEL, outcome.message),))
             return
         if outcome.kind == "done" and current.stage == "translate":
             log.info("translated: %s %s", name, current.video)
@@ -437,11 +438,11 @@ class AutoDownloader:
             return
         if outcome.kind == "done":
             log.info("auto-download done: %s %s", name, outcome.result and outcome.result.video)
-            detail = success_detail(outcome)
+            links: tuple[Link, ...] = ()
             if self.site_url and outcome.result:
                 ref = Downloads(self.settings.output_dir).ref(outcome.result.output_dir)
-                detail += "\n" + archive_link(self.site_url, ref)
-            self._send(EventKind.DOWNLOADED, job, detail)
+                links = (Link(PAGE_LABEL, archive_link(self.site_url, ref)),)
+            self._send(EventKind.DOWNLOADED, job, success_detail(outcome), links)
             if outcome.prune_error:
                 self._send(EventKind.PRUNE_FAILED, job, "删除这位主播超出保留数量的旧录播时出错，旧录播没有删掉；"
                            f"这场新录播不受影响。\n```{outcome.prune_error[:1500]}```")
@@ -510,9 +511,9 @@ class AutoDownloader:
         self.save(rest + [job])
         self._wake[stage].set()
 
-    def _send(self, kind: EventKind, job: Job, detail: str) -> None:
+    def _send(self, kind: EventKind, job: Job, detail: str, links: tuple[Link, ...] = ()) -> None:
         if self.notify:
-            self.notify(StreamEvent(kind, job.status, detail=detail))
+            self.notify(StreamEvent(kind, job.status, detail=detail, links=links))
 
     async def retry_chats(self) -> None:
         queue = PendingChats.from_settings(self.settings)
@@ -534,31 +535,32 @@ class AutoDownloader:
         return removed
 
 
-def ready_detail(video: Path, site_url: str, output_dir: Path) -> str:
-    """What a finished stream has (✅ / ❌), and with SITE_URL the 全部下载 zip and its page."""
-    archive = Archive.from_video(video)
-    present = archive.present()
-    lines = [" · ".join(f"{name} {'✅' if artifact in present else '❌'}" for name, artifact in READY_ARTIFACTS)]
-    if site_url:
-        ref = Downloads(output_dir).ref(archive.folder)
-        lines += ["全部下载（影片、弹幕、中日字幕 SRT）：",
-                  f"{site_url.rstrip('/')}/api/archives/zip?folder={quote(ref, safe='')}",
-                  "录播页面：", archive_link(site_url, ref)]
-    return "\n".join(lines)
+def ready_detail(video: Path) -> str:
+    """What a finished stream has (✅ / ❌)."""
+    present = Archive.from_video(video).present()
+    return " · ".join(f"{name} {'✅' if artifact in present else '❌'}" for name, artifact in READY_ARTIFACTS)
+
+
+def ready_links(video: Path, site_url: str, output_dir: Path) -> tuple[Link, ...]:
+    """With SITE_URL, the 全部下载 zip of a finished stream and its page; else none."""
+    if not site_url:
+        return ()
+    ref = Downloads(output_dir).ref(video.parent)
+    return (Link("全部下载（影片、弹幕、中日字幕 SRT）", f"{site_url.rstrip('/')}/api/archives/zip?folder={quote(ref, safe='')}"),
+            Link(PAGE_LABEL, archive_link(site_url, ref)))
 
 
 READY_ARTIFACTS = [("影片", Artifact.VIDEO), ("弹幕", Artifact.CHAT), ("日文字幕", Artifact.TRANSCRIPT),
                    ("中文字幕", Artifact.CHINESE_TRANSCRIPT), ("路灯表", Artifact.HIGHLIGHTS)]  # in the message's order
+PAGE_LABEL = "录播页面"
+SHEET_LABEL = "腾讯文档路灯表"
 
 
 def archive_link(site_url: str, ref: str) -> str:
     """The dashboard page of the archive with this folder reference (plays it, has the
-    downloads). The reference is escaped like the page's encodeURIComponent, so its detail
-    view opens."""
-    return f"{site_url.rstrip('/')}/archives#{quote(ref, safe=SAFE_URI_CHARS)}"
-
-
-SAFE_URI_CHARS = "!'()*"  # with A-Z a-z 0-9 - _ . ~: what encodeURIComponent leaves alone
+    downloads). Every character but letters, digits and - . _ ~ is percent-escaped, so the
+    address never ends a markdown link early; the page decodes it to open the detail view."""
+    return f"{site_url.rstrip('/')}/archives#{quote(ref, safe='')}"
 
 
 def success_detail(outcome: Outcome) -> str:

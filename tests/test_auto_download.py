@@ -3,9 +3,11 @@
 import asyncio
 import json
 import os
+import re
 import threading
 import time
 from pathlib import Path
+from urllib.parse import unquote
 
 import pytest
 
@@ -16,7 +18,7 @@ from backend.downloader.base import DownloadError, DownloadResult, DownloadSetti
 from backend.downloader.pending import PendingChats
 from backend.downloader.twitch import TwitchDownloader
 from backend.downloader.youtube import YoutubeDownloader
-from backend.notify import EventKind, LiveNotifier, StreamEvent
+from backend.notify import EventKind, Link, LiveNotifier, StreamEvent
 from backend.notify.discord import DiscordNotifier
 
 from .helpers import A, B, T0, bare_archive, later, live, off
@@ -282,7 +284,8 @@ def test_analyzed_table_is_uploaded_for_streamers_with_upload_on(tmp_path):
     assert ad.load() == []
     assert calls == [(tmp_path / "v.highlights.json", "SHEET1", "A", "title v1")]
     assert [e.kind for e in sent] == [EventKind.DOWNLOADED, EventKind.ANALYZED, EventKind.UPLOADED, EventKind.READY]  # then: everything over
-    assert "https://docs.qq.com/sheet/SHEET1?tab=t1" in sent[2].detail
+    assert sent[2].links == (Link("腾讯文档路灯表", "https://docs.qq.com/sheet/SHEET1?tab=t1"),)
+    assert "http" not in (sent[2].detail or "")
 
 
 def test_no_upload_when_the_streamer_has_it_off(tmp_path):
@@ -616,16 +619,35 @@ def test_downloaded_message_links_to_the_archive_page(tmp_path):
     ad.finish(ad.next_due(), Outcome("done", result=DownloadResult(info, folder, video=video)))
 
     event, ready = sent  # downloaded, then (no other stage) ready
-    # the same encoding as the page's encodeURIComponent(folder), so its detail view opens
-    assert event.detail.splitlines()[-1] == \
-        "https://kiri.example/archives#A%2F20261110%2F%E6%AD%8C%E6%9E%A0%20(Vol.2)!"
+    page = "https://kiri.example/archives#A%2F20261110%2F%E6%AD%8C%E6%9E%A0%20%28Vol.2%29%21"
+    assert event.links == (Link("录播页面", page),) and "http" not in event.detail
+    assert ready.links[-1] == Link("录播页面", page)
+
+
+@pytest.mark.parametrize("title", ["歌枠 (Vol.2)!", "【歌枠】[ゲスト] 100% 本気", "a)b(c] [d](e) 'f' ~g~"])
+def test_an_archive_link_survives_markdown_and_names_its_archive(tmp_path, title):
+    ad, _, sent = make(tmp_path)
+    ad.site_url = "https://kiri.example"
+    ad.on_ended(ended())
+    folder = bare_archive(tmp_path / "dl", "A", "20261110", title, stem="v", video=b"x")
+    video = Archive.from_folder(folder).video
+    info = VideoInfo("youtube", "v1", "u", "t", "@a", "A", "20261110")
+    ad.finish(ad.next_due(), Outcome("done", result=DownloadResult(info, folder, video=video)))
+
+    downloaded_event, ready = sent
+    for link in downloaded_event.links + ready.links:
+        address = link.url.removeprefix("https://kiri.example")
+        # only letters, digits, - . _ ~ and %XX: nothing ends `[label](address)` early or starts markdown
+        assert re.fullmatch(r"/(archives#|api/archives/zip\?folder=)[A-Za-z0-9%._~-]+", address), address
+        # the page reads its folder back with decodeURIComponent, the zip route with its query
+        assert unquote(re.split(r"[#=]", address, maxsplit=1)[1]) == f"A/20261110/{title}"
 
 
 def test_no_site_url_no_link(tmp_path):
     ad, _, sent = make(tmp_path)
     ad.on_ended(ended())
     ad.finish(ad.next_due(), downloaded(tmp_path))
-    assert "http" not in sent[0].detail
+    assert "http" not in sent[0].detail and sent[0].links == ()
 
 
 
@@ -670,8 +692,11 @@ def test_ready_once_every_stage_is_over_with_the_download_link(tmp_path):
     assert kinds.count(EventKind.READY) == 1 and kinds[-1] is EventKind.READY
     detail = sent[-1].detail
     assert "影片 ✅" in detail and "日文字幕 ✅" in detail and "中文字幕 ✅" in detail and "路灯表 ✅" in detail
-    assert "https://kiri.example/api/archives/zip?folder=A%2F20261110%2F%E6%AD%8C%E6%9E%A0" in detail.splitlines()
-    assert "https://kiri.example/archives#A%2F20261110%2F%E6%AD%8C%E6%9E%A0" in detail.splitlines()
+    assert detail == "影片 ✅ · 弹幕 ✅ · 日文字幕 ✅ · 中文字幕 ✅ · 路灯表 ✅"
+    assert sent[-1].links == (
+        Link("全部下载（影片、弹幕、中日字幕 SRT）",
+             "https://kiri.example/api/archives/zip?folder=A%2F20261110%2F%E6%AD%8C%E6%9E%A0"),
+        Link("录播页面", "https://kiri.example/archives#A%2F20261110%2F%E6%AD%8C%E6%9E%A0"))
 
 
 def test_ready_still_comes_when_a_stage_gave_up(tmp_path):
@@ -679,7 +704,7 @@ def test_ready_still_comes_when_a_stage_gave_up(tmp_path):
     kinds = [e.kind for e in sent]
     assert EventKind.TRANSLATE_FAILED in kinds and kinds[-1] is EventKind.READY
     assert "中文字幕 ❌" in sent[-1].detail and "路灯表 ✅" in sent[-1].detail
-    assert "http" not in sent[-1].detail  # no SITE_URL: no links
+    assert "http" not in sent[-1].detail and sent[-1].links == ()  # no SITE_URL: no links
 
 
 def test_no_ready_when_the_download_failed(tmp_path):

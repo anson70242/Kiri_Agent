@@ -215,8 +215,8 @@ def message(event: StreamEvent, cover: str | None = None) -> str:
     else:
         icon, verb, footer = PIPELINE[event.kind]
         lines = [f"{icon} **{name}** {verb}", title]
-        for line in (event.detail or "").splitlines():
-            lines.append(link(line.strip()) if re.fullmatch(r"https?://\S+", line.strip()) else escape(line))
+        lines += [escape(line) for line in (event.detail or "").splitlines()]
+        lines += [f"[{escape(x.label)}]({x.url})" for x in event.links]
         lines.append(footer)
     return "\n".join(line for line in lines if line)
 

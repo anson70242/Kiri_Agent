@@ -43,12 +43,21 @@ class EventKind(StrEnum):
     READY = "ready"  # every stage of a stream is over (detail: what's done, the download links)
 
 
+@dataclass(frozen=True)
+class Link:
+    """A link a message shows by its label; the address is only inside the link."""
+
+    label: str
+    url: str
+
+
 @dataclass
 class StreamEvent:
     kind: EventKind
     status: StreamStatus  # for OFFLINE / DOWNLOAD*: the last live status (title, url, start time)
     ended_at: datetime | None = None
     detail: str | None = None  # DOWNLOAD*: what happened, shown in the message
+    links: tuple[Link, ...] = ()  # shown after the detail, one per line
 
 
 class PermanentNotifyError(Exception):
