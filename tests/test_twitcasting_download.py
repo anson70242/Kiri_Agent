@@ -179,6 +179,14 @@ def test_a_missing_cookies_file_is_a_login_failure_without_asking_the_site(tc):
     no_archive_and_no_video_asked(tc)
 
 
+def test_a_cookies_file_in_another_format_is_a_login_failure(tc):
+    tc.cookies.write_text('[{"name": "tc_ss", "value": "invented"}]', encoding="utf-8")  # a JSON export
+    with pytest.raises(DownloadError, match="(?i)login.*cookies"):
+        download(REPLAY, tc.settings, [MIKA])
+    assert tc.site.requests == []
+    no_archive_and_no_video_asked(tc)
+
+
 def test_a_password_protected_replay_is_not_supported(tc):
     tc.site.pages[REPLAY] = replay_page("password")
     with pytest.raises(DownloadError, match="not supported") as e:

@@ -13,6 +13,7 @@ from __future__ import annotations
 from datetime import datetime
 from email.utils import format_datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -123,9 +124,4 @@ def tc(tmp_path, monkeypatch):
     monkeypatch.setattr(FakeYtdlp, "raw", ytdlp_raw())
     monkeypatch.setattr(FakeYtdlp, "calls", [])
 
-    class Env:
-        pass
-
-    env = Env()
-    env.settings, env.site, env.cookies, env.tmp = settings, site, cookies, tmp_path
-    return env
+    return SimpleNamespace(settings=settings, site=site, cookies=cookies, tmp=tmp_path)

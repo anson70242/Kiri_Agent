@@ -4,8 +4,10 @@ Every replay on the site needs a logged-in account, so every request for a repla
 the cookies of `DownloadSettings.twitcasting_cookies_file`; the YouTube cookies and the
 browser fallback are never used here. The steps, each its own piece:
 
-- replay state (`read_replay`): the replay page, loaded with the cookies, says whether the
-  replay is published; the markers were verified on the real site (2026-11-13);
+- replay state (`read_replay` classifies the replay page, loaded with the cookies, by markers
+  verified on the real site on 2026-11-13; `published_replay` turns every state but published
+  into its outcome: ReplayUnpublished, or a DownloadError for a missing login or a live of a
+  kind not supported);
 - video (`download_video`): through yt-dlp with the cookies, as on the other platforms;
 - chat (`download_raw_chat`): not supported yet.
 
@@ -139,8 +141,12 @@ class TwitCastingDownloader(PlatformDownloader):
 
     def http_client(self) -> httpx.Client:
         """A client carrying the TwitCasting login cookies."""
-        jar = YoutubeDLCookieJar(str(self.cookies_file()))
-        jar.load(ignore_discard=True, ignore_expires=True)
+        f = self.cookies_file()
+        jar = YoutubeDLCookieJar(str(f))
+        try:
+            jar.load(ignore_discard=True, ignore_expires=True)
+        except (OSError, ValueError) as e:  # http.cookiejar.LoadError is an OSError
+            raise DownloadError(f"TwitCasting login missing: cannot read the cookies file {f}: {e}") from e
         return httpx.Client(
             transport=self.transport, cookies=jar, timeout=30, follow_redirects=True,
             headers={"User-Agent": USER_AGENT, "Accept-Language": "en-US,en;q=0.9"},
