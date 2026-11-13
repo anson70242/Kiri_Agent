@@ -11,7 +11,7 @@ import asyncio
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
@@ -98,8 +98,8 @@ class LiveNotifier:
 
     With `state_file`, the last live per streamer survives restarts, so a live that
     ended (or a new one that started) while the monitor was down, or during a pending
-    grace window, is still reported after restart. The sitting's first live is not
-    saved: after a restart the current live stands for its sitting.
+    grace window, is still reported after restart. A sitting that continued past its
+    first live saves that live too, so its "ended" after a restart still carries it.
 
     Events go through one queue: delivered in order, retried with backoff, and never
     block polling.
@@ -125,13 +125,14 @@ class LiveNotifier:
         self.state_file = state_file
         # Runtime state: a damaged file is set aside as a backup (the owner is alerted)
         # and counts as no saved state at all.
-        self._state = StateFile(state_file, default=dict, policy="recover", decode=decode_live_state,
+        self._state = StateFile(state_file, default=SavedLives, policy="recover", decode=decode_live_state,
                                 encode=encode_live_state) if state_file else None
         self.max_attempts = max_attempts
         self.retry_base_delay = retry_base_delay
         # streamer id -> current live broadcast, or None if known not live.
         # A missing key means "never seen" (first sighting).
-        self._live: dict[str, StreamStatus | None] = self._state.load() if self._state else {}
+        saved = self._state.load() if self._state else SavedLives()
+        self._live: dict[str, StreamStatus | None] = saved.live
         # No saved state at all (first deploy, wiped volume): whoever is live now was
         # live before we existed, so don't flood the channel. With saved state, a
         # streamer missing from it was just added to the config and is announced.
@@ -140,9 +141,9 @@ class LiveNotifier:
         # into a new live (a saved live that differs after a restart is reported ended).
         self._watched: set[str] = set()
         # streamer id -> the first live of the current sitting, whose id and start time
-        # "went live" and "ended" carry. Not saved: after a restart the current live
-        # stands for its sitting.
-        self._sitting: dict[str, StreamStatus] = {}
+        # "went live" and "ended" carry. Saved with the live state, so a sitting that
+        # continued past its first live keeps its start time across a restart.
+        self._sitting: dict[str, StreamStatus] = saved.sittings
         self._pending_end: dict[str, asyncio.Task[None]] = {}
         # Called with every "ended" event (even when on_offline is off), e.g. to
         # start the auto-download. Must return quickly.
@@ -204,8 +205,8 @@ class LiveNotifier:
         if self._live.get(sid) is prev:
             self._live[sid] = None
             self._watched.discard(sid)
-            self._save_state()
             self._end_sitting(sid, prev, ended_at)
+            self._save_state()
 
     def _end_sitting(self, sid: str, last: StreamStatus, ended_at: datetime) -> None:
         """The sitting whose last live is `last` is over: the listeners get `last`, the
@@ -330,7 +331,7 @@ class LiveNotifier:
         if not self._state:
             return
         try:
-            self._state.save(self._live)
+            self._state.save(SavedLives(self._live, self._sitting))
         except Exception:  # noqa: BLE001
             log.exception("could not save %s", self.state_file)
 
@@ -340,13 +341,34 @@ def same_address(a: StreamStatus, b: StreamStatus) -> bool:
     return a.url is not None and a.url == b.url
 
 
-def decode_live_state(raw: Any) -> dict[str, StreamStatus | None]:
-    """The live-stream state file's JSON -> streamer id -> live broadcast (None: not live);
-    raises if it isn't that shape."""
+@dataclass
+class SavedLives:
+    """What the live-stream state file holds."""
+
+    # streamer id -> current live (None: known not live); a missing key: never seen.
+    live: dict[str, StreamStatus | None] = field(default_factory=dict)
+    # streamer id -> the first live of its current sitting, when the sitting has
+    # continued past it. Only for streamers that are live.
+    sittings: dict[str, StreamStatus] = field(default_factory=dict)
+
+
+def decode_live_state(raw: Any) -> SavedLives:
+    """The live-stream state file's JSON -> the saved lives; raises if it isn't that shape.
+    The optional "sittings" entry is ignored by versions that don't know it."""
     if not isinstance(raw, dict) or not isinstance(streamers := raw.get("streamers", {}), dict):
         raise ValueError("expected {\"streamers\": {streamer id: status or null}}")
-    return {sid: StreamStatus.from_dict(v) if v else None for sid, v in streamers.items()}
+    if not isinstance(sittings := raw.get("sittings", {}), dict) or not all(
+            isinstance(v, dict) for v in sittings.values()):
+        raise ValueError("expected {\"sittings\": {streamer id: status}}")
+    live = {sid: StreamStatus.from_dict(v) if v else None for sid, v in streamers.items()}
+    return SavedLives(live, {sid: StreamStatus.from_dict(v) for sid, v in sittings.items() if live.get(sid)})
 
 
-def encode_live_state(live: dict[str, StreamStatus | None]) -> dict[str, Any]:
-    return {"version": 1, "streamers": {k: v.to_dict() if v else None for k, v in live.items()}}
+def encode_live_state(saved: SavedLives) -> dict[str, Any]:
+    raw: dict[str, Any] = {"version": 1,
+                           "streamers": {k: v.to_dict() if v else None for k, v in saved.live.items()}}
+    sittings = {sid: first.to_dict() for sid, first in saved.sittings.items()
+                if (current := saved.live.get(sid)) is not None and first is not current}
+    if sittings:
+        raw["sittings"] = sittings
+    return raw
