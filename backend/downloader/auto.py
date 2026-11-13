@@ -284,15 +284,22 @@ class AutoDownloader:
                 "started": self.clock(), "stage": "download",
                 "percent": None, "downloaded": 0, "total": None, "speed": None, "eta": None}
             result = download(url, self.settings, self.streamers, info=info, progress=self._on_progress)
+            if err := result.errors.get("video"):
+                return Outcome("error", err, result)
         except ReplayUnpublished as e:
             return Outcome("unpublished", str(e))
         except DownloadError as e:
             return Outcome("error", str(e))
+        except Exception as e:  # noqa: BLE001 - a bug or a surprise: one failed attempt, not a stuck job
+            log.exception("auto-download attempt raised: %s %s", s.streamer.name, s.url)
+            return Outcome("error", f"{type(e).__name__}: {e}")
         finally:
             self._active["download"] = None
-        if err := result.errors.get("video"):
-            return Outcome("error", err, result)
-        pruned = self.prune(result.output_dir, self.keep.get(s.streamer.id, 6))
+        try:
+            pruned = self.prune(result.output_dir, self.keep.get(s.streamer.id, 6))
+        except Exception:  # noqa: BLE001 - the video is there: a failed cleanup must not fail the download
+            log.exception("pruning old archives failed after downloading: %s %s", s.streamer.name, s.url)
+            pruned = []
         return Outcome("done", result=result, pruned=pruned)
 
     def attempt_transcribe(self, job: Job) -> Outcome:
