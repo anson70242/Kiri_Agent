@@ -8,8 +8,9 @@ import re
 from datetime import timedelta
 
 import httpx
+import pytest
 
-from backend.notify import EventKind, StreamEvent
+from backend.notify import EventKind, Link, StreamEvent
 from backend.notify.qq import QQGroups, QQNotifier, QQSettings
 
 from .helpers import A, B, T0, live
@@ -135,23 +136,61 @@ def test_ended_and_pipeline_messages(tmp_path):
     n = notifier(tmp_path, fake, {**SUBSCRIBED, "kinds": ["offline", "uploaded", "analyzed"]})
     status = live(A)
     send(n, StreamEvent(EventKind.OFFLINE, status, ended_at=T0 + timedelta(hours=3, minutes=20)))
-    send(n, StreamEvent(EventKind.UPLOADED, status, detail="https://docs.qq.com/sheet/S1?tab=t1"))
+    send(n, StreamEvent(EventKind.UPLOADED, status, detail="",
+                        links=(Link("腾讯文档路灯表", "https://docs.qq.com/sheet/S1?tab=t1"),)))
     send(n, StreamEvent(EventKind.ANALYZED, status, detail="00:30:00 ★9 名场面"))
     send(n, StreamEvent(EventKind.DOWNLOADED, status, detail="6.2 GB"))  # not subscribed
 
     off, up, an = fake.texts("G1")
     assert off == "⚫ **A** 下播了\ntitle v1\n⏱ 直播时长 3 小时 20 分\n切片小助手 直播通知"
     assert up == ("📤 **A** 路灯表已上传腾讯文档\ntitle v1\n"
-                  "[https://docs.qq.com/sheet/S1?tab=t1](https://docs.qq.com/sheet/S1?tab=t1)\n切片小助手 自动路灯")
+                  "[腾讯文档路灯表](https://docs.qq.com/sheet/S1?tab=t1)\n切片小助手 自动路灯")
     assert an.endswith("00:30:00 ★9 名场面\n切片小助手 自动路灯")
 
 
-def test_markdown_in_titles_is_escaped(tmp_path):
+def test_links_show_their_label_after_the_detail(tmp_path):
     fake = FakeQQ()
+    zip_url = "https://kiri.example/api/archives/zip?folder=A%2F20261110%2F%E6%AD%8C%E6%9E%A0%20%28Vol.2%29"
+    page_url = "https://kiri.example/archives#A%2F20261110%2F%E6%AD%8C%E6%9E%A0%20%28Vol.2%29"
+    send(notifier(tmp_path, fake, {**SUBSCRIBED, "kinds": ["ready"]}),
+         StreamEvent(EventKind.READY, live(A), detail="影片 ✅ · 路灯表 ❌",
+                     links=(Link("全部下载（影片、弹幕、中日字幕 SRT）", zip_url), Link("录播页面", page_url))))
+    (text,) = fake.texts("G1")
+    assert text == ("✅ **A** 全部处理完成\ntitle v1\n影片 ✅ · 路灯表 ❌\n"
+                    f"[全部下载（影片、弹幕、中日字幕 SRT）]({zip_url})\n[录播页面]({page_url})\n切片小助手 自动下载")
+
+
+# QQ reads `\[ ... \]` as a display-math block and shows a backslash-escaped backtick as a
+# lone backtick, so plain text is never backslash-escaped: markdown characters become their
+# full-width forms, and backticks (code formatting meant for Discord) are dropped.
+TITLE = r"【歌枠】*sing* [all] _night_ ~~♪~~ #1 $5 a\b `c` |d| >e"
+SHOWN = "【歌枠】＊sing＊ ［all］ ＿night＿ ～～♪～～ ＃1 ＄5 a＼b c ｜d｜ ＞e"
+
+
+@pytest.mark.parametrize("kind", [EventKind.LIVE, EventKind.OFFLINE, EventKind.DOWNLOADED])
+def test_a_title_shows_as_text_in_every_message(tmp_path, kind):
+    fake = FakeQQ(cover_ok=False)
     status = live(A)
-    status.title = "【歌枠】*sing* [all] _night_"
-    send(notifier(tmp_path, fake, SUBSCRIBED), StreamEvent(EventKind.OFFLINE, status))
-    assert r"【歌枠】\*sing\* \[all\] \_night\_" in fake.texts("G1")[0]
+    status.title = TITLE
+    send(notifier(tmp_path, fake, SUBSCRIBED), StreamEvent(kind, status, detail="6.2 GB"))
+    (text,) = fake.texts("G1")
+    assert SHOWN in text.split("\n")
+    assert "\\" not in text
+
+
+def test_a_file_name_in_a_detail_shows_as_text(tmp_path):
+    fake = FakeQQ()
+    detail = "影片：`[20261113][A] 歌枠_1.mp4`（6.2 GB）\n```HTTP Error 403: [Forbidden]```"
+    send(notifier(tmp_path, fake, SUBSCRIBED), StreamEvent(EventKind.DOWNLOADED, live(A), detail=detail))
+    lines = fake.texts("G1")[0].split("\n")
+    assert lines[2:4] == ["影片：［20261113］［A］ 歌枠＿1.mp4（6.2 GB）", "HTTP Error 403: ［Forbidden］"]
+
+
+def test_a_link_label_shows_as_text(tmp_path):
+    fake = FakeQQ()
+    send(notifier(tmp_path, fake, {**SUBSCRIBED, "kinds": ["uploaded"]}),
+         StreamEvent(EventKind.UPLOADED, live(A), detail="", links=(Link("[表] *1*", "https://docs.qq.com/sheet/S1"),)))
+    assert "[［表］ ＊1＊](https://docs.qq.com/sheet/S1)" in fake.texts("G1")[0].split("\n")
 
 
 def test_a_failing_group_does_not_stop_the_others(tmp_path):

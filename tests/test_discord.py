@@ -7,7 +7,7 @@ from datetime import timedelta
 import httpx
 import pytest
 
-from backend.notify import EventKind, LiveNotifier, PermanentNotifyError, StreamEvent
+from backend.notify import EventKind, Link, LiveNotifier, PermanentNotifyError, StreamEvent
 from backend.notify.discord import DiscordNotifier
 
 from .helpers import T0, B, live, off
@@ -129,6 +129,25 @@ def test_footer_says_what_sent_it(kind, footer):
     n, sent = fake_discord(httpx.Response(204))
     send(n, StreamEvent(kind, live(), T0 + timedelta(hours=1), detail="x"))
     assert sent[0]["embeds"][0]["footer"]["text"] == footer
+
+
+PAGE = "https://kiri.example/archives#A%2F20261110%2F%E6%AD%8C%E6%9E%A0%20%28Vol.2%29"
+SHEET = "https://docs.qq.com/sheet/S1?tab=t1"
+
+
+def test_links_show_their_label_in_the_embed_after_the_detail():
+    n, sent = fake_discord(httpx.Response(204))
+    zip_url = "https://kiri.example/api/archives/zip?folder=A%2F20261110%2F%E6%AD%8C%E6%9E%A0%20%28Vol.2%29"
+    send(n, StreamEvent(EventKind.READY, live(), detail="影片 ✅ · 路灯表 ❌",
+                        links=(Link("全部下载（影片、弹幕、中日字幕 SRT）", zip_url), Link("录播页面", PAGE))))
+    assert sent[0]["embeds"][0]["description"] == \
+        f"影片 ✅ · 路灯表 ❌\n[全部下载（影片、弹幕、中日字幕 SRT）]({zip_url})\n[录播页面]({PAGE})"
+
+
+def test_a_message_with_only_a_link_shows_just_the_link():
+    n, sent = fake_discord(httpx.Response(204))
+    send(n, StreamEvent(EventKind.UPLOADED, live(), detail="", links=(Link("腾讯文档路灯表", SHEET),)))
+    assert sent[0]["embeds"][0]["description"] == f"[腾讯文档路灯表]({SHEET})"
 
 
 def test_alert_is_a_plain_message():

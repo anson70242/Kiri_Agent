@@ -328,7 +328,7 @@ async function drawDetail(folder) {
     document.getElementById("msgs").innerHTML = `<div class="empty">弹幕加载失败</div>`;
     return;
   }
-  if (location.hash.slice(1) !== encodeURIComponent(folder)) return;  // navigated away
+  if (hashFolder() !== folder) return;  // navigated away
 
   const msgs = chat.messages, times = msgs.map(m => secs(m.time));
   const video = document.getElementById("video");
@@ -407,7 +407,7 @@ async function showTranscript(a, folder) {
     box.innerHTML = `<div class="empty">字幕加载失败</div>`;
     return;
   }
-  if (location.hash.slice(1) !== encodeURIComponent(folder)) return;  // navigated away
+  if (hashFolder() !== folder) return;  // navigated away
   document.getElementById("submeta").textContent = `${segs.length.toLocaleString()} 句`;
 
   // 中 / 日 / 双语 (only when a translation exists); lines share the same timing 1:1.
@@ -453,10 +453,16 @@ async function showTranscript(a, folder) {
   });
 }
 
+// The archive the address opens: its folder after "#", however it was escaped (the page's
+// own links leave ( ) ! ' * as they are, links in messages escape them too).
+function hashFolder() {
+  try { return decodeURIComponent(location.hash.slice(1)); } catch { return ""; }
+}
+
 function route() {
   if (!data) return;
   window.onresize = null;
-  const folder = decodeURIComponent(location.hash.slice(1));
+  const folder = hashFolder();
   if (folder) drawDetail(folder); else drawList();
   window.scrollTo(0, 0);
 }
