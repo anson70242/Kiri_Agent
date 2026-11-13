@@ -10,6 +10,10 @@ Watches streamers, downloads each finished live, transcribes and translates it, 
 One continuous broadcast as its platform identifies it (一场直播): a YouTube video, a Twitch go-live, a TwitCasting movie. A streamer who drops and comes back may produce several lives in one sitting.
 _Avoid_: stream, broadcast
 
+**Sitting**:
+One or more lives in a row by the same streamer that the group sees as one (一次开播): announced once when it starts and once when it ends. A new live continues the sitting when it starts at the same watch address shortly after the previous one stopped.
+_Avoid_: show, run
+
 **Replay**:
 The platform's own video of a finished live (回放). It may be unpublished, or need a login to watch.
 _Avoid_: VOD, platform archive
