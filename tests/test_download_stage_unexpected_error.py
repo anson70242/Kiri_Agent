@@ -9,6 +9,7 @@ import asyncio
 import logging
 from datetime import timedelta
 
+from backend.archive import Downloads
 from backend.downloader.auto import AutoDownloader
 from backend.monitor import LiveState, StreamStatus
 from backend.monitor.twitcasting import channel_url
@@ -104,3 +105,21 @@ def test_a_cancelled_worker_still_stops(tc, monkeypatch):
         raise AssertionError("the cancellation was swallowed")
     (job,) = ad.load()
     assert (job.attempts, job.errors) == (0, 0)
+
+
+def test_a_failing_cleanup_of_old_archives_does_not_fail_the_download(tc, monkeypatch, caplog):
+    def broken_prune(self, protect, keep):
+        raise PermissionError("old archive is open in another program")
+
+    monkeypatch.setattr(Downloads, "prune", broken_prune)
+    ad, clock, sent = auto(tc)
+    transcribed = []
+    ad.transcribe = transcribed.append
+    with caplog.at_level(logging.WARNING):
+        run_worker_once(ad)
+
+    assert [e.kind for e in sent] == [EventKind.DOWNLOADED]
+    assert "清理" not in sent[0].detail  # nothing reported as pruned
+    (job,) = ad.load()
+    assert (job.stage, job.errors) == ("transcribe", 0)
+    assert any(r.exc_info and r.exc_info[0] is PermissionError for r in caplog.records)
