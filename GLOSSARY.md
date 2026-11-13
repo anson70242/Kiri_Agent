@@ -1,13 +1,23 @@
 # 切片小助手
 
-Watches streamers, downloads each finished stream, transcribes and translates it, builds a 路灯表, and shows it all to the editors who cut clips from it.
+Watches streamers, downloads each finished live, transcribes and translates it, builds a 路灯表, and shows it all to the editors who cut clips from it.
 
 ## Language
+
+### Lives
+
+**Live**:
+One continuous broadcast as its platform identifies it (一场直播): a YouTube video, a Twitch go-live, a TwitCasting movie. A streamer who drops and comes back may produce several lives in one sitting.
+_Avoid_: stream, broadcast
+
+**Replay**:
+The platform's own video of a finished live (回放). It may be unpublished, or need a login to watch.
+_Avoid_: VOD, platform archive
 
 ### Archives
 
 **Archive**:
-One stream's folder on disk and everything in it (录播).
+One live's folder on disk and everything in it (录播).
 _Avoid_: VOD folder, download, recording
 
 **Artifact**:
