@@ -31,7 +31,7 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 # platform -> the suffix of the raw chat downloaded from it
-RAW_CHAT_SUFFIX = {"youtube": ".live_chat.json", "twitch": ".chat.json"}
+RAW_CHAT_SUFFIX = {"youtube": ".live_chat.json", "twitch": ".chat.json", "twitcasting": ".comments.json"}
 
 
 class Artifact(Enum):
