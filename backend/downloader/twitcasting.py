@@ -8,7 +8,9 @@ browser fallback are never used here. The steps, each its own piece:
   verified on the real site on 2026-11-13; `published_replay` turns every state but published
   into its outcome: ReplayUnpublished, or a DownloadError for a missing login or a live of a
   kind not supported);
-- video (`download_video`): through yt-dlp with the cookies, as on the other platforms;
+- video (`download_video`): through yt-dlp with the cookies, as on the other platforms; a
+  replay in several parts is joined into one video (`download_parts`), never run against a
+  real one (none was found);
 - chat (`download_raw_chat`): every page of the movie's public comment history, read
   without cookies (verified readable without login, also for unpublished replays):
   20 comments a page, newest first; page 0 is the newest, the pager links the last.
@@ -25,6 +27,7 @@ import json
 import logging
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from email.utils import parsedate_to_datetime
@@ -34,12 +37,13 @@ from typing import Any, ClassVar
 
 import httpx
 from yt_dlp.cookies import YoutubeDLCookieJar
+from yt_dlp.utils import PostProcessingError
 
 from backend.archive import DOWNLOADING_SUFFIX, Artifact, artifact_name
 from backend.monitor.base import USER_AGENT, meta_content
 from backend.monitor.twitcasting import SITE, channel_id, data_attr, live_title
 
-from .base import DownloadError, PlatformDownloader, ReplayUnpublished, VideoInfo
+from .base import DownloadError, PlatformDownloader, ReplayUnpublished, VideoInfo, clean_error, outtmpl
 
 log = logging.getLogger(__name__)
 
@@ -49,6 +53,12 @@ REPLAY_RE = re.compile(r"twitcasting\.tv/([^/?#]+)/movie/(\d+)", re.I)
 def replay_url(channel: str, live_id: str) -> str:
     """The replay page of a live (a TwitCasting movie) of a channel."""
     return f"{SITE}/{channel}/movie/{live_id}"
+
+
+def not_a_part(info: dict[str, Any], *, incomplete: bool = False) -> str | None:
+    """yt-dlp match filter refusing the parts of a replay in several parts (the entries of a
+    `multi_video` result carry a `playlist_index`; a replay in one part has none)."""
+    return "a part of a replay in several parts" if info.get("playlist_index") is not None else None
 
 
 class ReplayState(Enum):
@@ -188,6 +198,55 @@ class TwitCastingDownloader(PlatformDownloader):
         return next((s.name for s in self.streamers if channel_id(s.channel).lower() == channel), None)
 
     # ---- video ----
+
+    def download_video(
+        self, info: VideoInfo, out_dir: Path, progress: Callable[[dict[str, Any]], None] | None = None
+    ) -> Path:
+        """The replay's video, `<stem>.mp4`. A replay in one part is downloaded by one yt-dlp
+        call, as on every platform. A replay in several parts (to yt-dlp a `multi_video` result,
+        one entry per part) is left alone by that call, then downloaded part by part and joined
+        (see `download_parts`)."""
+        path = out_dir / artifact_name(info.stem, Artifact.VIDEO)
+        if path.exists():
+            log.info("video already exists, skipping: %s", path.name)
+            return path
+        log.info("downloading video: %s", info.url)
+        hooks = {"progress_hooks": [progress]} if progress else {}
+        opts = self.video_options(outtmpl(out_dir, info.stem)) | hooks | {"match_filter": not_a_part}
+        if self._ytdlp(info.url, opts).get("_type") == "multi_video":
+            self.download_parts(info, out_dir, hooks)
+        if not path.exists():
+            raise DownloadError(f"yt-dlp finished but {path.name} is missing")
+        return path
+
+    def download_parts(self, info: VideoInfo, out_dir: Path, hooks: dict[str, Any]) -> None:
+        """Download the parts of a replay in several parts and join them, in order and without
+        re-encoding, into the video `<stem>.mp4`. yt-dlp does both: its FFmpegConcat
+        post-processor stream-copies the parts into one file and deletes them. The parts and
+        the joined file carry the download-in-progress marker until the joined file is renamed
+        to the video, so a failed join leaves nothing that looks like a finished video; the
+        parts stay for the next try, which does not download them again."""
+        video = artifact_name(info.stem, Artifact.VIDEO)
+        joined = out_dir / (video + DOWNLOADING_SUFFIX)
+        # yt-dlp output templates (a literal % in the stem must be %%): each part by its
+        # number, and the joined file (`pl_video`, the template of a playlist's own file).
+        parts_tmpl = str(out_dir / (info.stem.replace("%", "%%") + ".%(playlist_index)s.%(ext)s" + DOWNLOADING_SUFFIX))
+        joined_tmpl = str(out_dir / (video.replace("%", "%%") + DOWNLOADING_SUFFIX))
+        opts = self.video_options(Path(parts_tmpl)) | hooks | {
+            "outtmpl": {"default": parts_tmpl, "pl_video": joined_tmpl},
+            "postprocessors": [{"key": "FFmpegConcat", "only_multi_video": True, "when": "playlist"}],
+            # ffmpeg cannot tell the format from a name ending with the marker; "concat" is
+            # yt-dlp's key for FFmpegConcat's arguments.
+            "postprocessor_args": {"concat+ffmpeg_o": ["-f", "mp4"]},
+        }
+        log.info("downloading a replay in several parts: %s", info.url)
+        try:
+            self._ytdlp(info.url, opts)
+        except PostProcessingError as e:  # the join (yt-dlp raises it as it is)
+            raise DownloadError(f"joining the parts of {info.url} failed: {clean_error(e)}") from e
+        if not joined.exists():
+            raise DownloadError(f"yt-dlp finished but the joined parts {joined.name} are missing")
+        joined.replace(out_dir / video)
 
     def base_options(self) -> dict[str, Any]:
         # yt-dlp writes refreshed cookies back to this file, keeping the login valid longer.
