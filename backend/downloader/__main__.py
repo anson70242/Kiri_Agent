@@ -1,4 +1,4 @@
-"""Download a VOD and its chat replay.
+"""Download a VOD (a TwitCasting replay: its replay address) and its chat replay.
 
     uv run -m backend.downloader <url>             # video + chat
     uv run -m backend.downloader <url> --no-chat   # video only
@@ -64,7 +64,7 @@ def wait_loop(queue: PendingChats, streamers, settings) -> None:
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description="Download a YouTube / Twitch VOD and its chat.")
+    p = argparse.ArgumentParser(description="Download a YouTube / Twitch VOD or a TwitCasting replay, and its chat.")
     p.add_argument("urls", nargs="*")
     p.add_argument("--config", type=Path, default=REPO_ROOT / "config.json")
     p.add_argument("--no-video", action="store_true")

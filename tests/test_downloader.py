@@ -8,6 +8,7 @@ import pytest
 
 from backend.downloader import ChatNotReady, DownloadError, DownloadSettings, PendingChats, download, downloader_for
 from backend.downloader.base import PlatformDownloader, VideoInfo
+from backend.downloader.twitcasting import TwitCastingDownloader
 from backend.downloader.twitch import TwitchDownloader, convert_comment, fetch_comments
 from backend.downloader.youtube import YoutubeDownloader
 from backend.monitor import Streamer
@@ -24,6 +25,8 @@ STREAMERS = [
     ("https://m.youtube.com/live/abc", YoutubeDownloader),
     ("https://www.twitch.tv/videos/123", TwitchDownloader),
     ("https://clips.twitch.tv/Slug", TwitchDownloader),
+    ("https://twitcasting.tv/x/movie/1", TwitCastingDownloader),
+    ("https://twitcasting.tv/x", TwitCastingDownloader),
 ])
 def test_routes_url_to_platform(url, cls):
     assert type(downloader_for(url, DownloadSettings())) is cls
@@ -31,7 +34,7 @@ def test_routes_url_to_platform(url, cls):
 
 def test_unsupported_url():
     with pytest.raises(DownloadError, match="unsupported"):
-        downloader_for("https://twitcasting.tv/x/movie/1", DownloadSettings())
+        downloader_for("https://www.nicovideo.jp/watch/sm1", DownloadSettings())
 
 
 def test_youtube_info_matches_config_streamer():

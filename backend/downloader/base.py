@@ -34,6 +34,11 @@ class DownloadError(Exception):
     """A video, chat or metadata download failed."""
 
 
+class ReplayUnpublished(DownloadError):
+    """The platform has no published replay of the live, and may publish one later (on
+    TwitCasting the streamer chooses). Neither "not ready yet" nor a failure."""
+
+
 class ChatNotReady(DownloadError):
     """Chat replay isn't available yet but may appear later (YouTube processes it for
     hours after a stream ends). `download()` queues these for retry."""
@@ -49,6 +54,9 @@ class DownloadSettings:
     cookies_from_browser: str | None = None
     # Twitch `auth-token` cookie value, for subscriber-only VODs and their chat.
     twitch_oauth: str | None = None
+    # Netscape cookies.txt of a logged-in TwitCasting account: every TwitCasting replay
+    # needs a login, so every request for one carries these. Missing: the login is missing.
+    twitcasting_cookies_file: Path | None = None
     # ffmpeg binary or its folder. None means "find it on PATH".
     ffmpeg: str | None = None
     concurrent_fragments: int = 5
