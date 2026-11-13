@@ -4,17 +4,22 @@ the one "ended" still covers the whole sitting."""
 
 import asyncio
 import json
+import os
+import random
 from dataclasses import replace
 from datetime import timedelta
 
 import pytest
 
 from backend import check_state
+from backend.monitor import LiveState, StreamMonitor, Streamer
 from backend.notify import LiveNotifier
 
 from .helpers import LIVE, OFFLINE, T0, Recorder, ev, off
 from .test_check_state import qq_on, write_config  # noqa: F401  (qq_on is a fixture)
-from .test_live_continues import cast
+from .test_live_continues import FakeChannelMonitor, cast, random_lives  # noqa: F401  (registers "fake_channel")
+from .test_monitor import SCRIPT
+from .test_random_sequences import check_invariants
 from .test_runtime_state_recovery import backups, incidents  # noqa: F401  (incidents is a fixture)
 
 GRACE = 0.05
@@ -201,3 +206,61 @@ def test_the_deploy_check_passes_on_a_live_state_file_with_or_without_the_sittin
     (data / "notify_state.json").write_text(json.dumps(raw), encoding="utf-8")
     assert check_state.main(["--config", str(cfg)]) == 0
     assert "状态文件正常" in capsys.readouterr().out
+
+
+# ---- random sequences with restarts ----
+
+@pytest.mark.slow
+def test_random_sequences_with_restarts_end_each_sitting_once_with_the_announced_live(tmp_path):
+    """Whatever a channel does and whenever the service restarts, per streamer: notifications
+    alternate "went live" and "ended", each "ended" carries the id of the live that was
+    announced, the last one is "ended", and every live the notifier saw reaches the listeners
+    exactly once. Every live is watched at the channel's address, so sittings continue past
+    their first live, before and after a restart."""
+    restarts = continued = 0
+
+    async def one(seed: int):
+        nonlocal restarts, continued
+        rng = random.Random(seed)
+        state_file = tmp_path / f"live_state_{seed}.json"
+        streamers = [Streamer(f"S{i}", "fake_channel", f"restart{seed}_{i}") for i in range(3)]
+        for s in streamers:
+            SCRIPT[s.channel] = random_lives(rng, 15, f"{s.channel}-") + [LiveState.OFFLINE] * 3
+        rec, ended, seen = Recorder(fail=rng.randint(0, 3)), [], []
+        notifier = mon = None
+        for check in range(18):
+            if check == 0 or (check < 15 and rng.random() < 0.2):
+                if notifier:  # a restart: what the next run knows is what the state file holds
+                    await notifier.aclose()
+                    await mon.aclose()
+                    restarts += 1
+                notifier = LiveNotifier([rec], notify_on_startup=True, offline_grace=0.01,
+                                        retry_base_delay=0.001, state_file=state_file)
+                notifier.on_ended.append(ended.append)
+                mon = StreamMonitor(streamers)
+                mon.on_change.append(notifier.on_change)
+                mon.on_change.append(lambda new, old: seen.append(new) if new.is_live else None)
+            await mon.refresh()
+            if rng.random() < 0.3:
+                await asyncio.sleep(0.02)  # sometimes let a grace period run out
+        await asyncio.sleep(0.05)
+        await notifier.aclose()
+        await mon.aclose()
+        for s in streamers:
+            label = f"seed {seed} {s.name}"
+            events = [e for e in rec.events if e[1] == s.id]
+            check_invariants(events, label)
+            lives = [e.status.stream_id for e in ended if e.status.streamer == s]
+            assert sorted(lives) == sorted({st.stream_id for st in seen if st.streamer == s}), label
+            assert len(lives) == len(set(lives)), f"{label}: a live reached the listeners twice: {lives}"
+            continued += len(lives) - sum(1 for e in events if e[0] is OFFLINE)
+
+    seeds = int(os.getenv("STRESS_SEEDS", "100"))
+
+    async def all_seeds():
+        for seed in range(seeds):
+            await one(seed)
+
+    asyncio.run(all_seeds())
+    if seeds >= 20:  # enough sequences that the service restarted and some lives continued a sitting
+        assert restarts > 0 and continued > 0
