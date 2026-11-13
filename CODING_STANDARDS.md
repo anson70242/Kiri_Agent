@@ -5,7 +5,7 @@ Read during review. Tools enforce the mechanical rules: `uv run ruff check` (unu
 ## Languages
 
 - Code, comments, docstrings, log text, `GLOSSARY.md`, ADRs, specs and tickets are in English.
-- `README.md` is in Chinese.
+- `README.md` is in English.
 - Text a person reads in Discord, in QQ or on a dashboard page matches the language of the messages around it (alerts and notifications are Chinese).
 
 ## Vocabulary
