@@ -64,6 +64,9 @@ PIPELINE = {
     EventKind.UPLOAD_FAILED: ("❗", "路灯表上传腾讯文档失败", FOOTER_HIGHLIGHTS),
     EventKind.READY: ("✅", "全部处理完成", FOOTER_DOWNLOAD),
 }
+# The messages that show the live's cover. The other pipeline messages stay text: a cover
+# on every message of one live would flood the group.
+COVER_KINDS = {EventKind.LIVE, EventKind.DOWNLOADED, EventKind.READY}
 KIND_LABELS = {"live": "开播", "offline": "下播", "downloaded": "录播已下载", "replay_unpublished": "回放未公开",
                "prune_failed": "旧录播没能删除", "uploaded": "上传完成",
                "analyzed": "路灯表已生成", "download_failed": "下载失败", "transcribe_failed": "转写失败",
@@ -189,13 +192,12 @@ def image_size(data: bytes) -> tuple[int, int] | None:
 
 
 def message(event: StreamEvent, cover: str | None = None) -> str:
-    """The markdown text of one event. `cover`: a qqbot-media markdown image line."""
+    """The markdown text of one event. `cover`: a qqbot-media markdown image line, put
+    right after the headline."""
     s = event.status
     name, title = escape(s.streamer.name), escape(s.title or "")
     if event.kind is EventKind.LIVE:
         lines = [f"🔴 **{name}** 开播了！"]
-        if cover:
-            lines.append(cover)
         lines += [f"{name} · {s.streamer.platform}", title]
         info = []
         if s.viewers is not None:
@@ -218,6 +220,8 @@ def message(event: StreamEvent, cover: str | None = None) -> str:
         for line in (event.detail or "").splitlines():
             lines.append(link(line.strip()) if re.fullmatch(r"https?://\S+", line.strip()) else escape(line))
         lines.append(footer)
+    if cover:
+        lines.insert(1, cover)
     return "\n".join(line for line in lines if line)
 
 
@@ -306,7 +310,7 @@ class QQNotifier(Notifier):
         targets = self.groups.targets(event)
         if not targets:
             return
-        cover = await self.cover(event.status.thumbnail) if event.kind is EventKind.LIVE else None
+        cover = await self.cover(event.status.thumbnail) if event.kind in COVER_KINDS else None
         text = message(event, cover)
         summary = text.splitlines()[0].replace("**", "")
         for i, g in enumerate(targets):
