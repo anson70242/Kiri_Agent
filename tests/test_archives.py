@@ -91,6 +91,16 @@ def test_highlights_list_and_table(client):
     assert client.get("/api/highlights/table", params={"folder": "../.."}).status_code == 404
 
 
+def test_a_highlight_table_that_is_not_an_object_counts_as_damaged(client, tmp_path):
+    sample_archive(tmp_path / "downloads", "柊優花", "20261107", "朝活", highlights=[{"start": "00:00:00"}])
+
+    listing = client.get("/api/highlights")
+    assert listing.status_code == 200 and [t["folder"] for t in listing.json()["tables"]] == [FOLDER]  # skipped
+    r = client.get("/api/highlights/table", params={"folder": "柊優花/20261107/朝活"})
+    assert (r.status_code, r.json()["detail"]) == (500, "路灯表 is not valid JSON")
+    assert client.get("/api/highlights/xlsx", params={"folder": "柊優花/20261107/朝活"}).status_code == 500
+
+
 def test_listing_says_which_archives_have_a_table(client):
     newest, done = client.get("/api/archives").json()["archives"]
     assert done["highlights_file"] == f"{STEM}.highlights.json"

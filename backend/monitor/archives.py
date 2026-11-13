@@ -204,7 +204,7 @@ def create_router(output_dir: Path,
         tables = []
         for a in seen_archives(request):
             try:
-                rows = a.read_highlights().get("rows") or []
+                rows = a.highlight_rows()
             except (ArtifactMissing, ArtifactDamaged, OSError):
                 continue
             scores = [r["score"] for r in rows if isinstance(r.get("score"), int)]

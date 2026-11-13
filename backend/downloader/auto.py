@@ -536,7 +536,7 @@ def success_detail(outcome: Outcome) -> str:
 def top_segments_detail(archive: Archive, n: int = 5) -> str:
     """Discord text for an archive's finished 路灯表: the best `n` segments."""
     try:
-        rows = archive.read_highlights().get("rows") or []
+        rows = archive.highlight_rows()
     except (ArtifactMissing, ArtifactDamaged, OSError) as e:
         return f"路灯表已生成，但读不到：{e}"
     best = sorted((r for r in rows if isinstance(r.get("score"), int)), key=lambda r: -r["score"])[:n]

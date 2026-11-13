@@ -268,9 +268,13 @@ class Archive:
         """The transcript's segments: Japanese, or with `lang` "zh" the Chinese transcript."""
         return self.read(Artifact.transcript(lang))
 
-    def read_highlights(self) -> Any:
-        """The highlight table (路灯表) as stored: a dict with "rows" when well formed."""
+    def read_highlights(self) -> dict[str, Any]:
+        """The highlight table (路灯表) as stored: an object, with its segments under "rows"."""
         return self.read(Artifact.HIGHLIGHTS)
+
+    def highlight_rows(self) -> list[dict]:
+        """The highlight table's rows, one per segment (none when it lists none)."""
+        return self.read_highlights().get("rows") or []
 
     def chat_count(self) -> int:
         """How many chat messages the archive has; 0 when it has no readable chat. Cached
@@ -329,13 +333,16 @@ class Archive:
 def read_file(path: Path, artifact: Artifact) -> Any:
     """The JSON contents of `path`, read as `artifact` (a file a person points at, which
     need not sit in an archive). Raises ArtifactMissing when it is gone, ArtifactDamaged
-    when it is not readable JSON."""
+    when it is not readable JSON, or is a highlight table that is not an object."""
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         raise ArtifactMissing(artifact, path) from None
     except ValueError as e:  # bad JSON, or not UTF-8
         raise ArtifactDamaged(artifact, path, str(e)) from None
+    if artifact is Artifact.HIGHLIGHTS and not isinstance(data, dict):
+        raise ArtifactDamaged(artifact, path, f"expected an object, got {type(data).__name__}")
+    return data
 
 
 # chat file -> (mtime_ns, message count): listing every archive must not re-read every chat
