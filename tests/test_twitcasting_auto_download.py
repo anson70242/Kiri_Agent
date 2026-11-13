@@ -51,12 +51,12 @@ def test_an_ended_live_downloads_its_replay_found_from_the_channel_and_the_live_
     ad.on_ended(ended())
     run_until_settled(ad, clock)
 
-    assert [str(q.url) for q in tc.site.requests] == [REPLAY]
+    assert str(tc.site.requests[0].url) == REPLAY
     video = tc.tmp / "dl" / "Mika" / "20261006" / "Night chat 013044" / "[20261006][Mika] Night chat 013044.mp4"
     assert video.exists()
     assert [e.kind for e in sent] == [EventKind.DOWNLOADED, EventKind.READY]
     assert video.name in sent[0].detail
-    assert "弹幕：失败" in sent[0].detail and "not supported yet" in sent[0].detail
+    assert "弹幕：失败" in sent[0].detail and "comment page" in sent[0].detail  # the fake site has no comments
     assert ad.load() == []
 
 
