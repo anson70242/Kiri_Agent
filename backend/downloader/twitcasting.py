@@ -8,7 +8,9 @@ browser fallback are never used here. The steps, each its own piece:
   verified on the real site on 2026-11-13; `published_replay` turns every state but published
   into its outcome: ReplayUnpublished, or a DownloadError for a missing login or a live of a
   kind not supported);
-- video (`download_video`): through yt-dlp with the cookies, as on the other platforms;
+- video (`download_video`): through yt-dlp with the cookies, as on the other platforms; a
+  replay in several parts is joined into one video (`download_parts`), never run against a
+  real one (none was found);
 - chat (`download_raw_chat`): not supported yet.
 
 An archive's title is the live's own title (the monitor's title rule) followed by its start
@@ -222,12 +224,15 @@ class TwitCastingDownloader(PlatformDownloader):
         parts stay for the next try, which does not download them again."""
         video = artifact_name(info.stem, Artifact.VIDEO)
         joined = out_dir / (video + DOWNLOADING_SUFFIX)
-        # Output templates: a literal % in the stem must be %%.
-        parts = out_dir / (info.stem.replace("%", "%%") + ".%(playlist_index)s.%(ext)s" + DOWNLOADING_SUFFIX)
-        opts = self.video_options(parts) | hooks | {
-            "outtmpl": {"default": str(parts), "pl_video": str(out_dir / (video.replace("%", "%%") + DOWNLOADING_SUFFIX))},
+        # yt-dlp output templates (a literal % in the stem must be %%): each part by its
+        # number, and the joined file (`pl_video`, the template of a playlist's own file).
+        parts_tmpl = str(out_dir / (info.stem.replace("%", "%%") + ".%(playlist_index)s.%(ext)s" + DOWNLOADING_SUFFIX))
+        joined_tmpl = str(out_dir / (video.replace("%", "%%") + DOWNLOADING_SUFFIX))
+        opts = self.video_options(Path(parts_tmpl)) | hooks | {
+            "outtmpl": {"default": parts_tmpl, "pl_video": joined_tmpl},
             "postprocessors": [{"key": "FFmpegConcat", "only_multi_video": True, "when": "playlist"}],
-            # The joined file's name ends with the marker, so ffmpeg is told its format.
+            # ffmpeg cannot tell the format from a name ending with the marker; "concat" is
+            # yt-dlp's key for FFmpegConcat's arguments.
             "postprocessor_args": {"concat+ffmpeg_o": ["-f", "mp4"]},
         }
         log.info("downloading a replay in several parts: %s", info.url)
