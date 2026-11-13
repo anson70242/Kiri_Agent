@@ -42,8 +42,16 @@ Discord 返回 4xx（Webhook 被删、网址错误）视为永久失败：只记
 
 ## 平台相关
 
-- **YouTube 和 Twitch 都是读公开网页，不是官方 API。** 平台改版可能让检测失效。失效时会显示「检测失败」，不会误判成下播，但在修好之前收不到通知。改版后跑 `uv run pytest -m network -s` 可以检查。
+- **YouTube、Twitch 和 TwitCasting 都是读公开网页，不是官方 API。** 平台改版可能让检测失效。失效时会显示「检测失败」，不会误判成下播，但在修好之前收不到通知。改版后跑 `uv run pytest -m network -s` 可以检查。
 - **YouTube 没有观看人数**：页面里没有，要用 Data API。
 - **Twitch 的观看人数可能不是实时的**：取自页面描述，测试时间隔约 10 分钟的两次都是同一个数字，可能被 Twitch 缓存了。
-- **不支持 TwitCasting**：模块已写好但移除了（TwitCasting 当时遭到攻击、暂时关闭）。页面判断方式：`<body data-is-onlive>`。
+- **TwitCasting 支持开播 / 下播通知**：每次检测读一次频道页 `twitcasting.tv/<ID>`，看 `<body data-is-onlive>`。卡片和通知有标题、封面、头像和开播时间。
+  - 频道可以填 ID、`@ID` 或 `twitcasting.tv/<ID>` 网址；ID 可以带冒号（`c:name`、`g:123`）。
+  - 标题是这一场自己的标题：TwitCasting 在 `og:title` 后面加的「 / 频道标题」会去掉。这一场没有自己的标题时，显示频道标题。
+  - `stream_id` 是 TwitCasting 的 movie ID；直播网址一律是频道网址。断线重连会开新的一场，movie ID 也会变。
+  - 没有观看人数：页面里没有，另一个接口给的人数一直是 0。
+  - 没有「预约待机」，只有在播和没在播。
+  - ID 打错时 TwitCasting 回的是首页（HTTP 200），会显示「检测失败」，不会当成下播。
+  - 开播又下播都在两次检测之间（不到 1 分钟）的直播看不到。
+  - 还不会自动下载 TwitCasting 的回放。
 - **不支持 X（Twitter）语音直播 Spaces**：公开网页拿不到；官方 API 自 2026 年 2 月起按用量收费；用登录状态调内部接口会违反 X 条款。目前只能靠 X App 的 🔔 通知。

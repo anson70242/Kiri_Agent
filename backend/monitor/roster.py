@@ -62,7 +62,8 @@ class Roster:
         if not channel:
             raise RosterError(400, "频道不能为空")
         if platform not in PlatformMonitor.registry:
-            raise RosterError(400, f"不支持的平台: {platform}")
+            known = ", ".join(sorted(PlatformMonitor.registry))
+            raise RosterError(400, f"不支持的平台: {platform}（支持: {known}）")
         entry = {"name": name or channel, "platform": platform, "channel": channel}
         if self.find(entry_id(entry)):
             raise RosterError(409, "这个主播已经在名单里了")

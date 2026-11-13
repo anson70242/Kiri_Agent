@@ -14,7 +14,7 @@ import httpx
 
 from .base import EventKind, Notifier, PermanentNotifyError, StreamEvent
 
-PLATFORM_COLORS = {"youtube": 0xFF0000, "twitch": 0x9146FF}
+PLATFORM_COLORS = {"youtube": 0xFF0000, "twitch": 0x9146FF, "twitcasting": 0x3381FF}
 DEFAULT_COLOR = 0xE11D48
 OFFLINE_COLOR = 0x6B7280
 DOWNLOADED_COLOR = 0x16A34A

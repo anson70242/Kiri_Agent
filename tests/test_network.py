@@ -1,13 +1,16 @@
-"""Real YouTube / Twitch checks. Run with: uv run pytest -m network"""
+"""Real YouTube / Twitch / TwitCasting checks. Run with: uv run pytest -m network"""
 
 import asyncio
 import json
+import re
 from collections import Counter
 from pathlib import Path
 
 import pytest
 
 from backend.monitor import LiveState, StreamMonitor, Streamer
+from backend.monitor.base import make_client
+from backend.monitor.twitcasting import TwitCastingMonitor
 
 pytestmark = pytest.mark.network
 
@@ -57,3 +60,58 @@ def test_known_live_channel_is_live():
 
     st = asyncio.run(go())
     assert st.state is LiveState.LIVE, st
+
+
+# ---------- TwitCasting ----------
+# Which channel is live changes all the time: the site's front page lists live
+# channels (`data-userid`), and the stream server says whether one is live now.
+
+TWITCASTING_MAYBE_OFFLINE = ["twitcasting_jp", "twitcasting_info"]  # the site's own accounts
+
+
+async def twitcasting_movie(client, channel):
+    """(movie id, live?) from the stream server, or None for an unknown channel."""
+    r = await client.get("https://twitcasting.tv/streamserver.php",
+                         params={"target": channel, "mode": "client", "player": "pc_web"})
+    r.raise_for_status()
+    movie = r.json().get("movie")
+    return (str(movie["id"]), movie["live"]) if movie else None
+
+
+def test_twitcasting_live_channel_is_live():
+    async def go():
+        async with make_client() as client:
+            front = (await client.get("https://twitcasting.tv/")).text
+            channels = list(dict.fromkeys(re.findall(r'data-userid="([^"]+)"', front)))
+            assert channels, "no live channel on the TwitCasting front page"
+            tried = []
+            for channel in channels[:10]:
+                movie = await twitcasting_movie(client, channel)
+                if not (movie and movie[1]):
+                    continue
+                st = await TwitCastingMonitor(client).check(Streamer(channel, "twitcasting", channel))
+                tried.append((channel, st.state, st.error))
+                if st.is_live:
+                    return channel, movie[0], st
+            pytest.fail(f"no live TwitCasting channel confirmed: {tried}")
+
+    channel, movie_id, st = asyncio.run(go())
+    print(channel, st)
+    assert st.stream_id == movie_id
+    assert st.url == f"https://twitcasting.tv/{channel}"
+    assert st.title and st.started_at and st.avatar and st.thumbnail
+
+
+def test_twitcasting_offline_channel_is_offline():
+    async def go():
+        async with make_client() as client:
+            for channel in TWITCASTING_MAYBE_OFFLINE:
+                movie = await twitcasting_movie(client, channel)
+                if movie and not movie[1]:
+                    return await TwitCastingMonitor(client).check(Streamer(channel, "twitcasting", channel))
+            pytest.skip(f"every channel of {TWITCASTING_MAYBE_OFFLINE} is live or unknown right now")
+
+    st = asyncio.run(go())
+    print(st)
+    assert st.state is LiveState.OFFLINE, st
+    assert st.avatar
