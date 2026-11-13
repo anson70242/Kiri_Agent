@@ -77,18 +77,27 @@ class LiveNotifier:
 
     Register `on_change` in `StreamMonitor.on_change`.
 
-    Rules, per streamer:
-    - Went live: a new broadcast is seen live. Never announced twice. On a fresh start
+    Rules, per streamer. A sitting is one or more lives in a row that the group sees as
+    one: it gets one "went live" and one "ended".
+    - Went live: a new sitting is seen live. Never announced twice. On a fresh start
       (no saved state at all) streamers already live are skipped unless
       `notify_on_startup`; a streamer newly added to an existing setup is announced.
-    - Ended: the live broadcast stays not-live for `offline_grace` seconds. If the same
-      broadcast comes back within that window nothing is sent. If a *different*
-      broadcast appears, the old one is reported ended first, then the new one live.
-    - Every LIVE is eventually followed by exactly one OFFLINE for that broadcast.
+    - Ended: the live stays not-live for `offline_grace` seconds. If the same live comes
+      back within that window nothing is sent. If a *different* live appears:
+      - at the same watch address, straight after the previous live or inside its
+        grace window, it continues the sitting: nothing is sent;
+      - otherwise (another address, a live saved before a restart) the sitting is
+        reported ended first, then the new one live.
+    - Every LIVE is eventually followed by exactly one OFFLINE, which carries the id and
+      start time of the live that was announced and the end time of the sitting's last
+      live.
+    - `on_ended` listeners get every live once, with that live's own details, also the
+      lives that a sitting continued past.
 
-    With `state_file`, the last live broadcast per streamer survives restarts, so a
-    stream that ended (or a new one that started) while the monitor was down, or
-    during a pending grace window, is still reported after restart.
+    With `state_file`, the last live per streamer survives restarts, so a live that
+    ended (or a new one that started) while the monitor was down, or during a pending
+    grace window, is still reported after restart. The sitting's first live is not
+    saved: after a restart the current live stands for its sitting.
 
     Events go through one queue: delivered in order, retried with backoff, and never
     block polling.
@@ -161,7 +170,7 @@ class LiveNotifier:
             if continues:
                 self._end_live(prev, new.checked_at)
             elif prev is not None and not same:
-                # The previous broadcast ended (between polls, inside the grace
+                # The previous live ended (between polls, inside the grace
                 # window, or while we were down) and a new sitting started.
                 self._end_sitting(sid, prev, new.checked_at)
             if same:

@@ -2,12 +2,19 @@
 straight after the previous one, belongs to the same sitting (LiveNotifier rules)."""
 
 import asyncio
+import os
+import random
 from dataclasses import replace
 from datetime import timedelta
 
+import pytest
+
+from backend.monitor import LiveState, PlatformMonitor, StreamMonitor, Streamer, StreamStatus
 from backend.notify import LiveNotifier
 
 from .helpers import LIVE, OFFLINE, T0, Recorder, ev, live, off
+from .test_monitor import SCRIPT, FakeMonitor  # noqa: F401  (registers "fake": one address per live)
+from .test_random_sequences import check_invariants
 
 GRACE = 0.05
 ADDRESS = "https://example.test/channel"  # one watch address for every live of the channel
@@ -147,3 +154,118 @@ def test_restart_inside_a_sitting_keeps_it_quiet_and_each_live_reaches_the_liste
     assert first.events == [ev(LIVE, "a1")]
     assert second.events == [ev(OFFLINE, "b1")]
     assert [e.status.stream_id for e in first_ended + second_ended] == ["a1", "b1"]
+
+
+# ---- through the real monitor ----
+
+class FakeChannelMonitor(PlatformMonitor):
+    """Scripted like test_monitor's "fake", but every live is watched at the channel's address."""
+
+    platform = "fake_channel"
+
+    async def _check(self, s: Streamer) -> StreamStatus:
+        item = SCRIPT[s.channel].pop(0)
+        if isinstance(item, Exception):
+            raise item
+        if isinstance(item, tuple):
+            return StreamStatus(s, LiveState.LIVE, title=f"title {item[1]}", url=f"https://x/{s.channel}",
+                                stream_id=item[1])
+        return StreamStatus(s, item)
+
+
+def test_monitor_and_notifier_turn_a_reconnecting_streamer_into_one_sitting():
+    async def go():
+        SCRIPT["tc"] = [
+            LiveState.OFFLINE,      # startup
+            ("live", "a1"),         # short opening live       -> LIVE a1
+            LiveState.OFFLINE,      # stops...
+            ("live", "b1"),         # ...the real one, in grace (nothing)
+            RuntimeError("down"),   # check failed              (ignored)
+            ("live", "c1"),         # connection dropped and back between checks (nothing)
+            LiveState.OFFLINE,      # really over               -> OFFLINE a1 after grace
+            LiveState.OFFLINE,
+        ]
+        rec, ended = Recorder(), []
+        notifier = LiveNotifier([rec], offline_grace=0.05)
+        notifier.on_ended.append(ended.append)
+        async with StreamMonitor([Streamer("T", "fake_channel", "tc")]) as mon:
+            mon.on_change.append(notifier.on_change)
+            for _ in range(len(SCRIPT["tc"])):
+                await mon.refresh()
+                await asyncio.sleep(0.02)  # < grace
+            await asyncio.sleep(0.15)
+        await notifier.aclose()
+        assert rec.events == [(LIVE, "fake_channel:tc", "a1"), (OFFLINE, "fake_channel:tc", "a1")]
+        assert [e.status.stream_id for e in ended] == ["a1", "b1", "c1"]
+
+    asyncio.run(go())
+
+
+# ---- random sequences ----
+
+def random_lives(rng: random.Random, n: int, prefix: str) -> list:
+    """A script where each live has its own id: a live either goes on at the next check
+    or is followed by a live with a new id, or by a check that failed, offline or upcoming."""
+    out, current, count = [], None, 0
+    for _ in range(n):
+        c = rng.choice(["offline", "upcoming", "err", "same", "new"])
+        if c == "err":
+            out.append(RuntimeError("random failure"))  # changes nothing
+        elif c in ("offline", "upcoming"):
+            out.append(LiveState(c))
+            current = None
+        else:
+            if c == "new" or current is None:
+                count += 1
+                current = f"{prefix}{count}"
+            out.append(("live", current))
+    return out
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("platform", ["fake_channel", "fake"])
+def test_random_sequences_announce_each_sitting_once_and_end_each_live_once(platform):
+    """Whatever the platform reports, per streamer: notifications alternate "went live" and
+    "ended" for the same live and end on "ended"; every live the notifier saw reaches the
+    listeners exactly once. With one address per live, every live is its own sitting."""
+
+    continued = 0  # lives that went on without an "ended" notification of their own
+
+    async def one(seed: int):
+        nonlocal continued
+        rng = random.Random(seed)
+        streamers = [Streamer(f"S{i}", platform, f"{platform}{seed}_{i}") for i in range(3)]
+        for s in streamers:
+            SCRIPT[s.channel] = random_lives(rng, 15, f"{s.channel}-") + [LiveState.OFFLINE] * 3
+        rec, ended, seen = Recorder(fail=rng.randint(0, 3)), [], []
+        notifier = LiveNotifier([rec], notify_on_startup=True, offline_grace=0.01, retry_base_delay=0.001)
+        notifier.on_ended.append(ended.append)
+        async with StreamMonitor(streamers) as mon:
+            mon.on_change.append(notifier.on_change)
+            mon.on_change.append(lambda new, old: seen.append(new) if new.is_live else None)
+            for _ in range(18):
+                await mon.refresh()
+                if rng.random() < 0.3:
+                    await asyncio.sleep(0.02)  # sometimes let a grace period run out
+            await asyncio.sleep(0.05)
+        await notifier.aclose()
+        for s in streamers:
+            label = f"seed {seed} {s.name}"
+            events = [e for e in rec.events if e[1] == s.id]
+            check_invariants(events, label)
+            lives = [e.status.stream_id for e in ended if e.status.streamer == s]
+            assert sorted(lives) == sorted({st.stream_id for st in seen if st.streamer == s}), label
+            assert len(lives) == len(set(lives)), f"{label}: a live reached the listeners twice: {lives}"
+            if platform == "fake":
+                assert lives == [sid for kind, _, sid in events if kind is OFFLINE], label
+            continued += len(lives) - sum(1 for e in events if e[0] is OFFLINE)
+
+    seeds = int(os.getenv("STRESS_SEEDS", "100"))
+
+    async def all_seeds():
+        for seed in range(seeds):
+            await one(seed)
+
+    asyncio.run(all_seeds())
+    if seeds >= 20:  # enough sequences that some lives continue a sitting
+        assert (continued > 0) == (platform == "fake_channel")
