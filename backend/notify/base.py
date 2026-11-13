@@ -96,8 +96,8 @@ class LiveNotifier:
 
     With `state_file`, the last live per streamer survives restarts, so a live that
     ended (or a new one that started) while the monitor was down, or during a pending
-    grace window, is still reported after restart. The sitting's first live is not
-    saved: after a restart the current live stands for its sitting.
+    grace window, is still reported after restart. A sitting that continued past its
+    first live saves that live too, so its "ended" after a restart still carries it.
 
     Events go through one queue: delivered in order, retried with backoff, and never
     block polling.
