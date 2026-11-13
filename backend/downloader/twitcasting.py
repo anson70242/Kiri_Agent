@@ -97,6 +97,14 @@ class TwitCastingDownloader(PlatformDownloader):
     # The HTTP transport of the replay page requests; tests put a fake site here.
     transport: ClassVar[httpx.BaseTransport | None] = None
 
+    def find_replay(
+        self, live_url: str, channel: str, live_id: str | None, started_at: datetime | None
+    ) -> str | None:
+        """The replay page of the ended live: the channel id and the live's (movie) id."""
+        if not live_id:
+            raise DownloadError("the TwitCasting live has no live id (movie id), so its replay cannot be found")
+        return replay_url(channel_id(channel), live_id)
+
     # ---- replay state ----
 
     def published_replay(self, url: str) -> Replay:
