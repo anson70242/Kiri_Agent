@@ -77,18 +77,27 @@ class LiveNotifier:
 
     Register `on_change` in `StreamMonitor.on_change`.
 
-    Rules, per streamer:
-    - Went live: a new broadcast is seen live. Never announced twice. On a fresh start
+    Rules, per streamer. A sitting is one or more lives in a row that the group sees as
+    one: it gets one "went live" and one "ended".
+    - Went live: a new sitting is seen live. Never announced twice. On a fresh start
       (no saved state at all) streamers already live are skipped unless
       `notify_on_startup`; a streamer newly added to an existing setup is announced.
-    - Ended: the live broadcast stays not-live for `offline_grace` seconds. If the same
-      broadcast comes back within that window nothing is sent. If a *different*
-      broadcast appears, the old one is reported ended first, then the new one live.
-    - Every LIVE is eventually followed by exactly one OFFLINE for that broadcast.
+    - Ended: the live stays not-live for `offline_grace` seconds. If the same live comes
+      back within that window nothing is sent. If a *different* live appears:
+      - at the same watch address, straight after the previous live or inside its
+        grace window, it continues the sitting: nothing is sent;
+      - otherwise (another address, a live saved before a restart) the sitting is
+        reported ended first, then the new one live.
+    - Every LIVE is eventually followed by exactly one OFFLINE, which carries the id and
+      start time of the live that was announced and the end time of the sitting's last
+      live.
+    - `on_ended` listeners get every live once, with that live's own details, also the
+      lives that a sitting continued past.
 
-    With `state_file`, the last live broadcast per streamer survives restarts, so a
-    stream that ended (or a new one that started) while the monitor was down, or
-    during a pending grace window, is still reported after restart.
+    With `state_file`, the last live per streamer survives restarts, so a live that
+    ended (or a new one that started) while the monitor was down, or during a pending
+    grace window, is still reported after restart. The sitting's first live is not
+    saved: after a restart the current live stands for its sitting.
 
     Events go through one queue: delivered in order, retried with backoff, and never
     block polling.
@@ -125,6 +134,13 @@ class LiveNotifier:
         # live before we existed, so don't flood the channel. With saved state, a
         # streamer missing from it was just added to the config and is announced.
         self._fresh_start = not self._live
+        # Streamers whose current live was seen live by this run: only those can continue
+        # into a new live (a saved live that differs after a restart is reported ended).
+        self._watched: set[str] = set()
+        # streamer id -> the first live of the current sitting, whose id and start time
+        # "went live" and "ended" carry. Not saved: after a restart the current live
+        # stands for its sitting.
+        self._sitting: dict[str, StreamStatus] = {}
         self._pending_end: dict[str, asyncio.Task[None]] = {}
         # Called with every "ended" event (even when on_offline is off), e.g. to
         # start the auto-download. Must return quickly.
@@ -144,21 +160,32 @@ class LiveNotifier:
 
         if new.is_live:
             same = prev is not None and prev.same_stream(new)
+            # A different live at the same watch address, while the previous one is
+            # still live or inside its grace period, both seen by this run.
+            continues = (prev is not None and not same and sid in self._watched
+                         and same_address(prev, new))
             pending = self._pending_end.pop(sid, None)
             if pending:
                 pending.cancel()
-            if prev is not None and not same:
-                # The previous broadcast ended (between polls, inside the grace
-                # window, or while we were down) and a new one started.
-                self._emit_offline(prev, new.checked_at)
+            if continues:
+                self._end_live(prev, new.checked_at)
+            elif prev is not None and not same:
+                # The previous live ended (between polls, inside the grace
+                # window, or while we were down) and a new sitting started.
+                self._end_sitting(sid, prev, new.checked_at)
             if same:
                 # Keep the id it was announced with, so LIVE and its OFFLINE always
                 # carry the same stream_id; refresh everything else (title, cover).
                 new = replace(new, stream_id=prev.stream_id)
+                if self._sitting.get(sid) is prev:
+                    self._sitting[sid] = new
+            elif not continues:
+                self._sitting[sid] = new
             self._live[sid] = new
+            self._watched.add(sid)
             self._save_state()
             skip = first_sighting and self._fresh_start and not self.notify_on_startup
-            if not same and not skip:
+            if not same and not continues and not skip:
                 self._enqueue(StreamEvent(EventKind.LIVE, new))
         elif prev is not None:
             if sid not in self._pending_end:
@@ -174,18 +201,28 @@ class LiveNotifier:
         self._pending_end.pop(sid, None)
         if self._live.get(sid) is prev:
             self._live[sid] = None
+            self._watched.discard(sid)
             self._save_state()
-            self._emit_offline(prev, ended_at)
+            self._end_sitting(sid, prev, ended_at)
 
-    def _emit_offline(self, prev: StreamStatus, ended_at: datetime) -> None:
-        event = StreamEvent(EventKind.OFFLINE, prev, ended_at)
+    def _end_sitting(self, sid: str, last: StreamStatus, ended_at: datetime) -> None:
+        """The sitting whose last live is `last` is over: the listeners get `last`, the
+        "ended" notification the announced live's id and start time with `last`'s details."""
+        self._end_live(last, ended_at)
+        first = self._sitting.pop(sid, None)
+        if first is not None and first is not last:
+            last = replace(last, stream_id=first.stream_id, started_at=first.started_at)
+        if self.notify_offline:
+            self._enqueue(StreamEvent(EventKind.OFFLINE, last, ended_at))
+
+    def _end_live(self, live: StreamStatus, ended_at: datetime) -> None:
+        """Tell the "a live ended" listeners about one live, with its own details."""
+        event = StreamEvent(EventKind.OFFLINE, live, ended_at)
         for callback in self.on_ended:
             try:
                 callback(event)
             except Exception:  # noqa: BLE001 - a listener bug must not break notifications
                 log.exception("on_ended listener failed")
-        if self.notify_offline:
-            self._enqueue(event)
 
     # ---- delivery ----
 
@@ -294,6 +331,11 @@ class LiveNotifier:
             self._state.save(self._live)
         except Exception:  # noqa: BLE001
             log.exception("could not save %s", self.state_file)
+
+
+def same_address(a: StreamStatus, b: StreamStatus) -> bool:
+    """Both lives are watched at the same known address (a channel page, not a video)."""
+    return a.url is not None and a.url == b.url
 
 
 def decode_live_state(raw: Any) -> dict[str, StreamStatus | None]:
