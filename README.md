@@ -9,7 +9,7 @@
 
 | 步骤 | 做什么 | 状态 |
 | --- | --- | --- |
-| [直播监控](#直播监控) | 轮询 YouTube / Twitch 频道；在网页上管理主播 | 完成 |
+| [直播监控](#直播监控) | 轮询 YouTube / Twitch / TwitCasting 频道；在网页上管理主播 | 完成 |
 | [开播通知](#开播通知) | 开播、下播和处理结果发到 Discord 和 QQ 群（官方机器人） | 完成 |
 | [下载器](#下载器) | 用 yt-dlp 和 Twitch GQL 下载录播和弹幕；会员 / 订阅限定靠 cookie | 完成 |
 | 弹幕清洗 | 原始弹幕 → `{"time","user","msg"}` 一行一条 | 完成 |
@@ -56,14 +56,15 @@ uv run -m backend.monitor.server       # 网页：http://127.0.0.1:8770
 
 主播在网页上管理（见[网页](#网页)）。名单存在 `data/streamers.json`（`monitor.streamers_file`），
 部署不会动它；`config.json` 的 `monitor.streamers` 只在第一次启动时用来生成名单。
-`platform` 是 `youtube` 或 `twitch`；`channel` 是 YouTube 的 handle（`@foo`）、频道 ID（`UC...`）或网址，
-或 Twitch 的登录名（`foo`）或网址。新增主播时会先检查频道是否存在；删除主播会保留已下载的录播。
+`platform` 是 `youtube`、`twitch` 或 `twitcasting`；`channel` 是 YouTube 的 handle（`@foo`）、频道 ID（`UC...`）或网址，
+Twitch 的登录名（`foo`）或网址，或 TwitCasting 的 ID（`foo`、`@foo`、`c:foo`）或网址。新增主播时会先检查频道是否存在；删除主播会保留已下载的录播。
 
 - [roster.py](backend/monitor/roster.py)：主播名单和各主播的设定。
 - [base.py](backend/monitor/base.py)：共用的 `Streamer`、`StreamStatus`、`LiveState`、
   `PlatformMonitor` 基类和 `StreamMonitor` 轮询。
 - [youtube.py](backend/monitor/youtube.py)：`YouTubeMonitor`，抓 `/<channel>/live` 页面；不需要 API key。
 - [twitch.py](backend/monitor/twitch.py)：`TwitchMonitor`，读频道页的 JSON-LD；不需要 API key。
+- [twitcasting.py](backend/monitor/twitcasting.py)：`TwitCastingMonitor`，读频道页的 `data-is-onlive` 等标记；不需要 API key。
 
 新增平台：写一个 `backend/monitor/<platform>.py`，里面放一个 `PlatformMonitor` 子类，
 设 `platform = "<name>"` 并实现 `_check()`，再在 [`__init__.py`](backend/monitor/__init__.py) 里 import。
@@ -293,7 +294,7 @@ uv run -m backend.monitor.server --dev --reload    # http://127.0.0.1:8770
 uv run pytest                          # 离线测试，跳过慢的压力测试（约 50 秒）
 uv run pytest -m "not network"         # 全部离线测试，CI 跑的就是这个
 uv run ruff check                      # 检查没用到的 import 和变量
-uv run pytest -m network -s            # 连真实的 YouTube / Twitch 检查
+uv run pytest -m network -s            # 连真实的 YouTube / Twitch / TwitCasting 检查
 STRESS_SEEDS=1000 uv run pytest tests/test_random_sequences.py   # 更长的压力测试
 ```
 
