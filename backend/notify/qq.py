@@ -23,7 +23,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-import re
 import struct
 import time
 from dataclasses import dataclass, field
@@ -158,8 +157,15 @@ class QQGroups:
 # ---- messages ----
 
 def escape(text: str) -> str:
-    """Plain text inside QQ markdown."""
-    return re.sub(r"([\\*_\[\]`~#>|])", r"\\\1", text or "")
+    """Plain text inside QQ markdown, shown as that text. QQ's markdown cannot be trusted
+    with backslash escapes (`\\[ ... \\]` renders as a display-math block, `\\`` as a lone
+    backtick), so the characters that start markdown or math become their full-width
+    forms instead, and backticks (code formatting meant for Discord) are dropped."""
+    return (text or "").translate(PLAIN_TEXT)
+
+
+PLAIN_TEXT = str.maketrans({"\\": "＼", "[": "［", "]": "］", "*": "＊", "_": "＿", "~": "～", "#": "＃",
+                            ">": "＞", "|": "｜", "$": "＄", "`": None})
 
 
 def link(url: str) -> str:

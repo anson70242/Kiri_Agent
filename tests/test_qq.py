@@ -8,6 +8,7 @@ import re
 from datetime import timedelta
 
 import httpx
+import pytest
 
 from backend.notify import EventKind, Link, StreamEvent
 from backend.notify.qq import QQGroups, QQNotifier, QQSettings
@@ -159,12 +160,37 @@ def test_links_show_their_label_after_the_detail(tmp_path):
                     f"[全部下载（影片、弹幕、中日字幕 SRT）]({zip_url})\n[录播页面]({page_url})\n切片小助手 自动下载")
 
 
-def test_markdown_in_titles_is_escaped(tmp_path):
-    fake = FakeQQ()
+# QQ reads `\[ ... \]` as a display-math block and shows a backslash-escaped backtick as a
+# lone backtick, so plain text is never backslash-escaped: markdown characters become their
+# full-width forms, and backticks (code formatting meant for Discord) are dropped.
+TITLE = r"【歌枠】*sing* [all] _night_ ~~♪~~ #1 $5 a\b `c` |d| >e"
+SHOWN = "【歌枠】＊sing＊ ［all］ ＿night＿ ～～♪～～ ＃1 ＄5 a＼b c ｜d｜ ＞e"
+
+
+@pytest.mark.parametrize("kind", [EventKind.LIVE, EventKind.OFFLINE, EventKind.DOWNLOADED])
+def test_a_title_shows_as_text_in_every_message(tmp_path, kind):
+    fake = FakeQQ(cover_ok=False)
     status = live(A)
-    status.title = "【歌枠】*sing* [all] _night_"
-    send(notifier(tmp_path, fake, SUBSCRIBED), StreamEvent(EventKind.OFFLINE, status))
-    assert r"【歌枠】\*sing\* \[all\] \_night\_" in fake.texts("G1")[0]
+    status.title = TITLE
+    send(notifier(tmp_path, fake, SUBSCRIBED), StreamEvent(kind, status, detail="6.2 GB"))
+    (text,) = fake.texts("G1")
+    assert SHOWN in text.split("\n")
+    assert "\\" not in text
+
+
+def test_a_file_name_in_a_detail_shows_as_text(tmp_path):
+    fake = FakeQQ()
+    detail = "影片：`[20261113][A] 歌枠_1.mp4`（6.2 GB）\n```HTTP Error 403: [Forbidden]```"
+    send(notifier(tmp_path, fake, SUBSCRIBED), StreamEvent(EventKind.DOWNLOADED, live(A), detail=detail))
+    lines = fake.texts("G1")[0].split("\n")
+    assert lines[2:4] == ["影片：［20261113］［A］ 歌枠＿1.mp4（6.2 GB）", "HTTP Error 403: ［Forbidden］"]
+
+
+def test_a_link_label_shows_as_text(tmp_path):
+    fake = FakeQQ()
+    send(notifier(tmp_path, fake, {**SUBSCRIBED, "kinds": ["uploaded"]}),
+         StreamEvent(EventKind.UPLOADED, live(A), detail="", links=(Link("[表] *1*", "https://docs.qq.com/sheet/S1"),)))
+    assert "[［表］ ＊1＊](https://docs.qq.com/sheet/S1)" in fake.texts("G1")[0].split("\n")
 
 
 def test_a_failing_group_does_not_stop_the_others(tmp_path):
