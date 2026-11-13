@@ -18,7 +18,7 @@ from pathlib import Path
 from yt_dlp.utils import PostProcessingError
 
 from backend.archive import Archive
-from backend.downloader import download
+from backend.downloader import download, downloader_for
 
 from .twitcasting_fakes import MIKA, MOVIE, REPLAY, FakeYtdlp, replay_page, tc, ytdlp_raw  # noqa: F401 (tc: fixture)
 
@@ -86,3 +86,49 @@ def test_a_replay_in_several_parts_is_joined_in_order_into_one_video_named_after
     assert [p.name for p in r.output_dir.iterdir()] == [r.video.name]  # the parts are gone
     archive = Archive.from_folder(r.output_dir)
     assert archive.video == r.video and not archive.downloading
+
+
+def test_a_failed_join_leaves_no_file_that_looks_like_a_finished_video(tc, monkeypatch):
+    monkeypatch.setattr("yt_dlp.YoutubeDL", FakeYtdlpInParts)
+    monkeypatch.setattr(FakeYtdlp, "raw", in_parts(ytdlp_raw()))
+    monkeypatch.setattr(FakeYtdlpInParts, "join_fails", True)
+
+    r = download(REPLAY, tc.settings, [MIKA], chat=False)
+
+    assert r.video is None
+    assert "joining the parts" in r.errors["video"] and "cannot be concatenated" in r.errors["video"]
+    archive = Archive.from_folder(r.output_dir)
+    assert archive.video is None and archive.downloading
+
+
+def test_the_next_try_after_a_failed_join_joins_the_parts_already_downloaded(tc, monkeypatch):
+    monkeypatch.setattr("yt_dlp.YoutubeDL", FakeYtdlpInParts)
+    monkeypatch.setattr(FakeYtdlp, "raw", in_parts(ytdlp_raw()))
+    monkeypatch.setattr(FakeYtdlpInParts, "join_fails", True)
+    download(REPLAY, tc.settings, [MIKA], chat=False)
+    monkeypatch.setattr(FakeYtdlpInParts, "join_fails", False)
+
+    r = download(REPLAY, tc.settings, [MIKA], chat=False)
+
+    assert r.ok and r.video.read_bytes() == b"<part 1><part 2><part 3>"
+    assert [p.name for p in r.output_dir.iterdir()] == [r.video.name]
+
+
+def test_the_duration_of_a_replay_in_several_parts_is_the_sum_of_the_parts(tc, monkeypatch):
+    monkeypatch.setattr(FakeYtdlp, "raw", in_parts(ytdlp_raw(), (1800.0, 1200.0, 600.0)))
+
+    info = downloader_for(REPLAY, tc.settings, [MIKA]).info(REPLAY)
+
+    assert info.duration == 3600.0  # what the chat is cut off at
+    assert info.id == MOVIE and info.title == "Night chat 013044"
+
+
+def test_a_percent_sign_in_the_title_is_kept_in_the_joined_video(tc, monkeypatch):
+    tc.site.pages[REPLAY] = replay_page(og_title="100% singing / Mika's room")
+    monkeypatch.setattr("yt_dlp.YoutubeDL", FakeYtdlpInParts)
+    monkeypatch.setattr(FakeYtdlp, "raw", in_parts(ytdlp_raw()))
+
+    r = download(REPLAY, tc.settings, [MIKA], chat=False)
+
+    assert r.ok and r.video.name == "[20261006][Mika] 100% singing 013044.mp4"
+    assert [p.name for p in r.output_dir.iterdir()] == [r.video.name]
