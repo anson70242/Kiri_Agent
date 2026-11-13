@@ -11,7 +11,7 @@ import asyncio
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
@@ -29,7 +29,11 @@ class EventKind(StrEnum):
     LIVE = "live"  # went live
     OFFLINE = "offline"  # stream ended
     DOWNLOADED = "downloaded"  # archive auto-downloaded (backend.downloader.auto)
+    # the replay of a live is not published; it is downloaded if it appears in time
+    REPLAY_UNPUBLISHED = "replay_unpublished"
     DOWNLOAD_FAILED = "download_failed"  # auto-download gave up
+    # deleting a creator's old archives after a download failed; the new archive is fine
+    PRUNE_FAILED = "prune_failed"
     TRANSCRIBE_FAILED = "transcribe_failed"  # speech-to-text of a downloaded archive gave up
     ANALYZED = "analyzed"  # 路灯表 ready (detail: the top segments)
     ANALYZE_FAILED = "analyze_failed"  # 路灯表 analysis gave up
@@ -77,18 +81,27 @@ class LiveNotifier:
 
     Register `on_change` in `StreamMonitor.on_change`.
 
-    Rules, per streamer:
-    - Went live: a new broadcast is seen live. Never announced twice. On a fresh start
+    Rules, per streamer. A sitting is one or more lives in a row that the group sees as
+    one: it gets one "went live" and one "ended".
+    - Went live: a new sitting is seen live. Never announced twice. On a fresh start
       (no saved state at all) streamers already live are skipped unless
       `notify_on_startup`; a streamer newly added to an existing setup is announced.
-    - Ended: the live broadcast stays not-live for `offline_grace` seconds. If the same
-      broadcast comes back within that window nothing is sent. If a *different*
-      broadcast appears, the old one is reported ended first, then the new one live.
-    - Every LIVE is eventually followed by exactly one OFFLINE for that broadcast.
+    - Ended: the live stays not-live for `offline_grace` seconds. If the same live comes
+      back within that window nothing is sent. If a *different* live appears:
+      - at the same watch address, straight after the previous live or inside its
+        grace window, it continues the sitting: nothing is sent;
+      - otherwise (another address, a live saved before a restart) the sitting is
+        reported ended first, then the new one live.
+    - Every LIVE is eventually followed by exactly one OFFLINE, which carries the id and
+      start time of the live that was announced and the end time of the sitting's last
+      live.
+    - `on_ended` listeners get every live once, with that live's own details, also the
+      lives that a sitting continued past.
 
-    With `state_file`, the last live broadcast per streamer survives restarts, so a
-    stream that ended (or a new one that started) while the monitor was down, or
-    during a pending grace window, is still reported after restart.
+    With `state_file`, the last live per streamer survives restarts, so a live that
+    ended (or a new one that started) while the monitor was down, or during a pending
+    grace window, is still reported after restart. A sitting that continued past its
+    first live saves that live too, so its "ended" after a restart still carries it.
 
     Events go through one queue: delivered in order, retried with backoff, and never
     block polling.
@@ -114,17 +127,25 @@ class LiveNotifier:
         self.state_file = state_file
         # Runtime state: a damaged file is set aside as a backup (the owner is alerted)
         # and counts as no saved state at all.
-        self._state = StateFile(state_file, default=dict, policy="recover", decode=decode_live_state,
+        self._state = StateFile(state_file, default=SavedLives, policy="recover", decode=decode_live_state,
                                 encode=encode_live_state) if state_file else None
         self.max_attempts = max_attempts
         self.retry_base_delay = retry_base_delay
         # streamer id -> current live broadcast, or None if known not live.
         # A missing key means "never seen" (first sighting).
-        self._live: dict[str, StreamStatus | None] = self._state.load() if self._state else {}
+        saved = self._state.load() if self._state else SavedLives()
+        self._live: dict[str, StreamStatus | None] = saved.live
         # No saved state at all (first deploy, wiped volume): whoever is live now was
         # live before we existed, so don't flood the channel. With saved state, a
         # streamer missing from it was just added to the config and is announced.
         self._fresh_start = not self._live
+        # Streamers whose current live was seen live by this run: only those can continue
+        # into a new live (a saved live that differs after a restart is reported ended).
+        self._watched: set[str] = set()
+        # streamer id -> the first live of the current sitting, whose id and start time
+        # "went live" and "ended" carry. Saved with the live state, so a sitting that
+        # continued past its first live keeps its start time across a restart.
+        self._sitting: dict[str, StreamStatus] = saved.sittings
         self._pending_end: dict[str, asyncio.Task[None]] = {}
         # Called with every "ended" event (even when on_offline is off), e.g. to
         # start the auto-download. Must return quickly.
@@ -144,21 +165,32 @@ class LiveNotifier:
 
         if new.is_live:
             same = prev is not None and prev.same_stream(new)
+            # A different live at the same watch address, while the previous one is
+            # still live or inside its grace period, both seen by this run.
+            continues = (prev is not None and not same and sid in self._watched
+                         and same_address(prev, new))
             pending = self._pending_end.pop(sid, None)
             if pending:
                 pending.cancel()
-            if prev is not None and not same:
-                # The previous broadcast ended (between polls, inside the grace
-                # window, or while we were down) and a new one started.
-                self._emit_offline(prev, new.checked_at)
+            if continues:
+                self._end_live(prev, new.checked_at)
+            elif prev is not None and not same:
+                # The previous live ended (between polls, inside the grace
+                # window, or while we were down) and a new sitting started.
+                self._end_sitting(sid, prev, new.checked_at)
             if same:
                 # Keep the id it was announced with, so LIVE and its OFFLINE always
                 # carry the same stream_id; refresh everything else (title, cover).
                 new = replace(new, stream_id=prev.stream_id)
+                if self._sitting.get(sid) is prev:
+                    self._sitting[sid] = new
+            elif not continues:
+                self._sitting[sid] = new
             self._live[sid] = new
+            self._watched.add(sid)
             self._save_state()
             skip = first_sighting and self._fresh_start and not self.notify_on_startup
-            if not same and not skip:
+            if not same and not continues and not skip:
                 self._enqueue(StreamEvent(EventKind.LIVE, new))
         elif prev is not None:
             if sid not in self._pending_end:
@@ -174,18 +206,28 @@ class LiveNotifier:
         self._pending_end.pop(sid, None)
         if self._live.get(sid) is prev:
             self._live[sid] = None
+            self._watched.discard(sid)
+            self._end_sitting(sid, prev, ended_at)
             self._save_state()
-            self._emit_offline(prev, ended_at)
 
-    def _emit_offline(self, prev: StreamStatus, ended_at: datetime) -> None:
-        event = StreamEvent(EventKind.OFFLINE, prev, ended_at)
+    def _end_sitting(self, sid: str, last: StreamStatus, ended_at: datetime) -> None:
+        """The sitting whose last live is `last` is over: the listeners get `last`, the
+        "ended" notification the announced live's id and start time with `last`'s details."""
+        self._end_live(last, ended_at)
+        first = self._sitting.pop(sid, None)
+        if first is not None and first is not last:
+            last = replace(last, stream_id=first.stream_id, started_at=first.started_at)
+        if self.notify_offline:
+            self._enqueue(StreamEvent(EventKind.OFFLINE, last, ended_at))
+
+    def _end_live(self, live: StreamStatus, ended_at: datetime) -> None:
+        """Tell the "a live ended" listeners about one live, with its own details."""
+        event = StreamEvent(EventKind.OFFLINE, live, ended_at)
         for callback in self.on_ended:
             try:
                 callback(event)
             except Exception:  # noqa: BLE001 - a listener bug must not break notifications
                 log.exception("on_ended listener failed")
-        if self.notify_offline:
-            self._enqueue(event)
 
     # ---- delivery ----
 
@@ -291,18 +333,47 @@ class LiveNotifier:
         if not self._state:
             return
         try:
-            self._state.save(self._live)
+            self._state.save(SavedLives(self._live, self._sitting))
         except Exception:  # noqa: BLE001
             log.exception("could not save %s", self.state_file)
 
 
-def decode_live_state(raw: Any) -> dict[str, StreamStatus | None]:
-    """The live-stream state file's JSON -> streamer id -> live broadcast (None: not live);
-    raises if it isn't that shape."""
+def same_address(a: StreamStatus, b: StreamStatus) -> bool:
+    """Both lives are watched at the same known address (a channel page, not a video)."""
+    return a.url is not None and a.url == b.url
+
+
+@dataclass
+class SavedLives:
+    """What the live-stream state file holds."""
+
+    # streamer id -> current live (None: known not live); a missing key: never seen.
+    live: dict[str, StreamStatus | None] = field(default_factory=dict)
+    # streamer id -> the first live of its current sitting (the live itself until the
+    # sitting continues past it; only then is it written to the file). Only for
+    # streamers that are live.
+    sittings: dict[str, StreamStatus] = field(default_factory=dict)
+
+
+def decode_live_state(raw: Any) -> SavedLives:
+    """The live-stream state file's JSON -> the saved lives; raises if it isn't that shape.
+    The optional "sittings" entry is ignored by versions that don't know it."""
     if not isinstance(raw, dict) or not isinstance(streamers := raw.get("streamers", {}), dict):
         raise ValueError("expected {\"streamers\": {streamer id: status or null}}")
-    return {sid: StreamStatus.from_dict(v) if v else None for sid, v in streamers.items()}
+    if not isinstance(sittings := raw.get("sittings", {}), dict) or not all(
+            isinstance(v, dict) for v in sittings.values()):
+        raise ValueError("expected {\"sittings\": {streamer id: status}}")
+    live = {sid: StreamStatus.from_dict(v) if v else None for sid, v in streamers.items()}
+    # A live streamer without an entry is in a sitting that is still its first live.
+    return SavedLives(live, {sid: StreamStatus.from_dict(sittings[sid]) if sid in sittings else current
+                             for sid, current in live.items() if current is not None})
 
 
-def encode_live_state(live: dict[str, StreamStatus | None]) -> dict[str, Any]:
-    return {"version": 1, "streamers": {k: v.to_dict() if v else None for k, v in live.items()}}
+def encode_live_state(saved: SavedLives) -> dict[str, Any]:
+    raw: dict[str, Any] = {"version": 1,
+                           "streamers": {k: v.to_dict() if v else None for k, v in saved.live.items()}}
+    sittings = {sid: first.to_dict() for sid, first in saved.sittings.items()
+                if (current := saved.live.get(sid)) is not None and first is not current}
+    if sittings:
+        raw["sittings"] = sittings
+    return raw

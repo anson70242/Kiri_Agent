@@ -14,11 +14,13 @@ import httpx
 
 from .base import EventKind, Notifier, PermanentNotifyError, StreamEvent
 
-PLATFORM_COLORS = {"youtube": 0xFF0000, "twitch": 0x9146FF}
+PLATFORM_COLORS = {"youtube": 0xFF0000, "twitch": 0x9146FF, "twitcasting": 0x3381FF}
 DEFAULT_COLOR = 0xE11D48
 OFFLINE_COLOR = 0x6B7280
 DOWNLOADED_COLOR = 0x16A34A
 FAILED_COLOR = 0xDC2626
+WAITING_COLOR = OFFLINE_COLOR
+WARNING_COLOR = 0xD97706
 FOOTER_LIVE = "切片小助手 直播通知"
 FOOTER_DOWNLOAD = "切片小助手 自动下载"
 FOOTER_HIGHLIGHTS = "切片小助手 自动路灯"  # the 路灯表: analysis and upload
@@ -26,7 +28,9 @@ HIGHLIGHT_KINDS = {EventKind.ANALYZED, EventKind.ANALYZE_FAILED, EventKind.UPLOA
 # Pipeline events (backend.downloader.auto): icon and message text.
 PIPELINE_TEXT = {
     EventKind.DOWNLOADED: ("📥", "回放已下载"),
+    EventKind.REPLAY_UNPUBLISHED: ("⏳", "回放未公开"),
     EventKind.DOWNLOAD_FAILED: ("❗", "回放下载失败"),
+    EventKind.PRUNE_FAILED: ("⚠️", "旧录播没能删除"),
     EventKind.TRANSCRIBE_FAILED: ("❗", "字幕转写失败"),
     EventKind.ANALYZED: ("🚦", "路灯表已生成，精华段落："),
     EventKind.ANALYZE_FAILED: ("❗", "路灯表分析失败"),
@@ -102,9 +106,12 @@ class DiscordNotifier(Notifier):
         status = event.status
         s = status.streamer
         ok = event.kind in (EventKind.DOWNLOADED, EventKind.ANALYZED, EventKind.UPLOADED, EventKind.READY)
+        color = {EventKind.REPLAY_UNPUBLISHED: WAITING_COLOR,  # neither done nor failed
+                 EventKind.PRUNE_FAILED: WARNING_COLOR,  # the new archive is fine
+                 }.get(event.kind, DOWNLOADED_COLOR if ok else FAILED_COLOR)
         embed: dict[str, Any] = {
             "title": (status.title or "直播回放")[:256],
-            "color": DOWNLOADED_COLOR if ok else FAILED_COLOR,
+            "color": color,
             "author": {"name": f"{s.name} · {s.platform}"},
             "footer": {"text": FOOTER_HIGHLIGHTS if event.kind in HIGHLIGHT_KINDS else FOOTER_DOWNLOAD},
         }

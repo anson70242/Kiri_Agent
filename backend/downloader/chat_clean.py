@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -127,9 +128,31 @@ def parse_twitch(path: Path) -> list[ChatLine]:
     return lines
 
 
+# ---- TwitCasting (comment history, written by twitcasting.py) ----
+
+def parse_twitcasting(path: Path) -> list[ChatLine]:
+    """`time` is the posted time less the live's start time. Comments posted before the
+    start or after the end of the video (some arrive after the live ended) are dropped."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    movie = data.get("movie") or {}
+    start = datetime.fromisoformat(movie["started_at"])
+    duration = movie.get("duration")
+    lines: list[ChatLine] = []
+    for c in data.get("comments") or []:
+        msg = c.get("text") or ""
+        if not msg.strip():
+            continue
+        offset = (datetime.fromisoformat(c["posted_at"]) - start).total_seconds()
+        if offset < 0 or (duration is not None and offset > duration):
+            continue
+        lines.append({"time": fmt_time(offset), "user": c.get("name") or c.get("user_id") or "Unknown", "msg": msg})
+    return lines
+
+
 # ---- files ----
 
-PARSERS = {"youtube": parse_youtube, "twitch": parse_twitch}  # platform -> its raw chat's parser
+# platform -> its raw chat's parser
+PARSERS = {"youtube": parse_youtube, "twitch": parse_twitch, "twitcasting": parse_twitcasting}
 
 
 def clean_chat(raw: Path) -> Path:

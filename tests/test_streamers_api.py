@@ -75,6 +75,20 @@ def test_add_rejects_bad_input(tmp_path):
     assert names(client) == ["A", "B"]
 
 
+def test_add_twitcasting_streamer_and_unknown_platform_lists_it(tmp_path):
+    cfg = write_config(tmp_path)
+    client = app_for(cfg)
+
+    r = client.post("/api/streamers", json={"name": "C", "platform": "twitcasting", "channel": "c:mika"})
+    assert r.status_code == 201
+    assert r.json() == {"id": "twitcasting:c:mika"}
+    assert names(app_for(cfg)) == ["A", "B", "C"]
+
+    r = client.post("/api/streamers", json={"name": "X", "platform": "twitcast", "channel": "x"})
+    assert r.status_code == 400
+    assert "twitcasting" in r.json()["detail"]
+
+
 def queued(client):
     return [row["name"] for row in client.get("/api/downloads").json()["queue"]]
 

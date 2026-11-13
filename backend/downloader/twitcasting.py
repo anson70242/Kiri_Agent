@@ -1,0 +1,376 @@
+"""TwitCasting: the replay of a finished live (a TwitCasting movie), with the owner's login.
+
+Every replay on the site needs a logged-in account, so every request for a replay carries
+the cookies of `DownloadSettings.twitcasting_cookies_file`; the YouTube cookies and the
+browser fallback are never used here. The steps, each its own piece:
+
+- replay state (`read_replay` classifies the replay page, loaded with the cookies, by markers
+  verified on the real site on 2026-11-13; `published_replay` turns every state but published
+  into its outcome: ReplayUnpublished, or a DownloadError for a missing login or a live of a
+  kind not supported);
+- video (`download_video`): through yt-dlp with the cookies, as on the other platforms; a
+  replay in several parts is joined into one video (`download_parts`), never run against a
+  real one (none was found);
+- chat (`download_raw_chat`): every page of the movie's public comment history, read
+  without cookies (verified readable without login, also for unpublished replays):
+  20 comments a page, newest first; page 0 is the newest, the pager links the last.
+
+An archive's title is the live's own title (the monitor's title rule) followed by its start
+time as `HHmmss`, in the clock of the date folder, so two lives with the same title on one day
+are two archives, and the same replay downloaded twice is the same archive.
+"""
+
+from __future__ import annotations
+
+import html
+import json
+import logging
+import re
+import time
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import datetime
+from email.utils import parsedate_to_datetime
+from enum import Enum
+from pathlib import Path
+from typing import Any, ClassVar
+
+import httpx
+from yt_dlp.cookies import YoutubeDLCookieJar
+from yt_dlp.utils import PostProcessingError
+
+from backend.archive import DOWNLOADING_SUFFIX, Artifact, artifact_name
+from backend.monitor.base import USER_AGENT, meta_content
+from backend.monitor.twitcasting import SITE, channel_id, data_attr, live_title
+
+from .base import DownloadError, PlatformDownloader, ReplayUnpublished, VideoInfo, clean_error, outtmpl
+
+log = logging.getLogger(__name__)
+
+REPLAY_RE = re.compile(r"twitcasting\.tv/([^/?#]+)/movie/(\d+)", re.I)
+
+
+def replay_url(channel: str, live_id: str) -> str:
+    """The replay page of a live (a TwitCasting movie) of a channel."""
+    return f"{SITE}/{channel}/movie/{live_id}"
+
+
+def skip_replay_parts(info: dict[str, Any], *, incomplete: bool = False) -> str | None:
+    """yt-dlp match filter: the reason to skip an entry that is a part of a replay in several
+    parts, None to download it (the entries of a `multi_video` result carry a
+    `playlist_index`; a replay in one part has none)."""
+    return "a part of a replay in several parts" if info.get("playlist_index") is not None else None
+
+
+class ReplayState(Enum):
+    """What the replay page, loaded with the login cookies, shows. Read from markers, not
+    from text: the page's language follows the account."""
+
+    PUBLISHED = "published"  # the player has `data-movie-playlist` (seen only when logged in)
+    LOGIN_MISSING = "login missing"  # `data-account-type="not_logged_in"`: no or expired login
+    UNPUBLISHED = "unpublished"  # logged in, no playlist, the player's empty message instead
+    PASSWORD = "password"  # a password (合言葉) form instead of the player
+    UNKNOWN = "unknown"  # none of the above (membership-only pages were never seen)
+
+
+@dataclass(frozen=True)
+class Replay:
+    """What a replay page says."""
+
+    url: str
+    state: ReplayState
+    title: str | None  # the live's own title (the title rule), None without og:title
+    started_at: datetime | None  # the live's start time
+    message: str = ""  # the player's own message when there is no player ("This video is not published")
+
+
+def page_time(text: str | None) -> datetime | None:
+    """A time as a page's `<time datetime>` spells it (an RFC 2822 date); None when there is
+    none or it cannot be read."""
+    if not text:
+        return None
+    try:
+        return parsedate_to_datetime(text)
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_replay(url: str, page: str) -> Replay:
+    og_title = meta_content(page, "og:title")
+    m = re.search(r'<time\b[^>]*\bdata-toggle="true"[^>]*\bdatetime="([^"]+)"', page)
+    started = page_time(m.group(1) if m else None)
+    m = re.search(r'class="tw-player-empty-message"[^>]*>(.*?)</div>', page, re.S)
+    message = " ".join(html.unescape(re.sub(r"<[^>]+>", " ", m.group(1))).split()) if m else ""
+    account = data_attr(page, "account-type")
+    if re.search(r"\bdata-movie-playlist=", page):
+        state = ReplayState.PUBLISHED
+    elif re.search(r'<input\b[^>]*\bname="password"', page):
+        state = ReplayState.PASSWORD
+    elif account == "not_logged_in":
+        state = ReplayState.LOGIN_MISSING
+    elif account is not None and m:
+        state = ReplayState.UNPUBLISHED
+    else:
+        state = ReplayState.UNKNOWN
+    return Replay(url, state, live_title(og_title) if og_title else None, started, message)
+
+
+class TwitCastingDownloader(PlatformDownloader):
+    platform = "twitcasting"
+    url_re = re.compile(r"(?:^|[/.])twitcasting\.tv/", re.I)
+    # The HTTP transport of the replay page requests; tests put a fake site here.
+    transport: ClassVar[httpx.BaseTransport | None] = None
+
+    def find_replay(
+        self, live_url: str, channel: str, live_id: str | None, started_at: datetime | None
+    ) -> str | None:
+        """The replay page of the ended live: the channel id and the live's (movie) id."""
+        if not live_id:
+            raise DownloadError("the TwitCasting live has no live id (movie id), so its replay cannot be found")
+        return replay_url(channel_id(channel), live_id)
+
+    # ---- replay state ----
+
+    def published_replay(self, url: str) -> Replay:
+        """The replay page, when the replay can be downloaded. Raises ReplayUnpublished when
+        it is not published, DownloadError when the login is missing or expired (the text
+        names the login and the cookies), and DownloadError saying the kind of live is not
+        supported for a password-protected or unrecognised page."""
+        replay = self.read_replay(url)
+        if replay.state is ReplayState.PUBLISHED:
+            return replay
+        if replay.state is ReplayState.UNPUBLISHED:
+            raise ReplayUnpublished(f"TwitCasting replay is not published: {url}")
+        if replay.state is ReplayState.LOGIN_MISSING:
+            raise DownloadError(f"TwitCasting login missing or expired: the replay page {url} "
+                                f"says not logged in; replace the cookies file {self.cookies_file().name}")
+        if replay.state is ReplayState.PASSWORD:
+            raise DownloadError(f"TwitCasting replay {url} is password-protected (合言葉); "
+                                "this kind of live is not supported")
+        raise DownloadError(f"unrecognised TwitCasting replay page {url} "
+                            f"({replay.message or 'no message on the page'}); password-protected "
+                            "and members-only lives are not supported")
+
+    def read_replay(self, url: str) -> Replay:
+        """Load the replay page with the login cookies and classify it."""
+        with self.site_client(self.login_cookies()) as client:
+            try:
+                resp = client.get(url)
+                resp.raise_for_status()
+            except httpx.HTTPError as e:
+                raise DownloadError(f"TwitCasting replay page {url}: {e}") from e
+            return parse_replay(url, resp.text)
+
+    def site_client(self, cookies: YoutubeDLCookieJar | None = None) -> httpx.Client:
+        """A client for TwitCasting's pages, carrying `cookies` when given."""
+        return httpx.Client(
+            transport=self.transport, cookies=cookies, timeout=30, follow_redirects=True,
+            headers={"User-Agent": USER_AGENT, "Accept-Language": "en-US,en;q=0.9"},
+        )
+
+    def login_cookies(self) -> YoutubeDLCookieJar:
+        """The TwitCasting login cookies, read from the cookies file."""
+        f = self.cookies_file()
+        jar = YoutubeDLCookieJar(str(f))
+        try:
+            jar.load(ignore_discard=True, ignore_expires=True)
+        except (OSError, ValueError) as e:  # http.cookiejar.LoadError is an OSError
+            raise DownloadError(f"TwitCasting login missing: cannot read the cookies file {f}: {e}") from e
+        return jar
+
+    def cookies_file(self) -> Path:
+        """The login cookies; raises the "login missing" failure when there are none."""
+        f = self.settings.twitcasting_cookies_file
+        if not (f and f.is_file()):
+            raise DownloadError(f"TwitCasting login missing: no cookies file at {f or 'none configured'}")
+        return f
+
+    # ---- metadata ----
+
+    def info(self, url: str) -> VideoInfo:
+        """The replay's metadata. The title is the archive's: the live's own title and its
+        start time as `HHmmss`, in the clock of the date folder."""
+        m = REPLAY_RE.search(url)
+        if not m:
+            raise DownloadError(f"{url} is not a TwitCasting replay; give a replay address "
+                                "(twitcasting.tv/<channel id>/movie/<movie id>)")
+        replay = self.published_replay(url)
+        raw = self._ytdlp(url, {"skip_download": True}, download=False)
+        ts = replay.started_at.timestamp() if replay.started_at else raw.get("timestamp")
+        title = replay.title or live_title(str(raw.get("title") or "No Title"))
+        if ts:
+            title = f"{title} {datetime.fromtimestamp(ts).strftime('%H%M%S')}"
+        return self.parse_info(raw | {"title": title, "timestamp": ts, "release_timestamp": None,
+                                      "uploader_id": m.group(1)}, url)
+
+    def match_creator(self, raw: dict[str, Any]) -> str | None:
+        """The roster entry whose channel is the replay's channel, however it is spelled."""
+        channel = channel_id(str(raw.get("uploader_id") or "")).lower()
+        return next((s.name for s in self.streamers if channel_id(s.channel).lower() == channel), None)
+
+    # ---- video ----
+
+    def download_video(
+        self, info: VideoInfo, out_dir: Path, progress: Callable[[dict[str, Any]], None] | None = None
+    ) -> Path:
+        """The replay's video, `<stem>.mp4`. A replay in one part is downloaded by one yt-dlp
+        call, as on every platform. A replay in several parts (to yt-dlp a `multi_video` result,
+        one entry per part) is left alone by that call, then downloaded part by part and joined
+        (see `download_parts`)."""
+        path = out_dir / artifact_name(info.stem, Artifact.VIDEO)
+        if path.exists():
+            log.info("video already exists, skipping: %s", path.name)
+            return path
+        log.info("downloading video: %s", info.url)
+        hooks = {"progress_hooks": [progress]} if progress else {}
+        opts = self.video_options(outtmpl(out_dir, info.stem)) | hooks | {"match_filter": skip_replay_parts}
+        if self._ytdlp(info.url, opts).get("_type") == "multi_video":
+            self.download_parts(info, out_dir, hooks)
+        if not path.exists():
+            raise DownloadError(f"yt-dlp finished but {path.name} is missing")
+        return path
+
+    def download_parts(self, info: VideoInfo, out_dir: Path, hooks: dict[str, Any]) -> None:
+        """Download the parts of a replay in several parts and join them, in order and without
+        re-encoding, into the video `<stem>.mp4`. yt-dlp does both: its FFmpegConcat
+        post-processor stream-copies the parts into one file and deletes them. The parts and
+        the joined file carry the download-in-progress marker until the joined file is renamed
+        to the video, so a failed join leaves nothing that looks like a finished video; the
+        parts stay for the next try, which does not download them again."""
+        video = artifact_name(info.stem, Artifact.VIDEO)
+        joined = out_dir / (video + DOWNLOADING_SUFFIX)
+        # yt-dlp output templates (a literal % in the stem must be %%): each part by its
+        # number, and the joined file (`pl_video`, the template of a playlist's own file).
+        parts_tmpl = str(out_dir / (info.stem.replace("%", "%%") + ".%(playlist_index)s.%(ext)s" + DOWNLOADING_SUFFIX))
+        joined_tmpl = str(out_dir / (video.replace("%", "%%") + DOWNLOADING_SUFFIX))
+        opts = self.video_options(Path(parts_tmpl)) | hooks | {
+            "outtmpl": {"default": parts_tmpl, "pl_video": joined_tmpl},
+            "postprocessors": [{"key": "FFmpegConcat", "only_multi_video": True, "when": "playlist"}],
+            # ffmpeg cannot tell the format from a name ending with the marker; "concat" is
+            # yt-dlp's key for FFmpegConcat's arguments.
+            "postprocessor_args": {"concat+ffmpeg_o": ["-f", "mp4"]},
+        }
+        log.info("downloading a replay in several parts: %s", info.url)
+        try:
+            self._ytdlp(info.url, opts)
+        except PostProcessingError as e:  # the join (yt-dlp raises it as it is)
+            raise DownloadError(f"joining the parts of {info.url} failed: {clean_error(e)}") from e
+        if not joined.exists():
+            raise DownloadError(f"yt-dlp finished but the joined parts {joined.name} are missing")
+        joined.replace(out_dir / video)
+
+    def base_options(self) -> dict[str, Any]:
+        # yt-dlp writes refreshed cookies back to this file, keeping the login valid longer.
+        return super().base_options() | {"cookiefile": str(self.cookies_file())}
+
+    def cookie_source(self) -> tuple[str, dict[str, Any]] | None:
+        return None  # the TwitCasting cookies are on every request, never a retry
+
+    # ---- chat ----
+
+    def download_raw_chat(self, info: VideoInfo, out_dir: Path) -> Path:
+        """Every comment of the movie, from its public comment history pages (read without
+        cookies), with the live's own title and start time from the replay page: the raw chat,
+        written through the download-in-progress marker."""
+        path = out_dir / artifact_name(info.stem, Artifact.RAW_CHAT, self.platform)
+        if path.exists():
+            return path
+        replay = self.read_replay(info.url)
+        if replay.started_at is None:
+            raise DownloadError(f"TwitCasting replay page {info.url} has no start time, so chat cannot be timed")
+        with self.site_client() as client:  # the comment history is public: no cookies
+            comments = fetch_comments(client, channel_id(info.channel), info.id)
+        data = {
+            "movie": {"id": info.id, "url": info.url, "title": replay.title or info.title,
+                      "started_at": replay.started_at.isoformat(), "duration": info.duration},
+            "comments": comments,
+        }
+        tmp = path.with_name(path.name + DOWNLOADING_SUFFIX)
+        tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(path)
+        log.info("chat: %d comments -> %s", len(comments), path.name)
+        return path
+
+
+COMMENT_PAGE_WAIT = 0.5  # seconds between two comment page requests
+COMMENT_RETRIES = 4  # tries of one comment page on transient failures (timeouts, 429, 5xx)
+
+
+def comments_url(channel: str, live_id: str, index: int) -> str:
+    """Comment history page `index` of a movie: 0 is the newest comments, each next one older."""
+    return f"{SITE}/{channel}/moviecomment/{live_id}-{index}"
+
+
+def fetch_comments(client: httpx.Client, channel: str, live_id: str) -> list[dict[str, str]]:
+    """Every comment of a movie, oldest first, each once (by comment id): walks the comment
+    history pages from the newest up to the last page the pager links to."""
+    found: dict[str, tuple[datetime, dict[str, str]]] = {}
+    index, last = 0, 0
+    while index <= last:
+        if index:
+            time.sleep(COMMENT_PAGE_WAIT)
+        page = comment_page(client, comments_url(channel, live_id, index))
+        items, page_last = parse_comment_page(page, live_id)
+        for posted, c in items:
+            found.setdefault(c["id"], (posted, c))
+        last = max(last, page_last)
+        index += 1
+        if index % 20 == 0:
+            log.info("chat: %d comments, page %d/%d", len(found), index, last + 1)
+    return [c for _, c in sorted(found.values(), key=lambda pc: (pc[0], pc[1]["id"].zfill(20)))]
+
+
+def comment_page(client: httpx.Client, url: str) -> str:
+    """One comment history page. Retries transient failures."""
+    for attempt in range(COMMENT_RETRIES):
+        try:
+            resp = client.get(url)
+        except httpx.TransportError as e:
+            problem = str(e) or type(e).__name__
+        else:
+            if resp.status_code != 429 and resp.status_code < 500:
+                if resp.is_error:
+                    raise DownloadError(f"TwitCasting comment page {url}: HTTP {resp.status_code}")
+                return resp.text
+            problem = f"HTTP {resp.status_code}"
+        if attempt == COMMENT_RETRIES - 1:
+            raise DownloadError(f"TwitCasting comment page {url}: {problem}")
+        log.warning("TwitCasting comment page %s: %s; retrying", url, problem)
+        time.sleep(2**attempt)
+    raise AssertionError("unreachable")
+
+
+COMMENT_ITEM_RE = re.compile(r'<div class="tw-comment-history-item"(?=[\s>])')
+
+
+def parse_comment_page(page: str, live_id: str) -> tuple[list[tuple[datetime, dict[str, str]]], int]:
+    """The comments on one comment history page (with their posted time) and the index of
+    the last page the pager links to. Raises DownloadError for a page that is not one."""
+    if 'class="tw-comment-history"' not in page:
+        raise DownloadError("unrecognised TwitCasting comment page (no comment history on it)")
+    pages = [int(i) for i in re.findall(rf'href="[^"]*/moviecomment/{re.escape(live_id)}-(\d+)"', page)]
+    items = []
+    for part in COMMENT_ITEM_RE.split(page)[1:]:
+        cid = re.search(r'\A[^>]*?\bdata-comment-id="(\d+)"', part)
+        when = re.search(r'<time\b[^>]*\bdatetime="([^"]+)"', part)
+        user = re.search(r'class="tw-comment-history-item__details__user-link"[^>]*?\bhref="/([^"]*)"[^>]*>(.*?)</a>',
+                         part, re.S)
+        text = re.search(r'class="tw-comment-history-item__content__text"[^>]*>(.*?)</div>', part, re.S)
+        posted = page_time(when.group(1) if when else None)
+        if not (cid and posted):
+            log.warning("TwitCasting comment without an id or a time skipped")
+            continue
+        items.append((posted, {
+            "id": cid.group(1),
+            "user_id": html.unescape(user.group(1)) if user else "",
+            "name": page_text(user.group(2)) if user else "",
+            "text": page_text(text.group(1)) if text else "",
+            "posted_at": posted.isoformat(),
+        }))
+    return items, max(pages, default=0)
+
+
+def page_text(fragment: str) -> str:
+    """The text of an HTML fragment as a browser shows it: tags dropped, entities decoded,
+    runs of spaces and line breaks one space."""
+    return re.sub(r"[ \t\r\n]+", " ", html.unescape(re.sub(r"<[^>]+>", "", fragment))).strip(" ")

@@ -1,4 +1,4 @@
-"""VOD + chat replay downloader (YouTube, Twitch). Importing a platform module registers it.
+"""Replay and chat downloader (YouTube, Twitch, TwitCasting). Importing a platform module registers it.
 
     from backend.downloader import download, load_settings
     settings, streamers = load_settings(Path("config.json"))
@@ -21,13 +21,14 @@ from dotenv import load_dotenv
 from backend.monitor import Streamer
 from backend.monitor.roster import load_roster
 
-from . import twitch, youtube  # noqa: F401  (registers each PlatformDownloader)
-from .base import ChatNotReady, DownloadError, DownloadResult, DownloadSettings, PlatformDownloader, VideoInfo
+from . import twitcasting, twitch, youtube  # noqa: F401  (registers each PlatformDownloader)
+from .base import (
+    ChatNotReady, DownloadError, DownloadResult, DownloadSettings, PlatformDownloader, ReplayUnpublished, VideoInfo)
 from .pending import PendingChats
 
 __all__ = [
     "ChatNotReady", "DownloadError", "DownloadResult", "DownloadSettings", "PendingChats",
-    "PlatformDownloader", "VideoInfo", "download", "downloader_for", "load_settings",
+    "PlatformDownloader", "ReplayUnpublished", "VideoInfo", "download", "downloader_for", "load_settings",
 ]
 
 log = logging.getLogger(__name__)
@@ -41,6 +42,7 @@ def load_settings(config: Path) -> tuple[DownloadSettings, list[Streamer]]:
       "output_dir": "downloads",
       "cookies_file": "data/youtube_cookies.txt",
       "cookies_from_browser": "firefox",
+      "twitcasting_cookies_file": "data/twitcasting_cookies.txt",
       "twitch_oauth_env": "TWITCH_OAUTH",
       "ffmpeg": "",
       "max_height": 1080,
@@ -57,9 +59,12 @@ def load_settings(config: Path) -> tuple[DownloadSettings, list[Streamer]]:
     retry = d.get("chat_retry") or {}
     pending = Path(retry.get("state_file") or "data/pending_chat.json")
     cookies = Path(d.get("cookies_file") or "data/youtube_cookies.txt")
+    twitcasting_cookies = Path(d.get("twitcasting_cookies_file") or "data/twitcasting_cookies.txt")
     settings = DownloadSettings(
         output_dir=out if out.is_absolute() else REPO_ROOT / out,
         cookies_file=cookies if cookies.is_absolute() else REPO_ROOT / cookies,
+        twitcasting_cookies_file=(twitcasting_cookies if twitcasting_cookies.is_absolute()
+                                  else REPO_ROOT / twitcasting_cookies),
         cookies_from_browser=d.get("cookies_from_browser") or None,
         # twitch_OAuth: AutoKiri's .env spelling (env names are case-sensitive on Linux).
         twitch_oauth=(os.getenv(d.get("twitch_oauth_env") or "TWITCH_OAUTH") or os.getenv("twitch_OAuth") or "").strip() or None,

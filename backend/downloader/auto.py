@@ -19,8 +19,11 @@ config.json:
     }}
 
 Rules:
-- Not ready yet (YouTube still processing, Twitch archive not listed): retried every
-  `retry_minutes` until `give_up_hours` after the stream ended.
+- Not ready yet (YouTube still processing, Twitch replay not listed): retried every
+  `retry_minutes` until `give_up_hours` after the live ended, then a failure message.
+- Replay not published (TwitCasting): a live shorter than SHORT_LIVE is dropped at once,
+  without a message. A longer one (or one whose length is not known) gets one notice,
+  then is retried like "not ready yet" and dropped at `give_up_hours` without a message.
 - Any other failure: retried until `max_errors`, then a failure message on Discord.
 - Success: a Discord message, then the streamer folder is trimmed to `keep` archives.
 - Jobs live in `state_file`, so a restart resumes them (yt-dlp resumes partial files).
@@ -55,7 +58,7 @@ from backend.notify import EventKind, LiveNotifier, StreamEvent, load_notifier
 from backend.state_file import StateFile, expect_list
 
 from . import REPO_ROOT, download, downloader_for, load_settings
-from .base import DownloadError, DownloadResult, DownloadSettings
+from .base import DownloadError, DownloadResult, DownloadSettings, ReplayUnpublished
 from .pending import PendingChats
 
 log = logging.getLogger(__name__)
@@ -63,6 +66,9 @@ log = logging.getLogger(__name__)
 NOT_READY = ("is_live", "is_upcoming", "post_live")
 STAGES = ("download", "transcribe", "analyze", "translate", "upload")
 AUTH_HINTS = ("member", "sign in", "cookie", "login", "subscriber", "private")
+# A live shorter than this whose replay is not published is dropped without a word: test
+# lives and the fragments a dropped connection leaves.
+SHORT_LIVE = 5 * 60
 
 
 @dataclass
@@ -75,6 +81,8 @@ class Job:
     last_error: str = ""
     stage: Literal["download", "transcribe", "analyze", "translate", "upload"] = "download"
     video: str | None = None  # set once downloaded
+    live_ended_at: float | None = None  # when the live ended (epoch seconds); None: not known
+    unpublished_notice_sent: bool = False  # the owner was told the replay is not published
 
     @property
     def stream_key(self) -> str:
@@ -84,6 +92,14 @@ class Job:
     @property
     def key(self) -> str:
         return f"{self.stream_key}|{self.stage}"
+
+    @property
+    def short_live(self) -> bool:
+        """The live lasted less than SHORT_LIVE. Without a start or end time it counts as long."""
+        started = self.status.started_at
+        if started is None or self.live_ended_at is None:
+            return False
+        return self.live_ended_at - started.timestamp() < SHORT_LIVE
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -95,6 +111,8 @@ class Job:
             "last_error": self.last_error,
             "stage": self.stage,
             "video": self.video,
+            "live_ended_at": self.live_ended_at,
+            "unpublished_notice_sent": self.unpublished_notice_sent,
         }
 
     @classmethod
@@ -109,10 +127,11 @@ def decode_jobs(raw: Any) -> list[Job]:
 
 @dataclass
 class Outcome:
-    kind: Literal["done", "wait", "error"]
+    kind: Literal["done", "wait", "unpublished", "error"]
     message: str = ""
     result: DownloadResult | None = None
     pruned: list[Path] = field(default_factory=list)
+    prune_error: str = ""  # done, but deleting old archives raised this (type: message)
 
 
 class AutoDownloader:
@@ -171,7 +190,8 @@ class AutoDownloader:
             return
         jobs = self.load()
         now = self.clock()
-        job = Job(status, queued_at=now, next_try=now)
+        job = Job(status, queued_at=now, next_try=now,
+                  live_ended_at=event.ended_at.timestamp() if event.ended_at else None)
         if any(j.stream_key == job.stream_key for j in jobs):
             return
         jobs.append(job)
@@ -254,7 +274,7 @@ class AutoDownloader:
         s = job.status
         try:
             dl = downloader_for(s.url or "", self.settings, self.streamers)
-            url = dl.find_vod(s.url or "", s.streamer.channel, s.started_at)
+            url = dl.find_replay(s.url or "", s.streamer.channel, s.stream_id, s.started_at)
             if not url:
                 return Outcome("wait", "archive not listed yet")
             info = dl.info(url)
@@ -265,13 +285,22 @@ class AutoDownloader:
                 "started": self.clock(), "stage": "download",
                 "percent": None, "downloaded": 0, "total": None, "speed": None, "eta": None}
             result = download(url, self.settings, self.streamers, info=info, progress=self._on_progress)
+            if err := result.errors.get("video"):
+                return Outcome("error", err, result)
+        except ReplayUnpublished as e:
+            return Outcome("unpublished", str(e))
         except DownloadError as e:
             return Outcome("error", str(e))
+        except Exception as e:  # noqa: BLE001 - a bug or a surprise: one failed attempt, not a stuck job
+            log.exception("auto-download attempt raised: %s %s", s.streamer.name, s.url)
+            return Outcome("error", f"{type(e).__name__}: {e}")
         finally:
             self._active["download"] = None
-        if err := result.errors.get("video"):
-            return Outcome("error", err, result)
-        pruned = self.prune(result.output_dir, self.keep.get(s.streamer.id, 6))
+        try:
+            pruned = self.prune(result.output_dir, self.keep.get(s.streamer.id, 6))
+        except Exception as e:  # noqa: BLE001 - the video is there: a failed cleanup must not fail the download
+            log.exception("pruning old archives failed after downloading: %s %s", s.streamer.name, s.url)
+            return Outcome("done", result=result, prune_error=f"{type(e).__name__}: {e}")
         return Outcome("done", result=result, pruned=pruned)
 
     def attempt_transcribe(self, job: Job) -> Outcome:
@@ -413,6 +442,9 @@ class AutoDownloader:
                 ref = Downloads(self.settings.output_dir).ref(outcome.result.output_dir)
                 detail += "\n" + archive_link(self.site_url, ref)
             self._send(EventKind.DOWNLOADED, job, detail)
+            if outcome.prune_error:
+                self._send(EventKind.PRUNE_FAILED, job, "删除这位主播超出保留数量的旧录播时出错，旧录播没有删掉；"
+                           f"这场新录播不受影响。\n```{outcome.prune_error[:1500]}```")
             video = outcome.result.video if outcome.result else None
             if self.transcribe and video:
                 current.video = str(video)
@@ -420,7 +452,21 @@ class AutoDownloader:
             else:
                 self.save(rest)
             return
-        if outcome.kind == "wait":
+        if outcome.kind == "unpublished":
+            if current.short_live:
+                log.info("auto-download dropped, replay of a short live not published: %s", name)
+                self.save(rest)
+                return
+            if now - current.queued_at >= self.give_up:
+                log.info("auto-download given up, replay never published: %s", name)
+                self.save(rest)
+                return
+            if not current.unpublished_notice_sent:
+                self._send(EventKind.REPLAY_UNPUBLISHED, job,
+                           f"回放未公开，{self.give_up / 3600:g} 小时内公开会自动下载。")
+                current.unpublished_notice_sent = True
+            log.info("auto-download waiting for the replay to be published: %s", name)
+        elif outcome.kind == "wait":
             if now - current.queued_at >= self.give_up:
                 self.save(rest)
                 hours = self.give_up / 3600
@@ -451,7 +497,7 @@ class AutoDownloader:
                                f"影片和字幕都好了，但试了 {current.attempts} 次路灯表分析仍失败：\n"
                                f"```{current.last_error[:1500]}```")
                 else:
-                    self._send(EventKind.DOWNLOAD_FAILED, job, failure_detail(current))
+                    self._send(EventKind.DOWNLOAD_FAILED, job, failure_detail(current, self.settings))
                 return
         current.next_try = now + self.retry_interval
         self.save(rest + [current])
@@ -547,9 +593,17 @@ def top_segments_detail(archive: Archive, n: int = 5) -> str:
     return "\n".join(lines) or "路灯表已生成（没有打分的段落）"
 
 
-def failure_detail(job: Job) -> str:
+def failure_detail(job: Job, settings: DownloadSettings) -> str:
     text = f"试了 {job.attempts} 次仍失败：\n```{job.last_error[:1500]}```"
-    if any(h in job.last_error.lower() for h in AUTH_HINTS):
+    error = job.last_error.lower()
+    if job.status.streamer.platform == "twitcasting":
+        if "login" in error:
+            text += ("\n可能是 TwitCasting 的登录 cookies 过期：更新服务器上的 "
+                     f"`{settings.twitcasting_cookies_file}`（见 docs/deploy.md）。")
+        elif "not supported" in error:
+            text += "\n不支持有合言葉（密码）或会员限定的 TwitCasting 直播。"
+        return text
+    if any(h in error for h in AUTH_HINTS):
         if job.status.streamer.platform == "twitch":
             text += "\n可能需要更新服务器 `.env` 里的 `TWITCH_OAUTH`。"
         else:

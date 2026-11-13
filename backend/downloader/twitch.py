@@ -54,9 +54,12 @@ class TwitchDownloader(PlatformDownloader):
         if self.settings.twitch_oauth:
             ydl.cookiejar.set_cookie(make_cookie("auth-token", self.settings.twitch_oauth, ".twitch.tv"))
 
-    def find_vod(self, stream_url: str, channel: str, started_at: datetime | None) -> str | None:
+    def find_replay(
+        self, live_url: str, channel: str, live_id: str | None, started_at: datetime | None
+    ) -> str | None:
         """The channel's newest archive, if it is the broadcast that started at
-        `started_at` (within VOD_MATCH_SECONDS). None: not there (yet)."""
+        `started_at` (within VOD_MATCH_SECONDS). None: not there (yet). The live's id (a
+        go-live id) is not the replay's id, so it is not used."""
         login = channel.rstrip("/").rsplit("/", 1)[-1]
         listing = self._ytdlp(
             f"https://www.twitch.tv/{login}/videos?filter=archives&sort=time",

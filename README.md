@@ -9,7 +9,7 @@
 
 | 步骤 | 做什么 | 状态 |
 | --- | --- | --- |
-| [直播监控](#直播监控) | 轮询 YouTube / Twitch 频道；在网页上管理主播 | 完成 |
+| [直播监控](#直播监控) | 轮询 YouTube / Twitch / TwitCasting 频道；在网页上管理主播 | 完成 |
 | [开播通知](#开播通知) | 开播、下播和处理结果发到 Discord 和 QQ 群（官方机器人） | 完成 |
 | [下载器](#下载器) | 用 yt-dlp 和 Twitch GQL 下载录播和弹幕；会员 / 订阅限定靠 cookie | 完成 |
 | 弹幕清洗 | 原始弹幕 → `{"time","user","msg"}` 一行一条 | 完成 |
@@ -56,14 +56,15 @@ uv run -m backend.monitor.server       # 网页：http://127.0.0.1:8770
 
 主播在网页上管理（见[网页](#网页)）。名单存在 `data/streamers.json`（`monitor.streamers_file`），
 部署不会动它；`config.json` 的 `monitor.streamers` 只在第一次启动时用来生成名单。
-`platform` 是 `youtube` 或 `twitch`；`channel` 是 YouTube 的 handle（`@foo`）、频道 ID（`UC...`）或网址，
-或 Twitch 的登录名（`foo`）或网址。新增主播时会先检查频道是否存在；删除主播会保留已下载的录播。
+`platform` 是 `youtube`、`twitch` 或 `twitcasting`；`channel` 是 YouTube 的 handle（`@foo`）、频道 ID（`UC...`）或网址，
+Twitch 的登录名（`foo`）或网址，或 TwitCasting 的 ID（`foo`、`@foo`、`c:foo`）或网址。新增主播时会先检查频道是否存在；删除主播会保留已下载的录播。
 
 - [roster.py](backend/monitor/roster.py)：主播名单和各主播的设定。
 - [base.py](backend/monitor/base.py)：共用的 `Streamer`、`StreamStatus`、`LiveState`、
   `PlatformMonitor` 基类和 `StreamMonitor` 轮询。
 - [youtube.py](backend/monitor/youtube.py)：`YouTubeMonitor`，抓 `/<channel>/live` 页面；不需要 API key。
 - [twitch.py](backend/monitor/twitch.py)：`TwitchMonitor`，读频道页的 JSON-LD；不需要 API key。
+- [twitcasting.py](backend/monitor/twitcasting.py)：`TwitCastingMonitor`，读频道页的 `data-is-onlive` 等标记；不需要 API key。
 
 新增平台：写一个 `backend/monitor/<platform>.py`，里面放一个 `PlatformMonitor` 子类，
 设 `platform = "<name>"` 并实现 `_check()`，再在 [`__init__.py`](backend/monitor/__init__.py) 里 import。
@@ -106,7 +107,7 @@ uv run -m backend.monitor.server       # 网页：http://127.0.0.1:8770
    kiri 会一直连着 QQ（机器人显示在线），不需要公网网址。
 2. 把机器人拉进群（未认证的机器人只能进你当群主的群），或在群里 @机器人：群会自动出现在「通知」页面，
    机器人也会在群里回复本群的订阅现况。新群默认关闭、不订阅任何主播。
-3. 在「通知」页面给群取名，勾选主播（按人，同名的 YouTube / Twitch 算同一位）和通知类型（默认开播、下播、录播已下载、上传完成），打开通知、保存。
+3. 在「通知」页面给群取名，勾选主播（按人，同名的 YouTube / Twitch / TwitCasting 算同一位）和通知类型（默认开播、下播、录播已下载、上传完成），打开通知、保存。
 
 消息是 Markdown：开播第二行是直播封面（腾讯下载不到 YouTube 的图，所以由我们下载后传进机器人的素材库，
 最多 100 张，满了删掉我们最旧的），附可点击的直播链接；上传完成附子表链接。一个群发送失败（例如群里关了
@@ -122,9 +123,9 @@ Discord 收到一次提醒；机器人连续 10 分钟连不上也提醒一次�
 
 ## 下载器
 
-下载 YouTube / Twitch 的录播和弹幕回放。不需要外部 exe：影片和资料用 `yt-dlp` Python 套件
+下载 YouTube / Twitch / TwitCasting 的回放和弹幕。不需要外部 exe：影片和资料用 `yt-dlp` Python 套件
 （nightly 预发布版，因为 YouTube 常常改），它的 JS 运行环境是 `deno` pip 套件，Twitch 弹幕直接从
-Twitch 的 GQL API 拿。只需要另外装 ffmpeg（在 PATH 里，或设 `download.ffmpeg`）。
+Twitch 的 GQL API 拿，TwitCasting 弹幕读公开的留言记录页。只需要另外装 ffmpeg（在 PATH 里，或设 `download.ffmpeg`）。
 
 ```sh
 uv run -m backend.downloader <url>              # 影片 + 弹幕
@@ -134,7 +135,8 @@ uv lock --upgrade-package yt-dlp && uv sync     # 更新到最新的 yt-dlp nigh
 ```
 
 文件存到 `downloads/<主播>/<YYYYMMDD>/<标题>/[日期][主播] 标题.mp4`，弹幕放在旁边：
-`.live_chat.json`（YouTube，yt-dlp 原始格式）或 `.chat.json`（Twitch，TwitchDownloaderCLI 的格式）。
+`.live_chat.json`（YouTube，yt-dlp 原始格式）、`.chat.json`（Twitch，TwitchDownloaderCLI 的格式）或
+`.comments.json`（TwitCasting，留言记录页读到的留言）。
 主播名单里的频道用名单里的名字，其他频道用频道显示名称。
 
 每份下载的弹幕也会清洗成 `.chat_parsed.json`（AutoKiri 的格式，一行一条；只有 YouTube 的
@@ -153,6 +155,9 @@ Super Chat / 贴图才有 `sc`），见 [chat_clean.py](backend/downloader/chat_
   没有的话用 `download.cookies_from_browser`（默认 `firefox`；留空表示不用）。服务器没有浏览器，
   所以用 cookie 文件：见 [docs/deploy.md](docs/deploy.md) 的「YouTube 会限 cookie」。
 - Twitch 订阅限定录播：在 `.env` 设 `TWITCH_OAUTH`（twitch.tv 的 `auth-token` cookie）。
+- TwitCasting：回放一律要登录，每次都带 `download.twitcasting_cookies_file`（`data/twitcasting_cookies.txt`）的 cookie，
+  见 [docs/deploy.md](docs/deploy.md) 的「TwitCasting 回放要登录 cookie」。只收回放网址 `twitcasting.tv/<ID>/movie/<数字>`；
+  录播标题是这一场自己的标题加开播时间 `HHmmss`。合言葉和会员限定的直播不支持。
 - 正在直播的不能下载。YouTube 刚下播时还在处理，处理完之前也不能下载（晚点再跑）。
 
 YouTube 的弹幕回放常常要下播几小时后才出现。还没出现时，会排进 `data/pending_chat.json`，
@@ -175,12 +180,15 @@ uv run -m backend.downloader <url> --wait       # 下载后，等晚到的弹幕
 的录播会排进队列下载（影片不超过 `download.max_height`，默认 1080p，加弹幕），
 由网页服务器或 `uv run -m backend.monitor` 执行。见 [auto.py](backend/downloader/auto.py)。
 
-- 还没好（YouTube 还在处理、Twitch 录播还没列出）：每 `download.auto.retry_minutes`（15）分钟重试，
-  最多 `give_up_hours`（12）小时。
+- 还没好（YouTube 还在处理、Twitch 回放还没列出）：每 `download.auto.retry_minutes`（15）分钟重试，
+  最多 `give_up_hours`（12）小时，然后在 Discord 报失败。
+- TwitCasting 回放没公开：直播有 5 分钟以上（没有开播时间的也算）就发一次「回放未公开」通知，之后照上面的间隔重试，
+  期间公开了就照常下载；`give_up_hours` 后还没公开就安静放弃，不报失败。不到 5 分钟的直播不发通知，直接放弃。
 - 其他失败（cookie 过期、影片被删、网络）重试 `max_errors`（3）次，然后在 Discord 报失败；
   看起来是 cookie 过期时会附上提示。
 - 成功：Discord（和订阅的 QQ 群）消息附上文件大小、弹幕状态，以及这场录播在网站上的页面链接（服务器 `.env` 设了 `SITE_URL` 才有，例如公网后的 `https://<IP>`）。然后这个主播的文件夹只保留 `keep` 场
-  （每个主播可以设，默认 `download.auto.keep` = 6），最旧的先删。
+  （每个主播可以设，默认 `download.auto.keep` = 6），最旧的先删。删旧录播出错时（例如文件被别的程序打开），
+  新录播照常往下处理，Discord 另收一条「旧录播没能删除」提醒（QQ 群要在通知页勾选才收得到）。
 - 队列存在 `data/download_queue.json`，所以重启（部署）后会接着跑；晚到的弹幕走上面的弹幕重试队列。
 
 ## 字幕转写
@@ -293,7 +301,7 @@ uv run -m backend.monitor.server --dev --reload    # http://127.0.0.1:8770
 uv run pytest                          # 离线测试，跳过慢的压力测试（约 50 秒）
 uv run pytest -m "not network"         # 全部离线测试，CI 跑的就是这个
 uv run ruff check                      # 检查没用到的 import 和变量
-uv run pytest -m network -s            # 连真实的 YouTube / Twitch 检查
+uv run pytest -m network -s            # 连真实的 YouTube / Twitch / TwitCasting 检查
 STRESS_SEEDS=1000 uv run pytest tests/test_random_sequences.py   # 更长的压力测试
 ```
 

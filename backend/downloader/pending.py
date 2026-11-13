@@ -136,17 +136,22 @@ class PendingChats:
                 e.output_dir.mkdir(parents=True, exist_ok=True)
                 path = dl.download_chat(e.info, e.output_dir)
             except DownloadError as err:  # not-ready or a network blip: both worth retrying
-                e.last_error = str(err)
-                if now - e.queued_at >= self.give_up:
-                    log.warning("giving up on chat for %s: %s", e.info.title, err)
-                    report.given_up.append(e)
-                else:
-                    e.next_try = now + self.interval
-                    keep.append(e)
-                    report.waiting.append(e)
+                error = str(err)
+            except Exception as err:  # noqa: BLE001 - a bug or a surprise: one failed try, the pass goes on
+                log.exception("chat retry raised for %s", e.info.title)
+                error = f"{type(err).__name__}: {err}"
+            else:
+                log.info("chat downloaded on attempt %d: %s", e.attempts, path)
+                report.done.append((e, path))
                 continue
-            log.info("chat downloaded on attempt %d: %s", e.attempts, path)
-            report.done.append((e, path))
+            e.last_error = error
+            if now - e.queued_at >= self.give_up:
+                log.warning("giving up on chat for %s: %s", e.info.title, error)
+                report.given_up.append(e)
+            else:
+                e.next_try = now + self.interval
+                keep.append(e)
+                report.waiting.append(e)
         # Entries added by another process while we were retrying would be lost by a
         # plain save; merge them back in.
         handled = {(e.info.platform, e.info.id) for e, _ in report.done} | {
