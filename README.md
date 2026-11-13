@@ -19,7 +19,7 @@ A person still decides what to cut in the end.
 | [Transcription](#transcription) | Archive → `<stem>.transcript.json` (faster-whisper on a GPU) | Done |
 | [Highlight table analysis](#highlight-table-analysis) | 5-minute topic logs, chat density, scores across the whole live, highlight moments → highlight table | Done |
 | [Chinese transcript](#chinese-transcript) | Transcript (Japanese) → `<stem>.zh.transcript.json`, shown on the video, downloadable as SRT | Done |
-| [Web pages](#web-pages) | Four pages: live status / archives / highlight tables / notifications; a highlight table downloads as a formatted Excel file | Done |
+| [Web pages](#web-pages) | Five pages: live status / archives / highlight tables / notifications / users; a highlight table downloads as a formatted Excel file | Done |
 | [Upload to Tencent Docs](#upload-to-tencent-docs) | Highlight table → one sub-sheet (formatted) in a Tencent Docs spreadsheet, set per streamer, uploaded automatically | Done |
 | Google Sheets | The same upload, to Google Sheets instead | Planned |
 
@@ -85,7 +85,7 @@ When a live ends, the streamer must stay not live for `notify.offline_grace` sec
 so a short disconnect does not cause a false alarm. `notify.on_offline: false` turns the 下播了 message off.
 
 Guarantees (all covered by tests):
-- Every 开播了 (went live) message is followed by exactly one 下播了 message for the same sitting (a live is identified by its `stream_id`: the YouTube video ID, the Twitch start time).
+- Every 开播了 (went live) message is followed by exactly one 下播了 message for the same sitting (a live is identified by its `stream_id`: the YouTube video ID, the Twitch start time, the TwitCasting movie ID).
 - A failed check (network error, bot-verification page) is never taken as "ended".
 - Each streamer's last live is stored in `data/notify_state.json`, so a live that started or ended while the monitor was down is reported after the restart.
   Run only one monitor process at a time, because they would share this file.
@@ -113,7 +113,7 @@ An official bot from the QQ Open Platform (q.qq.com) posts to QQ groups. Each gr
    kiri stays connected to QQ the whole time (the bot shows as online); no public URL is needed.
 2. Add the bot to a group (an unverified bot can only join groups you own), or @-mention the bot in a group: the group appears on the 通知 page automatically,
    and the bot replies in the group with that group's current subscriptions. A new group starts switched off, with no streamers subscribed.
-3. On the 通知 page, name the group, tick the streamers (by person: a YouTube, a Twitch and a TwitCasting entry with the same name count as one) and the notification types (by default 开播 (went live), 下播 (ended), 录播已下载 (archive downloaded) and 上传完成 (upload done)), switch notifications on, and save.
+3. On the 通知 page, name the group, tick the streamers (by person: a YouTube, a Twitch and a TwitCasting entry with the same name count as one) and the notification types (by default 开播 (went live), 下播 (ended), 上传完成 (upload done) and 全部处理完成 (all processing done)), switch notifications on, and save.
 
 Messages are Markdown. The second line of a went-live message is the live's cover image (Tencent cannot fetch images from YouTube, so we download it and upload it to the bot's media library,
 which holds at most 100 images; when it is full, our oldest one is deleted), followed by a clickable link to the live; an upload-done message includes the sub-sheet link. When sending to one group fails (for example, the group has turned off
@@ -246,7 +246,7 @@ A 5-hour live takes about 120,000 tokens. By hand: `uv run -m backend.translate 
 
 ## Web pages
 
-`uv run -m backend.monitor.server` (on the server, open it over Tailscale; see [Deployment](#deployment)). Four pages:
+`uv run -m backend.monitor.server` (on the server, open it over Tailscale; see [Deployment](#deployment)). Five pages:
 
 - **直播状态** (live status, [monitor.html](frontend/monitor.html)): who is live / in a waiting room / not live, with covers and tag search.
   「＋ 新增主播」 (add streamer) adds a streamer. The gear ⚙ on each card sets auto-download, how many archives to keep, auto-upload to Tencent Docs and the target spreadsheet,
@@ -258,14 +258,17 @@ A 5-hour live takes about 120,000 tokens. By hand: `uv run -m backend.translate 
   「只看有切片」 (only rows with clips); topic logs can be expanded.
 - **通知** ([notify.html](frontend/notify.html)): the status of the QQ bot and Discord, with test buttons; each QQ group's name,
   on/off switch, subscribed streamers and notification types; the latest 50 sent messages.
+- **用户** (users, [users.html](frontend/users.html)): only when login is on, and only for admins; add accounts, reset passwords and disable accounts (see [Login](#login)).
 
 The Excel highlight table ([sheet.py](backend/sheet.py)) is readable as soon as it is opened: the header row is frozen; the two columns for the content summary and the clip titles are wider, wrap text and
 are left-aligned, and the other columns are centred; scores are coloured, and rows with a 🏆 are highlighted in yellow; the last column, 「剪辑」 (editing), is left empty for the team to fill in.
 All of this formatting is kept when the file is imported into Tencent Docs or Google Sheets by hand.
 
-API: `/api/status`, `/api/streamers` (GET / POST / PATCH / DELETE), `/api/downloads`,
-`/api/archives/*`, `/api/highlights/*`, `/api/notify*` (see [server.py](backend/monitor/server.py),
-[archives.py](backend/monitor/archives.py) and [notify_api.py](backend/monitor/notify_api.py)).
+API: `/api/status`, `/api/refresh` (POST: check every streamer now), `/api/streamers` (GET / POST / PATCH / DELETE), `/api/downloads`,
+`/api/archives/*`, `/api/highlights/*`, `/api/notify*`, `/api/users` (GET / POST / PATCH / DELETE),
+`/api/login` / `/api/logout` (POST), `/api/me` (who is logged in, and their role), `/healthz` (health check, open without login)
+(see [server.py](backend/monitor/server.py), [archives.py](backend/monitor/archives.py),
+[notify_api.py](backend/monitor/notify_api.py) and [auth_api.py](backend/monitor/auth_api.py)).
 
 ## Upload to Tencent Docs
 
@@ -328,7 +331,8 @@ The browser tests of the web pages ([test_monitor_page.py](tests/test_monitor_pa
 
 CI ([ci.yml](.github/workflows/ci.yml)) runs the tests and builds the Docker image on every pull request and on main.
 After CI passes on main, [deploy.yml](.github/workflows/deploy.yml) copies the code to the server over SSH
-and runs `docker compose up -d --build`. The web pages listen only on the server's localhost and are reached over Tailscale.
+and runs `docker compose up -d --build`. Before that restart, the new code reads the server's state files without changing them; the deploy stops there,
+with the old version still running, if a state file would be refused or set aside, or while the download queue still holds jobs (see 「部署」 (deployment) in [docs/deploy.md](docs/deploy.md), in Chinese). The web pages listen only on the server's localhost and are reached over Tailscale.
 
 ```sh
 docker compose up -d --build     # 在本地跑容器（需要 .env）
@@ -345,7 +349,7 @@ One-time server setup (Docker, deploy user, SSH key, GitHub secrets, Tailscale):
 | | Admin | Member |
 |---|---|---|
 | View live status, archives and highlight tables; download video / subtitles / highlight table / zip | ✅ | ✅ |
-| Add or change streamers, gear settings, the 通知 page, the 用户 (users) page | ✅ | ❌ |
+| Add or change streamers, gear settings, the 通知 page, the 用户 page | ✅ | ❌ |
 
 Create the first admin on the server (you type the password twice):
 
