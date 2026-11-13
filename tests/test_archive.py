@@ -32,7 +32,7 @@ def test_an_artifact_is_the_file_named_after_the_video(tmp_path):
 
 
 def test_without_the_named_file_the_first_in_sorted_order_is_taken(tmp_path):
-    folder = sample_archive(tmp_path, chat=None, transcript=None, zh_transcript=None, highlights=None)
+    folder = sample_archive(tmp_path, chat=None, transcript=None, chinese_transcript=None, highlights=None)
     (folder / "b.chat_parsed.json").write_text("[]", encoding="utf-8")
     (folder / "a.chat_parsed.json").write_text("[]", encoding="utf-8")
     (folder / "a.zh.transcript.json").write_text("[]", encoding="utf-8")
@@ -83,7 +83,7 @@ def test_an_archive_opened_from_a_video_of_any_format_names_artifacts_without_it
 
 
 def test_presence_is_reported_per_artifact(tmp_path):
-    folder = sample_archive(tmp_path, zh_transcript=None, highlights=None)
+    folder = sample_archive(tmp_path, chinese_transcript=None, highlights=None)
     a = Archive.from_folder(folder)
     assert a.present() == {Artifact.VIDEO, Artifact.CHAT, Artifact.TRANSCRIPT}
     assert a.has(Artifact.TRANSCRIPT) and not a.has(Artifact.CHINESE_TRANSCRIPT)
@@ -117,9 +117,9 @@ def test_chat_that_is_not_a_list_reads_as_no_messages(tmp_path):
 
 def test_reading_tells_a_missing_artifact_from_a_damaged_one(tmp_path):
     missing = Archive.from_folder(sample_archive(tmp_path, title="空", chat=None, transcript=None,
-                                                 zh_transcript=None, highlights=None))
+                                                 chinese_transcript=None, highlights=None))
     damaged = Archive.from_folder(sample_archive(tmp_path, title="坏", chat="[{", transcript="nope",
-                                                 zh_transcript=b"\xff\xfe", highlights="{"))
+                                                 chinese_transcript=b"\xff\xfe", highlights="{"))
     for read in ("read_chat", "read_transcript", "read_highlights"):
         with pytest.raises(ArtifactMissing):
             getattr(missing, read)()
