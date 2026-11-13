@@ -1,0 +1,3 @@
+# One line-ending style on every machine: LF in the repository and in the working copy,
+# whatever core.autocrlf says, so shell tools and editors never flip a file.
+* text=auto eol=lf

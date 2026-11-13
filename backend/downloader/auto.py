@@ -34,7 +34,6 @@ import functools
 import json
 import logging
 import os
-import shutil
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
@@ -42,16 +41,18 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import quote
 
-from backend.analysis import AnalysisSettings, analyze, highlights_path
+from backend.analysis import AnalysisSettings, analyze
+from backend.archive import Archive, Artifact, ArtifactDamaged, ArtifactMissing, Downloads, file_date, read_file
 from backend.asr import ASRSettings, transcribe
 from backend.llm import LLMError, chat, load_llm
 from backend.tencent_docs import (
-    TencentDocsError, archive_date, load_credentials, sheet_title, upload_table)
+    TencentDocsError, load_credentials, sheet_title, upload_table)
 from backend.translate import TranslateSettings
 from backend.translate import translate as translate_transcript
 from backend.monitor import StreamMonitor, Streamer, StreamStatus
 from backend.monitor.roster import load_roster
 from backend.notify import EventKind, LiveNotifier, StreamEvent, load_notifier
+from backend.state_file import StateFile, expect_list
 
 from . import REPO_ROOT, download, downloader_for, load_settings
 from .base import DownloadError, DownloadResult, DownloadSettings
@@ -101,6 +102,11 @@ class Job:
         return cls(**d | {"status": StreamStatus.from_dict(d["status"])})
 
 
+def decode_jobs(raw: Any) -> list[Job]:
+    """The download queue file's JSON -> jobs; raises if it isn't a list of jobs."""
+    return [Job.from_dict(d) for d in expect_list(raw, "jobs")]
+
+
 @dataclass
 class Outcome:
     kind: Literal["done", "wait", "error"]
@@ -135,7 +141,9 @@ class AutoDownloader:
         self.settings = settings
         self.streamers = list(streamers)
         self.keep = keep
-        self.state_file = state_file
+        # Runtime state: a damaged queue is set aside as a backup (the owner is alerted).
+        self._queue = StateFile(state_file, default=list, policy="recover", decode=decode_jobs,
+                                encode=lambda jobs: [j.to_dict() for j in jobs])
         self.retry_interval = retry_interval
         self.give_up = give_up
         self.max_errors = max_errors
@@ -151,20 +159,10 @@ class AutoDownloader:
     # ---- queue ----
 
     def load(self) -> list[Job]:
-        try:
-            raw = json.loads(self.state_file.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            return []
-        except (OSError, ValueError) as e:
-            log.error("can't read %s (%s); treating the queue as empty", self.state_file, e)
-            return []
-        return [Job.from_dict(d) for d in raw]
+        return self._queue.load()
 
     def save(self, jobs: Iterable[Job]) -> None:
-        self.state_file.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.state_file.with_name(self.state_file.name + ".tmp")
-        tmp.write_text(json.dumps([j.to_dict() for j in jobs], ensure_ascii=False, indent=1), encoding="utf-8")
-        tmp.replace(self.state_file)
+        self._queue.save(list(jobs))
 
     def on_ended(self, event: StreamEvent) -> None:
         """LiveNotifier.on_ended listener: queue the archive of a stream that ended."""
@@ -332,7 +330,8 @@ class AutoDownloader:
             sheet = self.uploads.get(s.streamer.id)
             if not sheet:
                 return Outcome("done", "")  # switched off in the gear meanwhile
-            link = self.upload(highlights_path(Path(job.video)), sheet, s.streamer.name, s.title or "")
+            table = Archive.from_video(Path(job.video)).require(Artifact.HIGHLIGHTS)
+            link = self.upload(table, sheet, s.streamer.name, s.title or "")
         except Exception as e:  # noqa: BLE001 - API errors, timeouts, expired token: all retried
             return Outcome("error", str(e) or type(e).__name__)
         finally:
@@ -373,7 +372,8 @@ class AutoDownloader:
         name = job.status.streamer.name
         if outcome.kind == "done" and current.stage == "analyze":
             log.info("analyzed: %s %s", name, outcome.message)
-            self._send(EventKind.ANALYZED, job, top_segments_detail(Path(outcome.message)))
+            assert job.video  # analysis only runs on a downloaded video
+            self._send(EventKind.ANALYZED, job, top_segments_detail(Archive.from_video(Path(job.video))))
             if job.status.streamer.id not in self.uploads:
                 self.save(rest)
             elif not self.upload:
@@ -410,7 +410,8 @@ class AutoDownloader:
             log.info("auto-download done: %s %s", name, outcome.result and outcome.result.video)
             detail = success_detail(outcome)
             if self.site_url and outcome.result:
-                detail += "\n" + archive_link(self.site_url, self.settings.output_dir, outcome.result.output_dir)
+                ref = Downloads(self.settings.output_dir).ref(outcome.result.output_dir)
+                detail += "\n" + archive_link(self.site_url, ref)
             self._send(EventKind.DOWNLOADED, job, detail)
             video = outcome.result.video if outcome.result else None
             if self.transcribe and video:
@@ -478,55 +479,37 @@ class AutoDownloader:
     # ---- retention ----
 
     def prune(self, protect: Path, keep: int) -> list[Path]:
-        """Delete the oldest `<creator>/<date>/<title>` folders beyond `keep`, never
-        `protect` (the one just downloaded). Returns what was deleted."""
-        root = self.settings.output_dir.resolve()
-        creator = protect.parent.parent
-        if creator.resolve().parent != root:  # never delete outside output_dir
-            log.error("not pruning %s: not directly under %s", creator, root)
-            return []
-        folders = [t for d in creator.iterdir() if d.is_dir() for t in d.iterdir() if t.is_dir()]
-        folders.sort(key=lambda p: (p.parent.name, p.stat().st_mtime))
-        excess = len(folders) - keep
-        removed: list[Path] = []
-        queue = PendingChats.from_settings(self.settings)
-        for folder in folders:
-            if excess <= 0:
-                break
-            if folder == protect:
-                continue
-            shutil.rmtree(folder)
-            removed.append(folder)
-            excess -= 1
-            log.info("pruned old archive: %s", folder)
-            if queue:
+        """Delete the creator's oldest archives beyond `keep`, never `protect` (the one just
+        downloaded), and forget their queued chats. Returns what was deleted."""
+        removed = Downloads(self.settings.output_dir).prune(protect, keep)
+        if removed and (queue := PendingChats.from_settings(self.settings)):
+            for folder in removed:
                 queue.drop_under(folder)
-            if not any(folder.parent.iterdir()):
-                folder.parent.rmdir()
         return removed
 
 
 def ready_detail(video: Path, site_url: str, output_dir: Path) -> str:
     """What a finished stream has (✅ / ❌), and with SITE_URL the 全部下载 zip and its page."""
-    folder, stem = video.parent, video.stem
-    have = [("影片", video.exists()), ("弹幕", (folder / f"{stem}.chat_parsed.json").exists()),
-            ("日文字幕", (folder / f"{stem}.transcript.json").exists()),
-            ("中文字幕", (folder / f"{stem}.zh.transcript.json").exists()),
-            ("路灯表", (folder / f"{stem}.highlights.json").exists())]
-    lines = [" · ".join(f"{name} {'✅' if ok else '❌'}" for name, ok in have)]
+    archive = Archive.from_video(video)
+    present = archive.present()
+    lines = [" · ".join(f"{name} {'✅' if artifact in present else '❌'}" for name, artifact in READY_ARTIFACTS)]
     if site_url:
-        rel = folder.resolve().relative_to(output_dir.resolve()).as_posix()
+        ref = Downloads(output_dir).ref(archive.folder)
         lines += ["全部下载（影片、弹幕、中日字幕 SRT）：",
-                  f"{site_url.rstrip('/')}/api/archives/zip?folder={quote(rel, safe='')}",
-                  "录播页面：", archive_link(site_url, output_dir, folder)]
+                  f"{site_url.rstrip('/')}/api/archives/zip?folder={quote(ref, safe='')}",
+                  "录播页面：", archive_link(site_url, ref)]
     return "\n".join(lines)
 
 
-def archive_link(site_url: str, output_dir: Path, folder: Path) -> str:
-    """The archive's page on the dashboard (plays it, has the downloads). The folder is
-    escaped like the page's encodeURIComponent, so its detail view opens."""
-    rel = folder.resolve().relative_to(output_dir.resolve()).as_posix()
-    return f"{site_url.rstrip('/')}/archives#{quote(rel, safe=SAFE_URI_CHARS)}"
+READY_ARTIFACTS = [("影片", Artifact.VIDEO), ("弹幕", Artifact.CHAT), ("日文字幕", Artifact.TRANSCRIPT),
+                   ("中文字幕", Artifact.CHINESE_TRANSCRIPT), ("路灯表", Artifact.HIGHLIGHTS)]  # in the message's order
+
+
+def archive_link(site_url: str, ref: str) -> str:
+    """The dashboard page of the archive with this folder reference (plays it, has the
+    downloads). The reference is escaped like the page's encodeURIComponent, so its detail
+    view opens."""
+    return f"{site_url.rstrip('/')}/archives#{quote(ref, safe=SAFE_URI_CHARS)}"
 
 
 SAFE_URI_CHARS = "!'()*"  # with A-Z a-z 0-9 - _ . ~: what encodeURIComponent leaves alone
@@ -550,11 +533,11 @@ def success_detail(outcome: Outcome) -> str:
     return "\n".join(lines)
 
 
-def top_segments_detail(table: Path, n: int = 5) -> str:
-    """Discord text for a finished 路灯表: the best `n` segments."""
+def top_segments_detail(archive: Archive, n: int = 5) -> str:
+    """Discord text for an archive's finished 路灯表: the best `n` segments."""
     try:
-        rows = json.loads(table.read_text(encoding="utf-8")).get("rows") or []
-    except (OSError, ValueError) as e:
+        rows = archive.highlight_rows()
+    except (ArtifactMissing, ArtifactDamaged, OSError) as e:
         return f"路灯表已生成，但读不到：{e}"
     best = sorted((r for r in rows if isinstance(r.get("score"), int)), key=lambda r: -r["score"])[:n]
     lines = []
@@ -627,11 +610,11 @@ def load_uploader(config: Path) -> Callable[[Path, str, str, str], str] | None:
         return None
 
     def run(table: Path, file_id: str, streamer: str, title: str) -> str:
-        data = json.loads(table.read_text(encoding="utf-8"))
+        data = read_file(table, Artifact.HIGHLIGHTS)
         data.setdefault("streamer", streamer)
         data.setdefault("title", title)
         return upload_table(data, dataclasses.replace(creds, file_id=file_id),
-                            sheet_title=sheet_title(data, archive_date(table)))
+                            sheet_title=sheet_title(data, file_date(table)))
 
     return run
 

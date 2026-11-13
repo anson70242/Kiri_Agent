@@ -14,6 +14,7 @@ from pathlib import Path
 
 from backend.monitor import LiveState, StreamMonitor, Streamer, StreamStatus
 from backend.monitor.__main__ import load_config
+from backend.state_file import print_incidents
 
 from . import REPO_ROOT, EventKind, StreamEvent, load_notifier
 
@@ -24,6 +25,7 @@ async def main() -> int:
     p.add_argument("--live", action="store_true", help="send for streamers live right now")
     p.add_argument("--offline", action="store_true", help="also send a sample ended message")
     args = p.parse_args()
+    print_incidents()  # damaged notification state: tell the owner at the terminal
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)  # its request log prints the webhook secret
 

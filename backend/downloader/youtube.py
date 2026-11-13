@@ -10,6 +10,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from backend.archive import Artifact, artifact_name
+
 from .base import ChatNotReady, DownloadError, PlatformDownloader, VideoInfo, outtmpl
 
 class YoutubeDownloader(PlatformDownloader):
@@ -22,7 +24,7 @@ class YoutubeDownloader(PlatformDownloader):
         return f"bv*{h}[ext=mp4]+ba[ext=m4a]/b{h}[ext=mp4]/bv*{h}+ba/b{h}/bv*+ba/b"
 
     def download_raw_chat(self, info: VideoInfo, out_dir: Path) -> Path:
-        path = out_dir / f"{info.stem}.live_chat.json"
+        path = out_dir / artifact_name(info.stem, Artifact.RAW_CHAT, self.platform)
         if path.exists():
             return path
         try:

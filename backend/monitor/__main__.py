@@ -12,6 +12,8 @@ import logging
 import sys
 from pathlib import Path
 
+from backend.state_file import StateFileError
+
 from . import LiveState, StreamMonitor, Streamer, StreamStatus
 from .roster import load_roster
 
@@ -71,9 +73,14 @@ async def main() -> int:
             print(f"{ts}  {fmt(new)}", flush=True)
 
         from backend.downloader.auto import attach  # lazy: imports this package
+        from backend.notify.incidents import IncidentAlerts
+        from backend.state_file import set_incident_hook
 
         mon.on_change.append(on_change)
+        alerts = IncidentAlerts()
+        set_incident_hook(alerts)  # a damaged runtime state file -> operator alert
         notifier, auto = attach(args.config, mon)
+        alerts.start(notifier)
         names = ", ".join(n.name for n in notifier.notifiers) if notifier else ""
         print(f"Monitoring {len(streamers)} streamer(s) every {args.interval or interval:g}s. "
               f"Notify: {names or 'off'}. Auto-download: {'on' if auto else 'off'}. Ctrl+C to stop.")
@@ -83,6 +90,7 @@ async def main() -> int:
         finally:
             if auto_task:
                 auto_task.cancel()
+            alerts.stop()
             if notifier:
                 await notifier.aclose()
     return 0
@@ -94,3 +102,6 @@ if __name__ == "__main__":
         sys.exit(asyncio.run(main()))
     except KeyboardInterrupt:
         pass
+    except StateFileError as e:  # damaged operator data: one readable line, no traceback
+        print(e.message, file=sys.stderr)
+        sys.exit(1)

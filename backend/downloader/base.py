@@ -22,6 +22,7 @@ from urllib.parse import unquote
 import yt_dlp
 from yt_dlp.utils import DownloadError as YtdlpError
 
+from backend.archive import Artifact, artifact_name, name_archive
 from backend.monitor import Streamer
 
 from .chat_clean import clean_chat
@@ -78,13 +79,14 @@ class VideoInfo:
 
     @property
     def stem(self) -> str:
-        """File name without extension: `[20261105][柊優花] title`."""
-        return safe_name(f"[{self.date}][{self.creator}] {self.title}")
+        """File name without extension: `[20261105][柊優花] title` (named by the Archive module)."""
+        return name_archive(self.creator, self.date, self.title)[1]
 
     @property
     def folder(self) -> Path:
-        """Relative output folder: `<creator>/<date>/<title>`."""
-        return Path(safe_name(self.creator), self.date, safe_name(self.title))
+        """The archive folder relative to the downloads root: `<creator>/<date>/<title>` (named by
+        the Archive module)."""
+        return name_archive(self.creator, self.date, self.title)[0]
 
 
 @dataclass
@@ -99,13 +101,6 @@ class DownloadResult:
     @property
     def ok(self) -> bool:
         return not self.errors
-
-
-def safe_name(name: str, max_len: int = 150) -> str:
-    """Make `name` safe as a Windows / Linux file or folder name."""
-    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name)
-    name = " ".join(name.split()).strip(" .")
-    return name[:max_len].rstrip(" .") or "_"
 
 
 class PlatformDownloader(ABC):
@@ -138,7 +133,7 @@ class PlatformDownloader(ABC):
     def download_video(
         self, info: VideoInfo, out_dir: Path, progress: Callable[[dict[str, Any]], None] | None = None
     ) -> Path:
-        path = out_dir / f"{info.stem}.mp4"
+        path = out_dir / artifact_name(info.stem, Artifact.VIDEO)
         if path.exists():
             log.info("video already exists, skipping: %s", path.name)
             return path
@@ -152,8 +147,8 @@ class PlatformDownloader(ABC):
         return path
 
     def download_chat(self, info: VideoInfo, out_dir: Path) -> Path:
-        """Download the chat replay, clean it, and return the cleaned file
-        (`<stem>.chat_parsed.json`). The raw file stays next to it."""
+        """Download the chat replay, clean it, and return the cleaned chat's file.
+        The raw file stays next to it."""
         raw = self.download_raw_chat(info, out_dir)
         try:
             return clean_chat(raw)

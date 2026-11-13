@@ -7,7 +7,8 @@ import subprocess
 import httpx
 import pytest
 
-from backend.asr import ASRError, ASRSettings, transcribe, transcript_path
+from backend.archive import Archive, Artifact
+from backend.asr import ASRError, ASRSettings, transcribe
 
 needs_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
 
@@ -48,7 +49,7 @@ def test_transcribe_writes_transcript_next_to_video(tmp_path):
 
     out = transcribe(video, ASRSettings(), client=whisper.client())
 
-    assert out == tmp_path / "[20261110][A] title.transcript.json" == transcript_path(video)
+    assert out == tmp_path / "[20261110][A] title.transcript.json"
     assert json.loads(out.read_text(encoding="utf-8")) == [
         {"start": 0.78, "end": 3.78, "text": "めっちゃ味するよ!"},
         {"start": 3.78, "end": 6.38, "text": "コメントは"},
@@ -67,7 +68,7 @@ def test_whisper_error_raises_and_writes_nothing(tmp_path):
                           base_url="http://whisper:8000")
     with pytest.raises(ASRError, match="500"):
         transcribe(video, ASRSettings(), client=client)
-    assert not transcript_path(video).exists()
+    assert not Archive.from_video(video).has(Artifact.TRANSCRIPT)
 
 
 def test_unreadable_video_raises(tmp_path):

@@ -104,6 +104,15 @@ curl -sv https://<公网IP> -o /dev/null 2>&1 | grep -E "subject|expire|issuer"
 push 到 main 后，CI 通过就会自动部署。
 也可以在 GitHub → Actions → Deploy → Run workflow 手动部署当前的 main。
 
+重启之前，部署会先用新版本的代码把服务器上的状态文件读一遍（只读，不改任何文件）。出现下面任一情况，部署就停在这一步，服务器继续跑旧版本：
+
+- 有状态文件新版本读不了：名单、用户、QQ 群订阅会让新版本拒绝启动；队列、直播状态、通知记录、登录会话会被新版本备份后清空。日志里会写出是哪个文件和原因。
+- 下载队列里还有任务。等处理完，再到 Actions → Deploy → Run workflow 重新部署；急着部署就勾上 `force`，只跳过这一项检查。
+
+想在服务器上手动检查：`docker compose run --rm --no-deps -T kiri /app/.venv/bin/python -m backend.check_state`。
+
+合并之前想先看 CI 结果：把分支 push 上去开一个 draft PR。CI 会跑，不会部署。
+
 ## 日常操作（在服务器上）
 
 ```sh

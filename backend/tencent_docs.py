@@ -46,6 +46,7 @@ from typing import Any
 import httpx
 from dotenv import load_dotenv
 
+from backend.archive import Archive, Artifact, file_date, read_file
 from backend.sheet import (HEAD_COLOR, HEAD_FONT_COLOR, HEADER, HIGH_CHAT_COLOR, HOT_COLOR, WIDTHS, cells,
                            score_style)
 
@@ -53,7 +54,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 MCP_URL = "https://docs.qq.com/openapi/mcp"
 TOKEN_PAGE = "https://docs.qq.com/open/auth/mcp.html"
 SHEET_URL = "https://docs.qq.com/sheet/{file_id}?tab={sheet_id}"
-HIGHLIGHTS_SUFFIX = ".highlights.json"
 TOKEN_ENV = "TENCENT_DOCS_MCP_TOKEN"
 
 NEW_SHEET_ROWS = 200  # rows Tencent gives a new sheet
@@ -292,23 +292,15 @@ def upload_table(table: dict[str, Any], settings: TencentSettings, *, sheet_titl
 
 
 def find_table(path: Path) -> Path:
-    """The .highlights.json itself, or the one inside an archive folder."""
+    """The highlight table file itself, or the archive's highlight table when `path` is an archive folder."""
     if path.is_dir():
-        found = next((f for f in sorted(path.iterdir()) if f.name.endswith(HIGHLIGHTS_SUFFIX)), None)
+        found = Archive.from_folder(path).file(Artifact.HIGHLIGHTS)
         if not found:
-            raise TencentDocsError(f"no *{HIGHLIGHTS_SUFFIX} in {path}")
+            raise TencentDocsError(f"no *{Artifact.HIGHLIGHTS.suffixes[0]} in {path}")
         return found
     if not path.is_file():
         raise TencentDocsError(f"not found: {path}")
     return path
-
-
-def archive_date(file: Path) -> str:
-    """YYYYMMDD from downloads/<creator>/<YYYYMMDD>/<title>/, or the `[YYYYMMDD]` file name prefix."""
-    if re.fullmatch(r"\d{8}", file.parent.parent.name):
-        return file.parent.parent.name
-    m = re.match(r"\[(\d{8})\]", file.name)
-    return m.group(1) if m else ""
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -327,8 +319,8 @@ def main(argv: list[str] | None = None) -> int:
             raise TencentDocsError(f"not a Tencent Docs spreadsheet link or id: {args.sheet}")
         settings = dataclasses.replace(load_credentials(args.config), file_id=file_id)
         file = find_table(args.path)
-        table = json.loads(file.read_text(encoding="utf-8"))
-        url = upload_table(table, settings, sheet_title=args.title or sheet_title(table, archive_date(file)))
+        table = read_file(file, Artifact.HIGHLIGHTS)
+        url = upload_table(table, settings, sheet_title=args.title or sheet_title(table, file_date(file)))
     except (TencentDocsError, ValueError) as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1

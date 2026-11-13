@@ -5,7 +5,8 @@ import re
 
 import pytest
 
-from backend.translate import TranslateError, TranslateSettings, translate, zh_path
+from backend.archive import Archive, Artifact
+from backend.translate import TranslateError, TranslateSettings, translate
 
 
 def make_transcript(tmp_path, n):
@@ -41,7 +42,7 @@ def test_translates_every_line_in_groups(tmp_path):
     llm = FakeLLM()
     out = translate(video, llm, TranslateSettings(group=80, context=5))
 
-    assert out == zh_path(video) == tmp_path / "[20261111][A] t.zh.transcript.json"
+    assert out == tmp_path / "[20261111][A] t.zh.transcript.json"
     zh = json.loads(out.read_text(encoding="utf-8"))
     assert [s["text"] for s in zh] == [f"中文{i}" for i in range(200)]
     assert [(s["start"], s["end"]) for s in zh] == [(float(i), i + 0.9) for i in range(200)]  # same timing
@@ -90,7 +91,7 @@ def test_nothing_usable_fails(tmp_path):
     video = make_transcript(tmp_path, 10)
     with pytest.raises(TranslateError):
         translate(video, FakeLLM(junk_first=99), TranslateSettings(retries=2))
-    assert not zh_path(video).exists()
+    assert not Archive.from_video(video).has(Artifact.CHINESE_TRANSCRIPT)
 
 
 def test_no_transcript_fails(tmp_path):

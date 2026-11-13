@@ -1,18 +1,4 @@
 {
-  "model": "${OPENAI_MODEL}",
-  "base_url": "${OPENAI_BASE_URL}",
-  "api_key_env": "OPENAI_API_KEY",
-  "max_tokens": 4096,
-  "temperature": 0.7,
-  "max_steps": 40,
-  "request_timeout": 600,
-  "default_agent": "main",
-  "agents": {
-    "main": {
-      "prompt": "main.md",
-      "tools": "*"
-    }
-  },
   "auth": { "enabled": true },
   "monitor": {
     "interval": 60,

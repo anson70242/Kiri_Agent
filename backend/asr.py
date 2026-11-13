@@ -2,7 +2,7 @@
 
     from backend.asr import ASRSettings, transcribe
     transcribe(Path("downloads/.../[20261110][A] title.mp4"), ASRSettings())
-    # -> "[20261110][A] title.transcript.json" next to the video
+    # -> the transcript artifact next to the video (named by backend.archive)
 
 The audio track is extracted with ffmpeg (16 kHz mono Opus, ~30 MB for 4 h) and sent
 whole to `POST /transcribe/full` (Japanese, VAD on). Output, one segment per line:
@@ -18,7 +18,6 @@ whole to `POST /transcribe/full` (Japanese, VAD on). Output, one segment per lin
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import subprocess
 import sys
@@ -29,8 +28,9 @@ from typing import Any
 
 import httpx
 
+from backend.archive import Archive, Artifact
+
 log = logging.getLogger(__name__)
-SUFFIX = ".transcript.json"
 
 
 @dataclass
@@ -46,17 +46,12 @@ class ASRError(Exception):
     """Audio extraction or the whisper request failed."""
 
 
-def transcript_path(video: Path) -> Path:
-    return video.with_name(video.name.removesuffix(video.suffix) + SUFFIX)
-
-
 def transcribe(video: Path, settings: ASRSettings, client: httpx.Client | None = None) -> Path:
-    """Transcribe `video` and write `<stem>.transcript.json` next to it."""
-    out = transcript_path(video)
+    """Transcribe `video` and save its transcript in its archive, next to it."""
     with tempfile.TemporaryDirectory() as tmp:
         audio = extract_audio(video, Path(tmp) / "audio.ogg", settings.ffmpeg)
         segments = request_segments(audio, settings, client)
-    write_segments(segments, out)
+    out = Archive.from_video(video).save(Artifact.TRANSCRIPT, segments)
     log.info("transcribed %s: %d segments", video.name, len(segments))
     return out
 
@@ -95,13 +90,6 @@ def request_segments(audio: Path, settings: ASRSettings, client: httpx.Client | 
         for s in raw
         if (text := str(s.get("text") or "").strip())
     ]
-
-
-def write_segments(segments: list[dict[str, Any]], out: Path) -> None:
-    body = ",\n".join("  " + json.dumps(s, ensure_ascii=False) for s in segments)
-    tmp = out.with_name(out.name + ".part")
-    tmp.write_text(f"[\n{body}\n]\n" if segments else "[]\n", encoding="utf-8")
-    tmp.replace(out)
 
 
 def main() -> int:

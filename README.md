@@ -33,18 +33,7 @@ cp .env.example .env      # 再填入要用到的值
 需要 Python 3.13+、[uv](https://docs.astral.sh/uv/) 和 ffmpeg（下载用）。
 要跑浏览器测试的话，先装一次：`uv run playwright install chromium`。
 
-## Agent
-
-[backend/agents/agent.py](backend/agents/agent.py) 是 LLM 这一侧，基于 OpenAI Agents SDK，
-走 chat completions API，所以任何兼容 OpenAI 的端点都能用（OpenAI、本地的 llama.cpp / vLLM /
-Ollama……）。目前还只是骨架。在 `.env` 设定 `OPENAI_BASE_URL`、`OPENAI_API_KEY`、`OPENAI_MODEL`：
-
-```sh
-uv run backend/agents/agent.py "hello"     # 问一次
-uv run backend/agents/agent.py             # 互动模式
-```
-
-### LLM 代理
+## LLM 代理
 
 分析用的 LLM 设定在 `config.json` → `llm`（`base_url`、`model`、`api_key_env`、`proxy`），
 见 [backend/llm.py](backend/llm.py)。`"proxy": true` 时，只有 LLM 请求会经过 `LLM_PROXY`：
@@ -301,7 +290,9 @@ uv run -m backend.monitor.server --dev --reload    # http://127.0.0.1:8770
 ## 测试
 
 ```sh
-uv run pytest                          # 全部离线测试（约 50 秒）
+uv run pytest                          # 离线测试，跳过慢的压力测试（约 50 秒）
+uv run pytest -m "not network"         # 全部离线测试，CI 跑的就是这个
+uv run ruff check                      # 检查没用到的 import 和变量
 uv run pytest -m network -s            # 连真实的 YouTube / Twitch 检查
 STRESS_SEEDS=1000 uv run pytest tests/test_random_sequences.py   # 更长的压力测试
 ```

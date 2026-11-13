@@ -22,6 +22,7 @@ from typing import Any
 import httpx
 import yt_dlp
 
+from backend.archive import DOWNLOADING_SUFFIX, Artifact, artifact_name
 from backend.monitor.base import USER_AGENT
 
 from .base import DownloadError, PlatformDownloader, VideoInfo, make_cookie
@@ -77,7 +78,7 @@ class TwitchDownloader(PlatformDownloader):
     def download_raw_chat(self, info: VideoInfo, out_dir: Path) -> Path:
         if info.extractor != "TwitchVod":
             raise DownloadError("chat replay is only available for VODs, not clips")
-        path = out_dir / f"{info.stem}.chat.json"
+        path = out_dir / artifact_name(info.stem, Artifact.RAW_CHAT, self.platform)
         if path.exists():
             return path
         headers = {"Client-ID": CLIENT_ID, "User-Agent": USER_AGENT}
@@ -95,7 +96,7 @@ class TwitchDownloader(PlatformDownloader):
             },
             "comments": comments,
         }
-        tmp = path.with_name(path.name + ".part")
+        tmp = path.with_name(path.name + DOWNLOADING_SUFFIX)
         tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
         tmp.replace(path)
         return path

@@ -2,15 +2,22 @@
 
 from __future__ import annotations
 
-import json
 import logging
-import os
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from backend.state_file import StateFile
+
 log = logging.getLogger(__name__)
+
+
+def decode_history(raw: Any) -> list[dict[str, Any]]:
+    """The history file's JSON -> entries; raises if it isn't a list of entries."""
+    if not isinstance(raw, list) or not all(isinstance(e, dict) for e in raw):
+        raise ValueError("expected a list of entries")
+    return raw
 
 
 class NotifyHistory:
@@ -19,24 +26,18 @@ class NotifyHistory:
     def __init__(self, path: Path | None = None, keep: int = 50):
         self.path, self.keep = path, keep
         self._lock = threading.Lock()
-        self._entries: list[dict[str, Any]] = []
-        if path and path.exists():
-            try:
-                self._entries = json.loads(path.read_text(encoding="utf-8"))[:keep]
-            except (OSError, ValueError):
-                log.exception("could not read %s; starting empty", path)
+        # Runtime state: a damaged file is set aside as a backup (the owner is alerted).
+        self._store = StateFile(path, default=list, policy="recover", decode=decode_history) if path else None
+        self._entries: list[dict[str, Any]] = self._store.load()[:keep] if self._store else []
 
     def add(self, channel: str, target: str, summary: str, ok: bool, error: str = "") -> None:
         entry = {"at": datetime.now(timezone.utc).isoformat(), "channel": channel, "target": target,
                  "summary": summary[:200], "ok": ok, "error": error[:300]}
         with self._lock:
             self._entries = [entry, *self._entries][: self.keep]
-            if self.path:
+            if self._store:
                 try:
-                    self.path.parent.mkdir(parents=True, exist_ok=True)
-                    tmp = self.path.with_suffix(".tmp")
-                    tmp.write_text(json.dumps(self._entries, ensure_ascii=False, indent=1), encoding="utf-8")
-                    os.replace(tmp, self.path)
+                    self._store.save(self._entries)
                 except OSError:
                     log.exception("could not save %s", self.path)
 

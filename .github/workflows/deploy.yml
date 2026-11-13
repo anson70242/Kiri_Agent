@@ -8,6 +8,11 @@ on:
     types: [completed]
     branches: [main]
   workflow_dispatch:
+    inputs:
+      force:
+        description: Deploy even while the download queue still holds jobs
+        type: boolean
+        default: false
 
 # One deploy at a time; a newer one waits instead of interrupting a running one.
 concurrency:
@@ -61,6 +66,20 @@ jobs:
             --exclude '.env' --exclude 'data/' --exclude 'tests/' \
             --exclude '__pycache__/' --exclude '.pytest_cache/' \
             ./ "server:$APP_DIR/"
+
+      # The new image reads the server's state files before anything restarts. It is a dry
+      # run (backend.check_state): nothing on disk changes. The deploy stops here, with the
+      # old version still running, when a state file would be refused or set aside by the
+      # new code, or while streams are still being processed. "Run workflow" with force
+      # skips only the queue check.
+      - name: Check state files and the download queue
+        env:
+          IDLE: ${{ inputs.force && ' ' || '--require-idle' }}
+        run: |
+          ssh server "cd '$APP_DIR' && \
+            docker compose build kiri && \
+            docker compose run --rm --no-deps -T kiri \
+              /app/.venv/bin/python -m backend.check_state $IDLE"
 
       - name: Build and restart
         run: |

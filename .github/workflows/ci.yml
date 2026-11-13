@@ -25,6 +25,10 @@ jobs:
       - name: Install Python and dependencies
         run: uv sync --locked
 
+      # Unused imports and names, undefined names (the rules are in pyproject.toml).
+      - name: Lint
+        run: uv run ruff check
+
       # No Chromium here: the browser tests (tests/test_monitor_page.py) skip themselves
       # and run locally (`uv run playwright install chromium` once).
 
@@ -33,7 +37,7 @@ jobs:
 
       # Network tests (real YouTube / Twitch) are skipped by default; see pyproject.toml.
       - name: Run tests
-        run: uv run pytest -q
+        run: uv run pytest -q -m "not network"
 
   docker:
     # Catches a broken Dockerfile before it reaches the server.
@@ -60,3 +64,14 @@ jobs:
           done
           docker logs kiri-ci
           exit 1
+
+      # What deploy.yml does on the server before it restarts anything: with the service up
+      # under its fixed container name, a one-off container of the same image reads the
+      # state files (none here) and finds the download queue idle.
+      - name: Deploy check runs beside the live container
+        run: |
+          docker rm -f kiri-ci
+          docker compose up -d --no-deps kiri
+          docker compose run --rm --no-deps -T kiri \
+            /app/.venv/bin/python -m backend.check_state --require-idle
+          docker compose down

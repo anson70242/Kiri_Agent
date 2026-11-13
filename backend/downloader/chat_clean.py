@@ -1,13 +1,13 @@
 """Turn a raw chat replay into a short, uniform list for reading and LLM prompts.
 
-Output (`<stem>.chat_parsed.json`, AutoKiri's layout, one message per line):
+The result is the chat artifact (saved by backend.archive in AutoKiri's layout, one message per line):
 
     [
       {"time": "00:12:34", "user": "Bob", "msg": "こんゆかし〜"},
       {"time": "00:15:00", "user": "@spica_v", "msg": "おめでとう", "sc": "¥100"}
     ]
 
-`time` is the offset from the start of the VOD. `sc` only appears on YouTube paid
+`time` is the offset from the start of the video. `sc` only appears on YouTube paid
 messages (Super Chat / Super Sticker). Messages without any text are dropped.
 Custom emotes are kept as their name (`:_chu:`, `Kappa`), standard emoji as the emoji.
 """
@@ -18,6 +18,8 @@ import json
 import logging
 from pathlib import Path
 from typing import Any
+
+from backend.archive import Archive, Artifact, raw_chat_platform
 
 log = logging.getLogger(__name__)
 
@@ -127,30 +129,17 @@ def parse_twitch(path: Path) -> list[ChatLine]:
 
 # ---- files ----
 
-PARSERS = {".live_chat.json": parse_youtube, ".chat.json": parse_twitch}
-PARSED_SUFFIX = ".chat_parsed.json"
-
-
-def parsed_path(raw: Path) -> Path:
-    """`<stem>.live_chat.json` / `<stem>.chat.json` -> `<stem>.chat_parsed.json`."""
-    for suffix in PARSERS:
-        if raw.name.endswith(suffix):
-            return raw.with_name(raw.name.removesuffix(suffix) + PARSED_SUFFIX)
-    raise ValueError(f"not a raw chat file: {raw.name}")
+PARSERS = {"youtube": parse_youtube, "twitch": parse_twitch}  # platform -> its raw chat's parser
 
 
 def clean_chat(raw: Path) -> Path:
-    """Parse a raw chat file (type from its suffix) and write `<stem>.chat_parsed.json`."""
-    out = parsed_path(raw)
-    parser = next(p for s, p in PARSERS.items() if raw.name.endswith(s))
-    lines = parser(raw)
-    write_lines(lines, out)
+    """Parse a raw chat file (type from its suffix) and save the cleaned chat in its archive,
+    named after the raw chat. Raises ValueError for a file that is not a raw chat."""
+    platform = raw_chat_platform(raw.name)
+    if platform is None:
+        raise ValueError(f"not a raw chat file: {raw.name}")
+    archive = Archive.from_file(raw)
+    lines = PARSERS[platform](raw)
+    out = archive.save(Artifact.CHAT, lines)
     log.info("chat cleaned: %d messages -> %s", len(lines), out.name)
     return out
-
-
-def write_lines(lines: list[ChatLine], out: Path) -> None:
-    body = ",\n".join("  " + json.dumps(line, ensure_ascii=False) for line in lines)
-    tmp = out.with_name(out.name + ".part")
-    tmp.write_text(f"[\n{body}\n]\n" if lines else "[]\n", encoding="utf-8")
-    tmp.replace(out)

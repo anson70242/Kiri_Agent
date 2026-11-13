@@ -2,7 +2,7 @@
 
     from backend.analysis import analyze
     analyze(video, complete, streamer="鹿乃まほろ", title="...")
-    # -> "<stem>.highlights.json" next to the video
+    # -> the highlight table artifact next to the video
 
 Passes (AutoKiri's clip_highlight, adapted):
 1. Every 5-minute segment (with 30 s of context each side): transcript + a chat digest
@@ -26,16 +26,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from backend.archive import Archive, ArtifactMissing, Artifact
+
 log = logging.getLogger(__name__)
 
 BOTS = {"nightbot", "streamelements", "moobot", "fossabot", "streamlabs"}
-SUFFIX = ".highlights.json"
 TYPES = "笑点、可爱、感人、高能/神操作、事故、唱歌、重大发表、闲聊"
 
 # A chat completion: messages -> reply text (backend.llm.chat with settings bound).
 Complete = Callable[[list[dict[str, str]]], str]
 
-SEGMENT_SYSTEM = f"""# Role
+SEGMENT_SYSTEM = """# Role
 你是专属的中文 B 站字幕组金牌运营助手，对日本虚拟主播（VTuber）有骨灰级了解。
 你的任务：以“切片机”般的精度，无遗漏地记录直播内容，供剪辑组挑选切片。
 
@@ -56,8 +57,8 @@ SEGMENT_SYSTEM = f"""# Role
 4. CP / 社死雷达持续生效：主播之间的互动、口误、社死瞬间要写清楚。
 
 # Output（只输出 JSON）
-{{"timeline": [{{"start": "HH:MM:SS", "end": "HH:MM:SS", "topic": "话题分类",
-  "title": "【短标题】", "detail": "用中文具体描述发生了什么，包括动作和情绪变化"}}]}}
+{"timeline": [{"start": "HH:MM:SS", "end": "HH:MM:SS", "topic": "话题分类",
+  "title": "【短标题】", "detail": "用中文具体描述发生了什么，包括动作和情绪变化"}]}
 - topic：2–8 个汉字的简体中文分类词，不是句子，不用日语。例：开场、教程关卡、FPS杂谈、读SC、宠物杂谈、游戏事故、闭幕。
 - title：【】括起来的简短中文标题；detail 才写具体经过。"""
 
@@ -176,14 +177,6 @@ def build_segments(
 
 # ---- the passes ----
 
-def highlights_path(video: Path) -> Path:
-    return video.with_name(video.name.removesuffix(video.suffix) + SUFFIX)
-
-
-def sibling(video: Path, suffix: str) -> Path:
-    return video.with_name(video.name.removesuffix(video.suffix) + suffix)
-
-
 def analyze(
     video: Path,
     complete: Complete,
@@ -191,15 +184,15 @@ def analyze(
     title: str = "",
     settings: AnalysisSettings | None = None,
 ) -> Path:
-    """Analyze a downloaded stream (needs its `.transcript.json`; chat is optional) and
-    write `<stem>.highlights.json` next to the video."""
+    """Analyze the archive `video` belongs to (needs its transcript; chat is optional) and
+    save the highlight table in it, next to the video."""
     s = settings or AnalysisSettings()
-    transcript_file = sibling(video, ".transcript.json")
-    if not transcript_file.exists():
-        raise AnalysisError(f"no transcript for {video.name}")
-    transcript = json.loads(transcript_file.read_text(encoding="utf-8"))
-    chat_file = sibling(video, ".chat_parsed.json")
-    chat = json.loads(chat_file.read_text(encoding="utf-8")) if chat_file.exists() else []
+    archive = Archive.from_video(video)
+    try:
+        transcript = archive.read_transcript()
+    except ArtifactMissing:
+        raise AnalysisError(f"no transcript for {video.name}") from None
+    chat = archive.read(Artifact.CHAT) if archive.has(Artifact.CHAT) else []
     if s.limit_seconds:
         transcript = [x for x in transcript if x["start"] < s.limit_seconds]
         chat = [m for m in chat if seconds(m["time"]) < s.limit_seconds]
@@ -236,11 +229,8 @@ def analyze(
             "chat_level": level,
         })
 
-    out = highlights_path(video)
     data = {"streamer": streamer, "title": title, "segment_seconds": s.seg_seconds, "rows": rows}
-    tmp = out.with_name(out.name + ".part")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
-    tmp.replace(out)
+    out = archive.save(Artifact.HIGHLIGHTS, data)
     log.info("analysis done: %s (%d segments)", out.name, len(rows))
     return out
 
