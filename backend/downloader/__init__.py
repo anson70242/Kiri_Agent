@@ -1,4 +1,4 @@
-"""VOD + chat replay downloader (YouTube, Twitch, TwitCasting). Importing a platform module registers it.
+"""Replay and chat downloader (YouTube, Twitch, TwitCasting). Importing a platform module registers it.
 
     from backend.downloader import download, load_settings
     settings, streamers = load_settings(Path("config.json"))

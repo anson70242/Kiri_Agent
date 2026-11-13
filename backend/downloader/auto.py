@@ -19,8 +19,8 @@ config.json:
     }}
 
 Rules:
-- Not ready yet (YouTube still processing, Twitch archive not listed): retried every
-  `retry_minutes` until `give_up_hours` after the stream ended, then a failure message.
+- Not ready yet (YouTube still processing, Twitch replay not listed): retried every
+  `retry_minutes` until `give_up_hours` after the live ended, then a failure message.
 - Replay not published (TwitCasting): a live shorter than SHORT_LIVE is dropped at once,
   without a message. A longer one (or one whose length is not known) gets one notice,
   then is retried like "not ready yet" and dropped at `give_up_hours` without a message.
