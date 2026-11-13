@@ -10,11 +10,11 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from . import discord  # noqa: F401  (registers each Notifier)
-from .base import EventKind, LiveNotifier, Notifier, PermanentNotifyError, StreamEvent
+from .base import EventKind, Link, LiveNotifier, Notifier, PermanentNotifyError, StreamEvent
 from .history import NotifyHistory
 from .qq import QQGroups, QQNotifier, QQSettings
 
-__all__ = ["EventKind", "LiveNotifier", "Notifier", "PermanentNotifyError", "StreamEvent", "load_notifier"]
+__all__ = ["EventKind", "Link", "LiveNotifier", "Notifier", "PermanentNotifyError", "StreamEvent", "load_notifier"]
 
 log = logging.getLogger(__name__)
 REPO_ROOT = Path(__file__).resolve().parents[2]

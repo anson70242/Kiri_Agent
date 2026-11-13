@@ -23,9 +23,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-import re
 import struct
 import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -33,6 +33,7 @@ from typing import Any
 
 import httpx
 
+from backend.monitor import StreamStatus
 from backend.state_file import StateFile, expect_list
 
 from .base import EventKind, Notifier, StreamEvent
@@ -46,6 +47,9 @@ LOCAL_TZ = timezone(timedelta(hours=8))  # the group lives in China / Hong Kong 
 DEFAULT_KINDS = ["live", "offline", "ready", "uploaded"]  # editors start once everything is ready
 MEDIA_PREFIX = "kiri-"
 LIBRARY_FULL = 40035007
+# Lives whose uploaded cover is kept for reuse. Well under the library's 100: our oldest
+# covers are deleted when it fills, so an older reference may point at nothing.
+COVERS_KEPT = 20
 
 FOOTER_LIVE = "切片小助手 直播通知"
 FOOTER_DOWNLOAD = "切片小助手 自动下载"
@@ -64,6 +68,9 @@ PIPELINE = {
     EventKind.UPLOAD_FAILED: ("❗", "路灯表上传腾讯文档失败", FOOTER_HIGHLIGHTS),
     EventKind.READY: ("✅", "全部处理完成", FOOTER_DOWNLOAD),
 }
+# The messages that show the live's cover. The other pipeline messages stay text: a cover
+# on every message of one live would flood the group.
+COVER_KINDS = {EventKind.LIVE, EventKind.DOWNLOADED, EventKind.READY}
 KIND_LABELS = {"live": "开播", "offline": "下播", "downloaded": "录播已下载", "replay_unpublished": "回放未公开",
                "prune_failed": "旧录播没能删除", "uploaded": "上传完成",
                "analyzed": "路灯表已生成", "download_failed": "下载失败", "transcribe_failed": "转写失败",
@@ -158,8 +165,15 @@ class QQGroups:
 # ---- messages ----
 
 def escape(text: str) -> str:
-    """Plain text inside QQ markdown."""
-    return re.sub(r"([\\*_\[\]`~#>|])", r"\\\1", text or "")
+    """Plain text inside QQ markdown, shown as that text. QQ's markdown cannot be trusted
+    with backslash escapes (`\\[ ... \\]` renders as a display-math block, `\\`` as a lone
+    backtick), so the characters that start markdown or math become their full-width
+    forms instead, and backticks (code formatting meant for Discord) are dropped."""
+    return (text or "").translate(PLAIN_TEXT)
+
+
+PLAIN_TEXT = str.maketrans({"\\": "＼", "[": "［", "]": "］", "*": "＊", "_": "＿", "~": "～", "#": "＃",
+                            ">": "＞", "|": "｜", "$": "＄", "`": None})
 
 
 def link(url: str) -> str:
@@ -189,13 +203,12 @@ def image_size(data: bytes) -> tuple[int, int] | None:
 
 
 def message(event: StreamEvent, cover: str | None = None) -> str:
-    """The markdown text of one event. `cover`: a qqbot-media markdown image line."""
+    """The markdown text of one event. `cover`: a qqbot-media markdown image line, put
+    right after the headline."""
     s = event.status
     name, title = escape(s.streamer.name), escape(s.title or "")
     if event.kind is EventKind.LIVE:
         lines = [f"🔴 **{name}** 开播了！"]
-        if cover:
-            lines.append(cover)
         lines += [f"{name} · {s.streamer.platform}", title]
         info = []
         if s.viewers is not None:
@@ -215,10 +228,26 @@ def message(event: StreamEvent, cover: str | None = None) -> str:
     else:
         icon, verb, footer = PIPELINE[event.kind]
         lines = [f"{icon} **{name}** {verb}", title]
-        for line in (event.detail or "").splitlines():
-            lines.append(link(line.strip()) if re.fullmatch(r"https?://\S+", line.strip()) else escape(line))
+        lines += [escape(line) for line in (event.detail or "").splitlines()]
+        lines += [f"[{escape(x.label)}]({x.url})" for x in event.links]
         lines.append(footer)
+    if cover:
+        lines.insert(1, cover)
     return "\n".join(line for line in lines if line)
+
+
+@dataclass
+class Cover:
+    """A live's cover uploaded to the bot's media library."""
+
+    data: bytes  # the image, to upload it again if QQ refuses the reference
+    line: str  # the markdown image line with its qqbot-media:// reference
+
+
+def live_key(status: StreamStatus) -> tuple[str, str] | None:
+    """What a live's cover is remembered by; None when the platform gave no stream id
+    (then every message fetches the cover itself)."""
+    return (status.streamer.id, status.stream_id) if status.stream_id else None
 
 
 # ---- API ----
@@ -301,20 +330,32 @@ class QQNotifier(Notifier):
         self.api = QQApi(settings, self.client)
         self.history = history or NotifyHistory()
         self.gap, self.tries = gap, tries  # seconds between groups; tries per group
+        # (streamer id, stream id) -> the live's uploaded cover, newest last; kept while
+        # the service runs, so after a restart a cover is fetched and uploaded again.
+        self._covers: OrderedDict[tuple[str, str], Cover] = OrderedDict()
 
     async def send(self, event: StreamEvent) -> None:
         targets = self.groups.targets(event)
         if not targets:
             return
-        cover = await self.cover(event.status.thumbnail) if event.kind is EventKind.LIVE else None
-        text = message(event, cover)
+        cover, reused = await self.cover(event.status) if event.kind in COVER_KINDS else (None, False)
+        text = message(event, cover.line if cover else None)
         summary = text.splitlines()[0].replace("**", "")
         for i, g in enumerate(targets):
             if i and self.gap:
                 await asyncio.sleep(self.gap)
+            if await self.deliver(g, text, summary, quiet=reused) or cover is None or not reused:
+                continue
+            # QQ may not take a reference from an earlier message (never checked live):
+            # upload the kept image again, or send the text alone.
+            log.info("qq: a reused cover was refused; uploading it again")
+            cover, reused = await self.upload_cover(live_key(event.status), cover.data), False
+            text = message(event, cover.line if cover else None)
             await self.deliver(g, text, summary)
 
-    async def deliver(self, group: dict[str, Any], text: str, summary: str) -> bool:
+    async def deliver(self, group: dict[str, Any], text: str, summary: str, quiet: bool = False) -> bool:
+        """Send to one group, retrying a little; logs and records the outcome.
+        `quiet`: a failure is neither logged nor recorded (the caller tries again)."""
         error = ""
         for attempt in range(self.tries):
             try:
@@ -327,26 +368,49 @@ class QQNotifier(Notifier):
                     break  # a rule (e.g. proactive messages off): retrying won't help
                 if attempt + 1 < self.tries:
                     await asyncio.sleep(2)
+        if quiet:
+            return False
         log.warning("qq: %s not delivered to %s: %s", summary, group.get("name") or group["openid"], error)
         self.history.add("qq", group["openid"], summary, False, error)
         return False
 
-    async def cover(self, url: str | None) -> str | None:
-        """The markdown image line for a cover, or None (then the message is text only)."""
-        if not url:
-            return None
+    async def cover(self, status: StreamStatus) -> tuple[Cover | None, bool]:
+        """The live's cover in the media library (None: the message is text only), and
+        whether it was uploaded for an earlier message. A live's cover is uploaded once
+        and reused for its later messages: by then its address may show another picture
+        (a Twitch preview shows whatever the channel shows now)."""
+        key = live_key(status)
+        if key and (known := self._covers.get(key)):
+            self._covers.move_to_end(key)
+            return known, True
+        if not status.thumbnail:
+            return None, False
         try:
-            r = await self.client.get(url, follow_redirects=True, timeout=20)
+            r = await self.client.get(status.thumbnail, follow_redirects=True, timeout=20)
             r.raise_for_status()
-            data = r.content
-            kind = "image/png" if data[:4] == b"\x89PNG" else "image/jpeg"
-            ref = await self.api.upload_image(data, kind)
+        except httpx.HTTPError as e:
+            log.warning("qq: cover not used (%s)", e)
+            return None, False
+        return await self.upload_cover(key, r.content), False
+
+    async def upload_cover(self, key: tuple[str, str] | None, data: bytes) -> Cover | None:
+        """Upload a cover's image and keep it for the live `key` (None: not kept). A
+        failed upload forgets what was kept for that live."""
+        try:
+            ref = await self.api.upload_image(data, "image/png" if data[:4] == b"\x89PNG" else "image/jpeg")
         except (QQError, httpx.HTTPError, KeyError) as e:
             log.warning("qq: cover not used (%s)", e)
+            if key:
+                self._covers.pop(key, None)
             return None
         w, h = image_size(data) or (480, 270)
         scale = min(1.0, 480 / w) if w else 1.0
-        return f"![封面 #{round(w * scale)}px #{round(h * scale)}px]({ref})"
+        cover = Cover(data, f"![封面 #{round(w * scale)}px #{round(h * scale)}px]({ref})")
+        if key:
+            self._covers[key] = cover
+            while len(self._covers) > COVERS_KEPT:
+                self._covers.popitem(last=False)
+        return cover
 
     async def aclose(self) -> None:
         await self.client.aclose()

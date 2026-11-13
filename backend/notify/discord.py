@@ -119,8 +119,12 @@ class DiscordNotifier(Notifier):
             embed["url"] = status.url
         if status.avatar:
             embed["author"]["icon_url"] = status.avatar
-        if event.detail:
-            embed["description"] = event.detail[:4000]
+        if status.thumbnail:  # small, as on "下播了"
+            embed["thumbnail"] = {"url": status.thumbnail}
+        links = "\n".join(f"[{x.label}]({x.url})" for x in event.links)  # Discord shows the label
+        detail = (event.detail or "")[:4000 - len(links) - 1]  # cut the detail, never a link
+        if text := "\n".join(part for part in (detail, links) if part):
+            embed["description"] = text
         icon, verb = PIPELINE_TEXT[event.kind]
         return {
             "content": f"{icon} **{s.name}** {verb}",
