@@ -87,14 +87,19 @@ class _Snapshot:
 
 
 def _scan(folder: Path) -> _Snapshot:
-    """Raises OSError when the folder is gone (e.g. deleted while being listed)."""
+    """Raises OSError when the folder is gone (e.g. deleted while being listed). A file that
+    goes while the folder is scanned (a `.part` or `.tmp` renamed to its final name) is
+    left out; the rest of the folder still counts."""
     folder_mtime = folder.stat().st_mtime
     entries = []
     with os.scandir(folder) as it:
         for e in it:
-            if e.is_file():
-                st = e.stat()
-                entries.append(_Entry(e.name, st.st_size, st.st_mtime, st.st_mtime_ns))
+            try:
+                if e.is_file():
+                    st = e.stat()
+                    entries.append(_Entry(e.name, st.st_size, st.st_mtime, st.st_mtime_ns))
+            except FileNotFoundError:
+                continue
     return _Snapshot(tuple(sorted(entries, key=lambda e: e.name)), folder_mtime)
 
 

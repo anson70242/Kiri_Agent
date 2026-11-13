@@ -3,6 +3,7 @@ reading, folder references, archive date."""
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import subprocess
@@ -176,6 +177,39 @@ def test_listing_skips_a_folder_that_vanishes_mid_scan(tmp_path, monkeypatch):
 
     monkeypatch.setattr(os, "scandir", racing_scandir)
     assert [a.folder for a in Downloads(root).list()] == [keep]
+
+
+class _Vanished:
+    """A directory entry whose file is gone by the time it is looked at (on Linux `stat` is a
+    real call per file; here the entry is faked, since Windows answers it from the listing)."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    def is_file(self) -> bool:
+        return True
+
+    def stat(self):
+        raise FileNotFoundError(self.name)
+
+
+def test_a_file_that_vanishes_while_its_folder_is_scanned_is_skipped(tmp_path, monkeypatch):
+    root = tmp_path / "downloads"
+    folder = sample_archive(root)
+    saving = f"{STEM}.highlights.json.tmp"  # a stage's save, renamed to its final name mid-scan
+    (folder / saving).write_text("{", encoding="utf-8")
+    real = os.scandir
+
+    @contextlib.contextmanager
+    def racing_scandir(path):
+        with real(path) as it:
+            yield [_Vanished(e.name) if e.name == saving else e for e in it]
+
+    monkeypatch.setattr(os, "scandir", racing_scandir)
+    everything = set(Artifact) - {Artifact.RAW_CHAT}
+    assert Downloads(root).open("柊優花/20261105/歌枠").present() == everything  # not "archive not found"
+    assert Archive.from_video(folder / f"{STEM}.mp4").present() == everything  # not an empty folder
+    assert [a.present() for a in Downloads(root).list()] == [everything]
 
 
 def test_an_empty_archive_folder_dates_from_the_folder(tmp_path):
