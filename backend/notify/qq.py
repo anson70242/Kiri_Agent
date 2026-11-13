@@ -55,6 +55,7 @@ PIPELINE = {
     EventKind.DOWNLOADED: ("📥", "回放已下载", FOOTER_DOWNLOAD),
     EventKind.REPLAY_UNPUBLISHED: ("⏳", "回放未公开", FOOTER_DOWNLOAD),
     EventKind.DOWNLOAD_FAILED: ("❗", "回放下载失败", FOOTER_DOWNLOAD),
+    EventKind.PRUNE_FAILED: ("⚠️", "旧录播没能删除", FOOTER_DOWNLOAD),
     EventKind.TRANSCRIBE_FAILED: ("❗", "字幕转写失败", FOOTER_DOWNLOAD),
     EventKind.TRANSLATE_FAILED: ("❗", "中文字幕翻译失败", FOOTER_DOWNLOAD),
     EventKind.ANALYZED: ("🚦", "路灯表已生成，精华段落：", FOOTER_HIGHLIGHTS),
@@ -64,7 +65,7 @@ PIPELINE = {
     EventKind.READY: ("✅", "全部处理完成", FOOTER_DOWNLOAD),
 }
 KIND_LABELS = {"live": "开播", "offline": "下播", "downloaded": "录播已下载", "replay_unpublished": "回放未公开",
-               "uploaded": "上传完成",
+               "prune_failed": "旧录播没能删除", "uploaded": "上传完成",
                "analyzed": "路灯表已生成", "download_failed": "下载失败", "transcribe_failed": "转写失败",
                "translate_failed": "翻译失败", "analyze_failed": "分析失败", "upload_failed": "上传失败",
                "ready": "全部处理完成"}

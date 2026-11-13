@@ -19,8 +19,8 @@ config.json:
     }}
 
 Rules:
-- Not ready yet (YouTube still processing, Twitch archive not listed): retried every
-  `retry_minutes` until `give_up_hours` after the stream ended, then a failure message.
+- Not ready yet (YouTube still processing, Twitch replay not listed): retried every
+  `retry_minutes` until `give_up_hours` after the live ended, then a failure message.
 - Replay not published (TwitCasting): a live shorter than SHORT_LIVE is dropped at once,
   without a message. A longer one (or one whose length is not known) gets one notice,
   then is retried like "not ready yet" and dropped at `give_up_hours` without a message.
@@ -131,6 +131,7 @@ class Outcome:
     message: str = ""
     result: DownloadResult | None = None
     pruned: list[Path] = field(default_factory=list)
+    prune_error: str = ""  # done, but deleting old archives raised this (type: message)
 
 
 class AutoDownloader:
@@ -297,9 +298,9 @@ class AutoDownloader:
             self._active["download"] = None
         try:
             pruned = self.prune(result.output_dir, self.keep.get(s.streamer.id, 6))
-        except Exception:  # noqa: BLE001 - the video is there: a failed cleanup must not fail the download
+        except Exception as e:  # noqa: BLE001 - the video is there: a failed cleanup must not fail the download
             log.exception("pruning old archives failed after downloading: %s %s", s.streamer.name, s.url)
-            pruned = []
+            return Outcome("done", result=result, prune_error=f"{type(e).__name__}: {e}")
         return Outcome("done", result=result, pruned=pruned)
 
     def attempt_transcribe(self, job: Job) -> Outcome:
@@ -441,6 +442,9 @@ class AutoDownloader:
                 ref = Downloads(self.settings.output_dir).ref(outcome.result.output_dir)
                 detail += "\n" + archive_link(self.site_url, ref)
             self._send(EventKind.DOWNLOADED, job, detail)
+            if outcome.prune_error:
+                self._send(EventKind.PRUNE_FAILED, job, "删除这位主播超出保留数量的旧录播时出错，旧录播没有删掉；"
+                           f"这场新录播不受影响。\n```{outcome.prune_error[:1500]}```")
             video = outcome.result.video if outcome.result else None
             if self.transcribe and video:
                 current.video = str(video)
@@ -493,7 +497,7 @@ class AutoDownloader:
                                f"影片和字幕都好了，但试了 {current.attempts} 次路灯表分析仍失败：\n"
                                f"```{current.last_error[:1500]}```")
                 else:
-                    self._send(EventKind.DOWNLOAD_FAILED, job, failure_detail(current))
+                    self._send(EventKind.DOWNLOAD_FAILED, job, failure_detail(current, self.settings))
                 return
         current.next_try = now + self.retry_interval
         self.save(rest + [current])
@@ -589,12 +593,13 @@ def top_segments_detail(archive: Archive, n: int = 5) -> str:
     return "\n".join(lines) or "路灯表已生成（没有打分的段落）"
 
 
-def failure_detail(job: Job) -> str:
+def failure_detail(job: Job, settings: DownloadSettings) -> str:
     text = f"试了 {job.attempts} 次仍失败：\n```{job.last_error[:1500]}```"
     error = job.last_error.lower()
     if job.status.streamer.platform == "twitcasting":
         if "login" in error:
-            text += "\n可能是 TwitCasting 的登录 cookies 过期：更新服务器上的 `data/twitcasting_cookies.txt`（见 docs/deploy.md）。"
+            text += ("\n可能是 TwitCasting 的登录 cookies 过期：更新服务器上的 "
+                     f"`{settings.twitcasting_cookies_file}`（见 docs/deploy.md）。")
         elif "not supported" in error:
             text += "\n不支持有合言葉（密码）或会员限定的 TwitCasting 直播。"
         return text

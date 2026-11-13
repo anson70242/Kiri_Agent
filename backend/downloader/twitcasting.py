@@ -55,9 +55,10 @@ def replay_url(channel: str, live_id: str) -> str:
     return f"{SITE}/{channel}/movie/{live_id}"
 
 
-def not_a_part(info: dict[str, Any], *, incomplete: bool = False) -> str | None:
-    """yt-dlp match filter refusing the parts of a replay in several parts (the entries of a
-    `multi_video` result carry a `playlist_index`; a replay in one part has none)."""
+def skip_replay_parts(info: dict[str, Any], *, incomplete: bool = False) -> str | None:
+    """yt-dlp match filter: the reason to skip an entry that is a part of a replay in several
+    parts, None to download it (the entries of a `multi_video` result carry a
+    `playlist_index`; a replay in one part has none)."""
     return "a part of a replay in several parts" if info.get("playlist_index") is not None else None
 
 
@@ -83,15 +84,21 @@ class Replay:
     message: str = ""  # the player's own message when there is no player ("This video is not published")
 
 
+def page_time(text: str | None) -> datetime | None:
+    """A time as a page's `<time datetime>` spells it (an RFC 2822 date); None when there is
+    none or it cannot be read."""
+    if not text:
+        return None
+    try:
+        return parsedate_to_datetime(text)
+    except (TypeError, ValueError):
+        return None
+
+
 def parse_replay(url: str, page: str) -> Replay:
     og_title = meta_content(page, "og:title")
     m = re.search(r'<time\b[^>]*\bdata-toggle="true"[^>]*\bdatetime="([^"]+)"', page)
-    started = None
-    if m:
-        try:
-            started = parsedate_to_datetime(m.group(1))
-        except (TypeError, ValueError):
-            started = None
+    started = page_time(m.group(1) if m else None)
     m = re.search(r'class="tw-player-empty-message"[^>]*>(.*?)</div>', page, re.S)
     message = " ".join(html.unescape(re.sub(r"<[^>]+>", " ", m.group(1))).split()) if m else ""
     account = data_attr(page, "account-type")
@@ -146,7 +153,7 @@ class TwitCastingDownloader(PlatformDownloader):
 
     def read_replay(self, url: str) -> Replay:
         """Load the replay page with the login cookies and classify it."""
-        with self.http_client() as client:
+        with self.site_client(self.login_cookies()) as client:
             try:
                 resp = client.get(url)
                 resp.raise_for_status()
@@ -154,18 +161,22 @@ class TwitCastingDownloader(PlatformDownloader):
                 raise DownloadError(f"TwitCasting replay page {url}: {e}") from e
             return parse_replay(url, resp.text)
 
-    def http_client(self) -> httpx.Client:
-        """A client carrying the TwitCasting login cookies."""
+    def site_client(self, cookies: YoutubeDLCookieJar | None = None) -> httpx.Client:
+        """A client for TwitCasting's pages, carrying `cookies` when given."""
+        return httpx.Client(
+            transport=self.transport, cookies=cookies, timeout=30, follow_redirects=True,
+            headers={"User-Agent": USER_AGENT, "Accept-Language": "en-US,en;q=0.9"},
+        )
+
+    def login_cookies(self) -> YoutubeDLCookieJar:
+        """The TwitCasting login cookies, read from the cookies file."""
         f = self.cookies_file()
         jar = YoutubeDLCookieJar(str(f))
         try:
             jar.load(ignore_discard=True, ignore_expires=True)
         except (OSError, ValueError) as e:  # http.cookiejar.LoadError is an OSError
             raise DownloadError(f"TwitCasting login missing: cannot read the cookies file {f}: {e}") from e
-        return httpx.Client(
-            transport=self.transport, cookies=jar, timeout=30, follow_redirects=True,
-            headers={"User-Agent": USER_AGENT, "Accept-Language": "en-US,en;q=0.9"},
-        )
+        return jar
 
     def cookies_file(self) -> Path:
         """The login cookies; raises the "login missing" failure when there are none."""
@@ -212,7 +223,7 @@ class TwitCastingDownloader(PlatformDownloader):
             return path
         log.info("downloading video: %s", info.url)
         hooks = {"progress_hooks": [progress]} if progress else {}
-        opts = self.video_options(outtmpl(out_dir, info.stem)) | hooks | {"match_filter": not_a_part}
+        opts = self.video_options(outtmpl(out_dir, info.stem)) | hooks | {"match_filter": skip_replay_parts}
         if self._ytdlp(info.url, opts).get("_type") == "multi_video":
             self.download_parts(info, out_dir, hooks)
         if not path.exists():
@@ -267,7 +278,7 @@ class TwitCastingDownloader(PlatformDownloader):
         replay = self.read_replay(info.url)
         if replay.started_at is None:
             raise DownloadError(f"TwitCasting replay page {info.url} has no start time, so chat cannot be timed")
-        with self.comment_client() as client:
+        with self.site_client() as client:  # the comment history is public: no cookies
             comments = fetch_comments(client, channel_id(info.channel), info.id)
         data = {
             "movie": {"id": info.id, "url": info.url, "title": replay.title or info.title,
@@ -279,13 +290,6 @@ class TwitCastingDownloader(PlatformDownloader):
         tmp.replace(path)
         log.info("chat: %d comments -> %s", len(comments), path.name)
         return path
-
-    def comment_client(self) -> httpx.Client:
-        """A client without cookies: the comment history is public."""
-        return httpx.Client(
-            transport=self.transport, timeout=30, follow_redirects=True,
-            headers={"User-Agent": USER_AGENT, "Accept-Language": "en-US,en;q=0.9"},
-        )
 
 
 COMMENT_PAGE_WAIT = 0.5  # seconds between two comment page requests
@@ -352,10 +356,7 @@ def parse_comment_page(page: str, live_id: str) -> tuple[list[tuple[datetime, di
         user = re.search(r'class="tw-comment-history-item__details__user-link"[^>]*?\bhref="/([^"]*)"[^>]*>(.*?)</a>',
                          part, re.S)
         text = re.search(r'class="tw-comment-history-item__content__text"[^>]*>(.*?)</div>', part, re.S)
-        try:
-            posted = parsedate_to_datetime(when.group(1)) if when else None
-        except (TypeError, ValueError):
-            posted = None
+        posted = page_time(when.group(1) if when else None)
         if not (cid and posted):
             log.warning("TwitCasting comment without an id or a time skipped")
             continue

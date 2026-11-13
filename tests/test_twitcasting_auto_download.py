@@ -80,7 +80,7 @@ def test_a_missing_login_gives_up_with_the_twitcasting_cookies_hint(tc):
 
     assert len(tc.site.requests) == 3  # the usual retries
     assert [e.kind for e in sent] == [EventKind.DOWNLOAD_FAILED]
-    assert "data/twitcasting_cookies.txt" in sent[0].detail
+    assert str(tc.settings.twitcasting_cookies_file) in sent[0].detail  # the configured file
     assert "youtube_cookies" not in sent[0].detail
 
 
@@ -91,7 +91,7 @@ def test_a_missing_cookies_file_gives_up_with_the_twitcasting_cookies_hint(tc):
     run_until_settled(ad, clock)
 
     assert [e.kind for e in sent] == [EventKind.DOWNLOAD_FAILED]
-    assert "data/twitcasting_cookies.txt" in sent[0].detail
+    assert str(tc.settings.twitcasting_cookies_file) in sent[0].detail
 
 
 def test_a_password_protected_live_fails_saying_it_is_not_supported(tc):

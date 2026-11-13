@@ -21,6 +21,7 @@ from backend.archive import Archive, Artifact, artifact_name, raw_chat_platform
 from backend.downloader import download
 from backend.downloader.twitcasting import TwitCastingDownloader
 
+from .helpers import bare_archive
 from .twitcasting_fakes import CHANNEL, MIKA, MOVIE, REPLAY, START, tc  # noqa: F401 (tc: fixture)
 
 COMMENTS = f"https://twitcasting.tv/{CHANNEL}/moviecomment/{MOVIE}"
@@ -230,9 +231,9 @@ def test_the_twitcasting_raw_chat_is_an_artifact_of_its_own(tmp_path):
     assert [a for a in Artifact if a.matches(name)] == [Artifact.RAW_CHAT]
     for other in ("youtube", "twitch"):
         assert raw_chat_platform(artifact_name("x", Artifact.RAW_CHAT, other)) == other
-    (tmp_path / "x.mp4").write_bytes(b"v")
-    (tmp_path / name).write_text("{}", encoding="utf-8")
-    assert Archive.from_folder(tmp_path).file(Artifact.RAW_CHAT) == tmp_path / name
+    folder = bare_archive(tmp_path, stem="x", video=b"v")
+    (folder / name).write_text("{}", encoding="utf-8")
+    assert Archive.from_folder(folder).file(Artifact.RAW_CHAT) == folder / name
 
 
 def test_the_command_line_downloads_a_replay_with_its_chat(tc, monkeypatch, capsys):

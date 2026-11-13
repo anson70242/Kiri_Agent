@@ -32,6 +32,8 @@ class EventKind(StrEnum):
     # the replay of a live is not published; it is downloaded if it appears in time
     REPLAY_UNPUBLISHED = "replay_unpublished"
     DOWNLOAD_FAILED = "download_failed"  # auto-download gave up
+    # deleting a creator's old archives after a download failed; the new archive is fine
+    PRUNE_FAILED = "prune_failed"
     TRANSCRIBE_FAILED = "transcribe_failed"  # speech-to-text of a downloaded archive gave up
     ANALYZED = "analyzed"  # 路灯表 ready (detail: the top segments)
     ANALYZE_FAILED = "analyze_failed"  # 路灯表 analysis gave up
@@ -347,8 +349,9 @@ class SavedLives:
 
     # streamer id -> current live (None: known not live); a missing key: never seen.
     live: dict[str, StreamStatus | None] = field(default_factory=dict)
-    # streamer id -> the first live of its current sitting, when the sitting has
-    # continued past it. Only for streamers that are live.
+    # streamer id -> the first live of its current sitting (the live itself until the
+    # sitting continues past it; only then is it written to the file). Only for
+    # streamers that are live.
     sittings: dict[str, StreamStatus] = field(default_factory=dict)
 
 
@@ -361,7 +364,9 @@ def decode_live_state(raw: Any) -> SavedLives:
             isinstance(v, dict) for v in sittings.values()):
         raise ValueError("expected {\"sittings\": {streamer id: status}}")
     live = {sid: StreamStatus.from_dict(v) if v else None for sid, v in streamers.items()}
-    return SavedLives(live, {sid: StreamStatus.from_dict(v) for sid, v in sittings.items() if live.get(sid)})
+    # A live streamer without an entry is in a sitting that is still its first live.
+    return SavedLives(live, {sid: StreamStatus.from_dict(sittings[sid]) if sid in sittings else current
+                             for sid, current in live.items() if current is not None})
 
 
 def encode_live_state(saved: SavedLives) -> dict[str, Any]:
