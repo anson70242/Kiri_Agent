@@ -1,5 +1,6 @@
-"""A sitting survives a restart: after the service restarts in the middle of a sitting that
-already continued past its first live, the one "ended" still covers the whole sitting."""
+"""A sitting survives a restart: after the service restarts in the middle of a sitting,
+whether it already continued past its first live or continues only after the restart,
+the one "ended" still covers the whole sitting."""
 
 import asyncio
 import json
@@ -72,6 +73,42 @@ def test_sitting_that_ended_while_the_service_was_down_ends_with_its_first_live(
     assert second.raw[-1].status.started_at == A.started_at
     assert second.raw[-1].ended_at == STOPPED.checked_at
     assert [e.status.stream_id for e in ended] == ["b1"]
+
+
+def test_one_live_sitting_that_continues_after_a_restart_ends_with_the_announced_live(tmp_path):
+    f = tmp_path / "s.json"
+    first, _ = run(f, [(off(), None), (A, off())])  # A announced, still live at the restart
+    second, ended = run(f, [(A, None), (B, A), (STOPPED, B)])
+    assert first.events == [ev(LIVE, "a1")]
+    assert second.events == [ev(OFFLINE, "a1")]
+    final = second.raw[-1]
+    assert final.status.started_at == A.started_at
+    assert final.ended_at == STOPPED.checked_at
+    assert [e.status.stream_id for e in ended] == ["a1", "b1"]
+
+
+ONE_LIVE_IN_GRACE = [(off(), None), (A, off()), (off(), A)]  # stops before the grace period runs out
+
+
+def test_one_live_sitting_whose_grace_period_ran_at_the_restart_ends_before_the_next_live(tmp_path):
+    f = tmp_path / "s.json"
+    run(f, ONE_LIVE_IN_GRACE, grace=10)
+    second, ended = run(f, [(B, None), (STOPPED, B)])
+    assert second.events == [ev(OFFLINE, "a1"), ev(LIVE, "b1"), ev(OFFLINE, "b1")]
+    assert second.raw[0].status.started_at == A.started_at
+    assert second.raw[0].ended_at == B.checked_at
+    assert second.raw[-1].status.started_at == B.started_at
+    assert [e.status.stream_id for e in ended] == ["a1", "b1"]
+
+
+def test_one_live_sitting_whose_grace_period_ran_at_the_restart_continues_once_seen_again(tmp_path):
+    f = tmp_path / "s.json"
+    run(f, ONE_LIVE_IN_GRACE, grace=10)
+    second, ended = run(f, [(A, None), (B, A), (STOPPED, B)])
+    assert second.events == [ev(OFFLINE, "a1")]
+    assert second.raw[-1].status.started_at == A.started_at
+    assert second.raw[-1].ended_at == STOPPED.checked_at
+    assert [e.status.stream_id for e in ended] == ["a1", "b1"]
 
 
 def test_different_live_first_seen_after_a_restart_ends_the_saved_sitting_then_goes_live(tmp_path):
