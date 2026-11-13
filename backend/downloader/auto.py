@@ -19,8 +19,11 @@ config.json:
     }}
 
 Rules:
-- Not ready yet (YouTube still processing, Twitch archive not listed, TwitCasting replay
-  not published): retried every `retry_minutes` until `give_up_hours` after the stream ended.
+- Not ready yet (YouTube still processing, Twitch archive not listed): retried every
+  `retry_minutes` until `give_up_hours` after the stream ended, then a failure message.
+- Replay not published (TwitCasting): a live shorter than SHORT_LIVE is dropped at once,
+  without a message. A longer one (or one whose length is not known) gets one notice,
+  then is retried like "not ready yet" and dropped at `give_up_hours` without a message.
 - Any other failure: retried until `max_errors`, then a failure message on Discord.
 - Success: a Discord message, then the streamer folder is trimmed to `keep` archives.
 - Jobs live in `state_file`, so a restart resumes them (yt-dlp resumes partial files).
@@ -63,6 +66,9 @@ log = logging.getLogger(__name__)
 NOT_READY = ("is_live", "is_upcoming", "post_live")
 STAGES = ("download", "transcribe", "analyze", "translate", "upload")
 AUTH_HINTS = ("member", "sign in", "cookie", "login", "subscriber", "private")
+# A live shorter than this whose replay is not published is dropped without a word: test
+# lives and the fragments a dropped connection leaves.
+SHORT_LIVE = 5 * 60
 
 
 @dataclass
@@ -75,6 +81,8 @@ class Job:
     last_error: str = ""
     stage: Literal["download", "transcribe", "analyze", "translate", "upload"] = "download"
     video: str | None = None  # set once downloaded
+    live_ended_at: float | None = None  # when the live ended (epoch seconds); None: not known
+    unpublished_notice_sent: bool = False  # the owner was told the replay is not published
 
     @property
     def stream_key(self) -> str:
@@ -84,6 +92,14 @@ class Job:
     @property
     def key(self) -> str:
         return f"{self.stream_key}|{self.stage}"
+
+    @property
+    def short_live(self) -> bool:
+        """The live lasted less than SHORT_LIVE. Without a start or end time it counts as long."""
+        started = self.status.started_at
+        if started is None or self.live_ended_at is None:
+            return False
+        return self.live_ended_at - started.timestamp() < SHORT_LIVE
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -95,6 +111,8 @@ class Job:
             "last_error": self.last_error,
             "stage": self.stage,
             "video": self.video,
+            "live_ended_at": self.live_ended_at,
+            "unpublished_notice_sent": self.unpublished_notice_sent,
         }
 
     @classmethod
@@ -109,7 +127,7 @@ def decode_jobs(raw: Any) -> list[Job]:
 
 @dataclass
 class Outcome:
-    kind: Literal["done", "wait", "error"]
+    kind: Literal["done", "wait", "unpublished", "error"]
     message: str = ""
     result: DownloadResult | None = None
     pruned: list[Path] = field(default_factory=list)
@@ -171,7 +189,8 @@ class AutoDownloader:
             return
         jobs = self.load()
         now = self.clock()
-        job = Job(status, queued_at=now, next_try=now)
+        job = Job(status, queued_at=now, next_try=now,
+                  live_ended_at=event.ended_at.timestamp() if event.ended_at else None)
         if any(j.stream_key == job.stream_key for j in jobs):
             return
         jobs.append(job)
@@ -266,7 +285,7 @@ class AutoDownloader:
                 "percent": None, "downloaded": 0, "total": None, "speed": None, "eta": None}
             result = download(url, self.settings, self.streamers, info=info, progress=self._on_progress)
         except ReplayUnpublished as e:
-            return Outcome("wait", str(e))  # for now, like a replay that is not ready yet
+            return Outcome("unpublished", str(e))
         except DownloadError as e:
             return Outcome("error", str(e))
         finally:
@@ -422,7 +441,21 @@ class AutoDownloader:
             else:
                 self.save(rest)
             return
-        if outcome.kind == "wait":
+        if outcome.kind == "unpublished":
+            if current.short_live:
+                log.info("auto-download dropped, replay of a short live not published: %s", name)
+                self.save(rest)
+                return
+            if now - current.queued_at >= self.give_up:
+                log.info("auto-download given up, replay never published: %s", name)
+                self.save(rest)
+                return
+            if not current.unpublished_notice_sent:
+                self._send(EventKind.REPLAY_UNPUBLISHED, job,
+                           f"回放未公开，{self.give_up / 3600:g} 小时内公开会自动下载。")
+                current.unpublished_notice_sent = True
+            log.info("auto-download waiting for the replay to be published: %s", name)
+        elif outcome.kind == "wait":
             if now - current.queued_at >= self.give_up:
                 self.save(rest)
                 hours = self.give_up / 3600
