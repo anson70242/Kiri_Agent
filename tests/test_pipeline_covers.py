@@ -6,6 +6,7 @@ import httpx
 import pytest
 
 from backend.notify import EventKind, StreamEvent
+from backend.notify.qq import COVERS_KEPT
 
 from .helpers import A, live
 from .test_qq import COVER, SUBSCRIBED, FakeQQ, notifier, send
@@ -53,6 +54,55 @@ def test_the_other_messages_stay_text_only(tmp_path, kind):
     (text,) = fake.texts("G1")
     assert "![" not in text
     assert fake.fetches == 0 and fake.uploads == 0
+
+
+def test_one_upload_serves_every_message_of_a_live(tmp_path):
+    fake = CoverQQ()
+    n = qq(tmp_path, fake)
+    for kind in (EventKind.LIVE, EventKind.DOWNLOADED, EventKind.READY):
+        send(n, StreamEvent(kind, live(A, thumbnail=COVER), detail="x"))
+    assert fake.fetches == 1 and fake.uploads == 1
+    assert all("(qqbot-media://image/v1/COVER1)" in text for text in fake.texts("G1"))
+
+
+def test_the_stale_cover_address_is_not_fetched_again(tmp_path):
+    """The live's address may show another picture by the time the archive is downloaded."""
+    fake = CoverQQ()
+    n = qq(tmp_path, fake)
+    send(n, StreamEvent(EventKind.LIVE, live(A, thumbnail=COVER)))
+    fake.cover_ok = False  # the address now serves nothing of this live
+    send(n, StreamEvent(EventKind.DOWNLOADED, live(A, thumbnail=COVER), detail="x"))
+    assert "(qqbot-media://image/v1/COVER1)" in fake.texts("G1")[1]
+
+
+def test_another_live_gets_its_own_cover(tmp_path):
+    fake = CoverQQ()
+    n = qq(tmp_path, fake)
+    send(n, StreamEvent(EventKind.LIVE, live(A, thumbnail=COVER)))
+    send(n, StreamEvent(EventKind.LIVE, live(A, sid="v2", thumbnail=COVER)))  # same address, another live
+    send(n, StreamEvent(EventKind.DOWNLOADED, live(A, thumbnail=COVER), detail="x"))
+    first, second, downloaded = fake.texts("G1")
+    assert "COVER1)" in first and "COVER2)" in second and "COVER1)" in downloaded
+    assert fake.uploads == 2
+
+
+def test_only_the_latest_lives_keep_their_uploaded_cover(tmp_path):
+    fake = CoverQQ()
+    n = qq(tmp_path, fake)
+    for i in range(COVERS_KEPT + 1):
+        send(n, StreamEvent(EventKind.LIVE, live(A, sid=f"v{i}", thumbnail=COVER)))
+    send(n, StreamEvent(EventKind.DOWNLOADED, live(A, sid="v1", thumbnail=COVER), detail="x"))
+    assert fake.fetches == COVERS_KEPT + 1  # still kept
+    send(n, StreamEvent(EventKind.DOWNLOADED, live(A, sid="v0", thumbnail=COVER), detail="x"))
+    assert fake.fetches == COVERS_KEPT + 2  # forgotten: fetched again
+
+
+def test_a_live_without_a_stream_id_fetches_its_cover_each_time(tmp_path):
+    fake = CoverQQ()
+    n = qq(tmp_path, fake)
+    for kind in (EventKind.LIVE, EventKind.DOWNLOADED):
+        send(n, StreamEvent(kind, live(A, sid=None, thumbnail=COVER), detail="x"))
+    assert fake.fetches == 2
 
 
 class UploadRefused(CoverQQ):

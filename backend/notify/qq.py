@@ -26,6 +26,7 @@ import logging
 import re
 import struct
 import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -33,6 +34,7 @@ from typing import Any
 
 import httpx
 
+from backend.monitor import StreamStatus
 from backend.state_file import StateFile, expect_list
 
 from .base import EventKind, Notifier, StreamEvent
@@ -46,6 +48,9 @@ LOCAL_TZ = timezone(timedelta(hours=8))  # the group lives in China / Hong Kong 
 DEFAULT_KINDS = ["live", "offline", "ready", "uploaded"]  # editors start once everything is ready
 MEDIA_PREFIX = "kiri-"
 LIBRARY_FULL = 40035007
+# Lives whose uploaded cover is kept for reuse. Well under the library's 100: our oldest
+# covers are deleted when it fills, so an older reference may point at nothing.
+COVERS_KEPT = 20
 
 FOOTER_LIVE = "切片小助手 直播通知"
 FOOTER_DOWNLOAD = "切片小助手 自动下载"
@@ -225,6 +230,20 @@ def message(event: StreamEvent, cover: str | None = None) -> str:
     return "\n".join(line for line in lines if line)
 
 
+@dataclass
+class Cover:
+    """A live's cover uploaded to the bot's media library."""
+
+    data: bytes  # the image, to upload it again if QQ refuses the reference
+    line: str  # the markdown image line with its qqbot-media:// reference
+
+
+def live_key(status: StreamStatus) -> tuple[str, str] | None:
+    """What a live's cover is remembered by; None when the platform gave no stream id
+    (then every message fetches the cover itself)."""
+    return (status.streamer.id, status.stream_id) if status.stream_id else None
+
+
 # ---- API ----
 
 class QQApi:
@@ -305,13 +324,16 @@ class QQNotifier(Notifier):
         self.api = QQApi(settings, self.client)
         self.history = history or NotifyHistory()
         self.gap, self.tries = gap, tries  # seconds between groups; tries per group
+        # (streamer id, stream id) -> the live's uploaded cover, newest last; kept while
+        # the service runs, so after a restart a cover is fetched and uploaded again.
+        self._covers: OrderedDict[tuple[str, str], Cover] = OrderedDict()
 
     async def send(self, event: StreamEvent) -> None:
         targets = self.groups.targets(event)
         if not targets:
             return
-        cover = await self.cover(event.status.thumbnail) if event.kind in COVER_KINDS else None
-        text = message(event, cover)
+        cover = await self.cover(event.status) if event.kind in COVER_KINDS else None
+        text = message(event, cover.line if cover else None)
         summary = text.splitlines()[0].replace("**", "")
         for i, g in enumerate(targets):
             if i and self.gap:
@@ -335,22 +357,39 @@ class QQNotifier(Notifier):
         self.history.add("qq", group["openid"], summary, False, error)
         return False
 
-    async def cover(self, url: str | None) -> str | None:
-        """The markdown image line for a cover, or None (then the message is text only)."""
-        if not url:
+    async def cover(self, status: StreamStatus) -> Cover | None:
+        """The live's cover in the media library, or None (then the message is text only).
+        A live's cover is uploaded once and reused for its later messages: by then its
+        address may show another picture (a Twitch preview shows whatever is on now)."""
+        key = live_key(status)
+        if key and (known := self._covers.get(key)):
+            self._covers.move_to_end(key)
+            return known
+        if not status.thumbnail:
             return None
         try:
-            r = await self.client.get(url, follow_redirects=True, timeout=20)
+            r = await self.client.get(status.thumbnail, follow_redirects=True, timeout=20)
             r.raise_for_status()
-            data = r.content
-            kind = "image/png" if data[:4] == b"\x89PNG" else "image/jpeg"
-            ref = await self.api.upload_image(data, kind)
+        except httpx.HTTPError as e:
+            log.warning("qq: cover not used (%s)", e)
+            return None
+        return await self.upload_cover(key, r.content)
+
+    async def upload_cover(self, key: tuple[str, str] | None, data: bytes) -> Cover | None:
+        """Upload a cover's image and remember it for the live `key` (None: not kept)."""
+        try:
+            ref = await self.api.upload_image(data, "image/png" if data[:4] == b"\x89PNG" else "image/jpeg")
         except (QQError, httpx.HTTPError, KeyError) as e:
             log.warning("qq: cover not used (%s)", e)
             return None
         w, h = image_size(data) or (480, 270)
         scale = min(1.0, 480 / w) if w else 1.0
-        return f"![封面 #{round(w * scale)}px #{round(h * scale)}px]({ref})"
+        cover = Cover(data, f"![封面 #{round(w * scale)}px #{round(h * scale)}px]({ref})")
+        if key:
+            self._covers[key] = cover
+            while len(self._covers) > COVERS_KEPT:
+                self._covers.popitem(last=False)
+        return cover
 
     async def aclose(self) -> None:
         await self.client.aclose()
