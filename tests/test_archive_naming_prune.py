@@ -39,7 +39,7 @@ def test_the_files_of_a_new_archive_are_named_after_its_stem():
     assert artifact_name(stem, Artifact.HIGHLIGHTS) == f"{stem}.highlights.json"
 
 
-@pytest.mark.parametrize("platform", [None, "", "twitcasting"])
+@pytest.mark.parametrize("platform", [None, "", "niconico"])
 def test_a_raw_chat_cannot_be_named_without_a_known_platform(platform):
     with pytest.raises(ValueError, match="platform"):
         artifact_name("[20261105][柊優花] 歌枠", Artifact.RAW_CHAT, platform)

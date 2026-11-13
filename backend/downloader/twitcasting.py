@@ -11,7 +11,9 @@ browser fallback are never used here. The steps, each its own piece:
 - video (`download_video`): through yt-dlp with the cookies, as on the other platforms; a
   replay in several parts is joined into one video (`download_parts`), never run against a
   real one (none was found);
-- chat (`download_raw_chat`): not supported yet.
+- chat (`download_raw_chat`): every page of the movie's public comment history, read
+  without cookies (verified readable without login, also for unpublished replays):
+  20 comments a page, newest first; page 0 is the newest, the pager links the last.
 
 An archive's title is the live's own title (the monitor's title rule) followed by its start
 time as `HHmmss`, in the clock of the date folder, so two lives with the same title on one day
@@ -21,8 +23,10 @@ are two archives, and the same replay downloaded twice is the same archive.
 from __future__ import annotations
 
 import html
+import json
 import logging
 import re
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -254,4 +258,118 @@ class TwitCastingDownloader(PlatformDownloader):
     # ---- chat ----
 
     def download_raw_chat(self, info: VideoInfo, out_dir: Path) -> Path:
-        raise DownloadError("TwitCasting chat is not supported yet")
+        """Every comment of the movie, from its public comment history pages (read without
+        cookies), with the live's own title and start time from the replay page: the raw chat,
+        written through the download-in-progress marker."""
+        path = out_dir / artifact_name(info.stem, Artifact.RAW_CHAT, self.platform)
+        if path.exists():
+            return path
+        replay = self.read_replay(info.url)
+        if replay.started_at is None:
+            raise DownloadError(f"TwitCasting replay page {info.url} has no start time, so chat cannot be timed")
+        with self.comment_client() as client:
+            comments = fetch_comments(client, channel_id(info.channel), info.id)
+        data = {
+            "movie": {"id": info.id, "url": info.url, "title": replay.title or info.title,
+                      "started_at": replay.started_at.isoformat(), "duration": info.duration},
+            "comments": comments,
+        }
+        tmp = path.with_name(path.name + DOWNLOADING_SUFFIX)
+        tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(path)
+        log.info("chat: %d comments -> %s", len(comments), path.name)
+        return path
+
+    def comment_client(self) -> httpx.Client:
+        """A client without cookies: the comment history is public."""
+        return httpx.Client(
+            transport=self.transport, timeout=30, follow_redirects=True,
+            headers={"User-Agent": USER_AGENT, "Accept-Language": "en-US,en;q=0.9"},
+        )
+
+
+COMMENT_PAGE_WAIT = 0.5  # seconds between two comment page requests
+COMMENT_RETRIES = 4  # tries of one comment page on transient failures (timeouts, 429, 5xx)
+
+
+def comments_url(channel: str, live_id: str, index: int) -> str:
+    """Comment history page `index` of a movie: 0 is the newest comments, each next one older."""
+    return f"{SITE}/{channel}/moviecomment/{live_id}-{index}"
+
+
+def fetch_comments(client: httpx.Client, channel: str, live_id: str) -> list[dict[str, str]]:
+    """Every comment of a movie, oldest first, each once (by comment id): walks the comment
+    history pages from the newest up to the last page the pager links to."""
+    found: dict[str, tuple[datetime, dict[str, str]]] = {}
+    index, last = 0, 0
+    while index <= last:
+        if index:
+            time.sleep(COMMENT_PAGE_WAIT)
+        page = comment_page(client, comments_url(channel, live_id, index))
+        items, page_last = parse_comment_page(page, live_id)
+        for posted, c in items:
+            found.setdefault(c["id"], (posted, c))
+        last = max(last, page_last)
+        index += 1
+        if index % 20 == 0:
+            log.info("chat: %d comments, page %d/%d", len(found), index, last + 1)
+    return [c for _, c in sorted(found.values(), key=lambda pc: (pc[0], pc[1]["id"].zfill(20)))]
+
+
+def comment_page(client: httpx.Client, url: str) -> str:
+    """One comment history page. Retries transient failures."""
+    for attempt in range(COMMENT_RETRIES):
+        try:
+            resp = client.get(url)
+        except httpx.TransportError as e:
+            problem = str(e) or type(e).__name__
+        else:
+            if resp.status_code != 429 and resp.status_code < 500:
+                if resp.is_error:
+                    raise DownloadError(f"TwitCasting comment page {url}: HTTP {resp.status_code}")
+                return resp.text
+            problem = f"HTTP {resp.status_code}"
+        if attempt == COMMENT_RETRIES - 1:
+            raise DownloadError(f"TwitCasting comment page {url}: {problem}")
+        log.warning("TwitCasting comment page %s: %s; retrying", url, problem)
+        time.sleep(2**attempt)
+    raise AssertionError("unreachable")
+
+
+COMMENT_ITEM_RE = re.compile(r'<div class="tw-comment-history-item"(?=[\s>])')
+
+
+def parse_comment_page(page: str, live_id: str) -> tuple[list[tuple[datetime, dict[str, str]]], int]:
+    """The comments on one comment history page (with their posted time) and the index of
+    the last page the pager links to. Raises DownloadError for a page that is not one."""
+    if 'class="tw-comment-history"' not in page:
+        raise DownloadError("unrecognised TwitCasting comment page (no comment history on it)")
+    pages = [int(i) for i in re.findall(rf'href="[^"]*/moviecomment/{re.escape(live_id)}-(\d+)"', page)]
+    items = []
+    for part in COMMENT_ITEM_RE.split(page)[1:]:
+        cid = re.search(r'\A[^>]*?\bdata-comment-id="(\d+)"', part)
+        when = re.search(r'<time\b[^>]*\bdatetime="([^"]+)"', part)
+        user = re.search(r'class="tw-comment-history-item__details__user-link"[^>]*?\bhref="/([^"]*)"[^>]*>(.*?)</a>',
+                         part, re.S)
+        text = re.search(r'class="tw-comment-history-item__content__text"[^>]*>(.*?)</div>', part, re.S)
+        try:
+            posted = parsedate_to_datetime(when.group(1)) if when else None
+        except (TypeError, ValueError):
+            posted = None
+        if not (cid and posted):
+            log.warning("TwitCasting comment without an id or a time skipped")
+            continue
+        items.append((posted, {
+            "id": cid.group(1),
+            "user_id": html.unescape(user.group(1)) if user else "",
+            "name": page_text(user.group(2)) if user else "",
+            "text": page_text(text.group(1)) if text else "",
+            "posted_at": posted.isoformat(),
+        }))
+    return items, max(pages, default=0)
+
+
+def page_text(fragment: str) -> str:
+    """The text of an HTML fragment as a browser shows it: tags dropped, entities decoded,
+    runs of spaces and line breaks one space."""
+    return re.sub(r"[ \t\r\n]+", " ", html.unescape(re.sub(r"<[^>]+>", "", fragment))).strip(" ")

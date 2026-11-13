@@ -49,14 +49,6 @@ def test_a_failing_video_is_not_retried_with_other_cookies(tc, monkeypatch):
     assert len(FakeYtdlp.calls) == 2  # the metadata, then one try at the video
 
 
-def test_the_chat_is_not_supported_yet_but_the_video_still_lands(tc):
-    r = download(REPLAY, tc.settings, [MIKA])
-
-    assert r.video.exists() and r.chat is None
-    assert "not supported yet" in r.errors["chat"]
-    assert set(r.errors) == {"chat"}
-
-
 # ---- archive ----
 
 OTHER_MOVIE = "900000002"
