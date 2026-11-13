@@ -119,6 +119,8 @@ class DiscordNotifier(Notifier):
             embed["url"] = status.url
         if status.avatar:
             embed["author"]["icon_url"] = status.avatar
+        if status.thumbnail:  # small, as on "下播了"
+            embed["thumbnail"] = {"url": status.thumbnail}
         if event.detail:
             embed["description"] = event.detail[:4000]
         icon, verb = PIPELINE_TEXT[event.kind]

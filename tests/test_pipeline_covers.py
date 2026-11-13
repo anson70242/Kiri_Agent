@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+
 import httpx
 import pytest
 
 from backend.notify import EventKind, StreamEvent
+from backend.notify.discord import DiscordNotifier
 from backend.notify.qq import COVERS_KEPT
 
 from .helpers import A, live
@@ -151,6 +155,36 @@ def test_a_refused_reference_that_cannot_be_uploaded_again_leaves_the_text(tmp_p
     send(n, StreamEvent(EventKind.DOWNLOADED, live(A, thumbnail=COVER), detail="x"))
     downloaded = fake.texts("G1")[1]
     assert downloaded.startswith("📥 **A** 回放已下载\ntitle v1\n") and "![" not in downloaded
+
+
+# ---- Discord ----
+
+def discord_embed(event: StreamEvent) -> dict:
+    sent = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(204)
+
+    n = DiscordNotifier("https://discord.test/hook", client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    asyncio.run(n.send(event))
+    (payload,) = sent
+    return payload["embeds"][0]
+
+
+PIPELINE_KINDS = sorted(set(EventKind) - {EventKind.LIVE, EventKind.OFFLINE})
+
+
+@pytest.mark.parametrize("kind", PIPELINE_KINDS)
+def test_every_discord_pipeline_message_shows_the_cover_as_a_thumbnail(kind):
+    embed = discord_embed(StreamEvent(kind, live(A, thumbnail="https://cdn/cover.jpg"), detail="x"))
+    assert embed["thumbnail"] == {"url": "https://cdn/cover.jpg"}
+    assert "image" not in embed
+
+
+@pytest.mark.parametrize("kind", PIPELINE_KINDS)
+def test_a_discord_pipeline_message_without_a_cover_has_no_thumbnail(kind):
+    assert "thumbnail" not in discord_embed(StreamEvent(kind, live(A), detail="x"))
 
 
 class UploadRefused(CoverQQ):
