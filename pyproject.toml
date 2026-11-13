@@ -28,7 +28,7 @@ dev = [
 pythonpath = ["."]
 testpaths = ["tests"]
 markers = [
-    "network: hits real YouTube / Twitch (run with -m network)",
+    "network: hits real YouTube / Twitch / TwitCasting (run with -m network)",
     "slow: takes tens of seconds; skipped by default, CI runs it (-m 'not network' runs everything offline)",
 ]
 addopts = "-m 'not network and not slow'"
