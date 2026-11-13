@@ -22,6 +22,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import REPO_ROOT, DownloadError, PendingChats, download, downloader_for, load_settings
+from backend.archive import RAW_CHAT_SUFFIX
 from backend.state_file import print_incidents
 
 from .chat_clean import clean_chat
@@ -75,7 +76,7 @@ def main() -> int:
     p.add_argument("--retry", action="store_true", help="retry every queued chat now")
     p.add_argument("--wait", action="store_true", help="keep retrying queued chats until done")
     p.add_argument("--clean", nargs="+", type=Path, metavar="FILE",
-                   help="clean already-downloaded .live_chat.json / .chat.json files")
+                   help="clean already-downloaded raw chat files (" + " / ".join(RAW_CHAT_SUFFIX.values()) + ")")
     args = p.parse_args()
     print_incidents()  # a damaged chat retry queue: tell the owner at the terminal
     if args.clean:
