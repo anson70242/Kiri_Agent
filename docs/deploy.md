@@ -172,6 +172,40 @@ docker compose exec kiri /app/.venv/bin/python -m backend.downloader --info <会
 - 这份 cookie 等于账号登录态，不要提交到 git，也不要发给别人。
 - 用账号跑 yt-dlp 有被 YouTube 封号的风险，下载频率别太高；能接受的话用小号开会员。
 
+## TwitCasting 回放要登录 cookie
+
+TwitCasting 的回放一律要登录才能看，所以下载 TwitCasting 回放**每次都带**一份单独的 cookie 文件：
+容器里的 `/app/data/twitcasting_cookies.txt`（设置 `download.twitcasting_cookies_file`，同一个数据卷 `kiri_kiri-data`，部署不会动它）。
+它和 YouTube 的 cookie 文件互不相干，换一份不会影响另一份；TwitCasting 也不会用 YouTube 的 cookie 或浏览器的 cookie。
+第一次自动下载 TwitCasting 之前就要放好；没有这份文件，下载会以「登录缺失」失败。
+
+**1. 本机导出（Firefox）**：跟上面 YouTube 一样用 cookies.txt 扩展，在新的无痕窗口登录 TwitCasting 账号，
+打开 `https://twitcasting.tv/`，导出当前网站的 cookie，存成 `twitcasting_cookies.txt`，然后关掉无痕窗口。
+
+**2. 传到服务器并放进容器**
+
+```sh
+scp twitcasting_cookies.txt HK-Server:~/          # 本机 PowerShell
+cd ~/kiri                                         # 以下在服务器上
+docker compose cp ~/twitcasting_cookies.txt kiri:/app/data/twitcasting_cookies.txt
+docker compose exec -u root kiri sh -c 'chown app /app/data/twitcasting_cookies.txt && chmod 600 /app/data/twitcasting_cookies.txt'
+rm ~/twitcasting_cookies.txt
+```
+
+`chown` 同样不能省：yt-dlp 会把更新后的 cookie 写回这个文件。
+
+**3. 测试**（找一个已公开的回放，网址形如 `twitcasting.tv/<ID>/movie/<数字>`）
+
+```sh
+docker compose exec kiri /app/.venv/bin/python -m backend.downloader --info <回放网址>
+```
+
+能印出标题就是成功。报错有 `login missing or expired` 表示 cookie 没带上或已失效。
+**还没验证**服务器的 IP 能不能用本机导出的 cookie（换地方登录可能让会话失效），第一次部署后马上用这条命令确认。
+
+**失效了怎么办**：自动下载放弃时，失败通知会写「可能是 TwitCasting 的登录 cookies 过期：更新服务器上的 `data/twitcasting_cookies.txt`」。
+照上面重新导出一份，覆盖旧文件即可，不用重启服务；在修好之前 TwitCasting 回放都下载不了。
+
 ## LLM 代理（经日本电脑调用 OpenAI / Claude / Gemini）
 
 这些 API 不对香港开放。服务器只让 LLM 请求经 Tailscale 走日本那台电脑出去，
