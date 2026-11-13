@@ -29,6 +29,8 @@ class EventKind(StrEnum):
     LIVE = "live"  # went live
     OFFLINE = "offline"  # stream ended
     DOWNLOADED = "downloaded"  # archive auto-downloaded (backend.downloader.auto)
+    # the replay of a live is not published; it is downloaded if it appears in time
+    REPLAY_UNPUBLISHED = "replay_unpublished"
     DOWNLOAD_FAILED = "download_failed"  # auto-download gave up
     TRANSCRIBE_FAILED = "transcribe_failed"  # speech-to-text of a downloaded archive gave up
     ANALYZED = "analyzed"  # 路灯表 ready (detail: the top segments)

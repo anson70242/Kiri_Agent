@@ -3,6 +3,8 @@ ended live, with a fake clock, the fake site and the fake yt-dlp (tests/twitcast
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 from backend.downloader.auto import AutoDownloader
 from backend.monitor import LiveState, StreamStatus
 from backend.monitor.twitcasting import channel_url
@@ -103,17 +105,20 @@ def test_a_password_protected_live_fails_saying_it_is_not_supported(tc):
     assert "cookies" not in sent[0].detail
 
 
-def test_a_replay_that_is_not_published_waits_like_one_not_ready_and_is_given_up(tc):
+def test_a_replay_that_is_not_published_is_announced_once_and_given_up_quietly(tc):
     tc.site.pages[REPLAY] = replay_page("unpublished")
     ad, clock, sent = auto(tc)
-    ad.on_ended(ended())
+    event = ended()
+    event.ended_at = START + timedelta(hours=1)
+    ad.on_ended(event)
     job = ad.next_due()
     ad.finish(job, ad.attempt(job))
-    assert sent == [] and ad.load()[0].errors == 0  # waiting, not failing
+    assert [e.kind for e in sent] == [EventKind.REPLAY_UNPUBLISHED]
+    assert sent[0].detail == "回放未公开，12 小时内公开会自动下载。"
+    assert ad.load()[0].errors == 0  # waiting, not failing
 
     clock.t += 12 * HOUR
     job = ad.next_due()
     ad.finish(job, ad.attempt(job))
     assert ad.load() == []
-    assert [e.kind for e in sent] == [EventKind.DOWNLOAD_FAILED]
-    assert "仍未就绪" in sent[0].detail
+    assert len(sent) == 1  # given up without a message

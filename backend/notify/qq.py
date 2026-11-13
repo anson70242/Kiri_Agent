@@ -53,6 +53,7 @@ FOOTER_HIGHLIGHTS = "切片小助手 自动路灯"
 # Pipeline events: icon, text, footer (the same words as the Discord messages).
 PIPELINE = {
     EventKind.DOWNLOADED: ("📥", "回放已下载", FOOTER_DOWNLOAD),
+    EventKind.REPLAY_UNPUBLISHED: ("⏳", "回放未公开", FOOTER_DOWNLOAD),
     EventKind.DOWNLOAD_FAILED: ("❗", "回放下载失败", FOOTER_DOWNLOAD),
     EventKind.TRANSCRIBE_FAILED: ("❗", "字幕转写失败", FOOTER_DOWNLOAD),
     EventKind.TRANSLATE_FAILED: ("❗", "中文字幕翻译失败", FOOTER_DOWNLOAD),
@@ -62,7 +63,8 @@ PIPELINE = {
     EventKind.UPLOAD_FAILED: ("❗", "路灯表上传腾讯文档失败", FOOTER_HIGHLIGHTS),
     EventKind.READY: ("✅", "全部处理完成", FOOTER_DOWNLOAD),
 }
-KIND_LABELS = {"live": "开播", "offline": "下播", "downloaded": "录播已下载", "uploaded": "上传完成",
+KIND_LABELS = {"live": "开播", "offline": "下播", "downloaded": "录播已下载", "replay_unpublished": "回放未公开",
+               "uploaded": "上传完成",
                "analyzed": "路灯表已生成", "download_failed": "下载失败", "transcribe_failed": "转写失败",
                "translate_failed": "翻译失败", "analyze_failed": "分析失败", "upload_failed": "上传失败",
                "ready": "全部处理完成"}
