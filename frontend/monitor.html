@@ -14,7 +14,7 @@
     --topbar-bg: rgba(255,255,255,.85); --topbar-text: #1e40af; --topbar-muted: #5a6b8c;
     --topbar-accent: #2563eb; --topbar-border: #c7dbf7;
     --shadow: 0 1px 2px rgba(37,99,235,.06), 0 8px 20px rgba(37,99,235,.10);
-    --yt: #dc2626; --tw: #7c3aed;
+    --yt: #dc2626; --tw: #7c3aed; --tc: #0891b2;
   }
   * { box-sizing: border-box; }
   html { color-scheme: light; }
@@ -63,6 +63,7 @@
   .platform { font-size: 12px; color: var(--muted); border: 1px solid var(--border); border-radius: 6px; padding: 0 6px; }
   .platform.youtube { color: var(--yt); border-color: color-mix(in srgb, var(--yt) 35%, transparent); }
   .platform.twitch { color: var(--tw); border-color: color-mix(in srgb, var(--tw) 35%, transparent); }
+  .platform.twitcasting { color: var(--tc); border-color: color-mix(in srgb, var(--tc) 35%, transparent); }
   .state { white-space: nowrap; }
   .live .state { background: var(--live-bg); color: var(--live); }
   .upcoming .state { background: var(--up-bg); color: var(--up); }
@@ -94,6 +95,7 @@
     background: color-mix(in srgb, var(--accent) 12%, transparent); }
   .tag.youtube { color: var(--yt); background: color-mix(in srgb, var(--yt) 10%, transparent); }
   .tag.twitch { color: var(--tw); background: color-mix(in srgb, var(--tw) 10%, transparent); }
+  .tag.twitcasting { color: var(--tc); background: color-mix(in srgb, var(--tc) 10%, transparent); }
   .tag button, .search .clear { border: 0; background: transparent; color: inherit; padding: 0 7px;
     font-size: 15px; line-height: 20px; border-radius: 999px; }
   .tag button:hover, .search .clear:hover { background: color-mix(in srgb, currentColor 15%, transparent); }
@@ -174,8 +176,8 @@
   <h3 id="add-h">新增主播</h3>
   <form method="dialog">
     <label>名字 <input name="name" placeholder="显示用，可留空"></label>
-    <label>平台 <select name="platform"><option value="youtube">YouTube</option><option value="twitch">Twitch</option></select></label>
-    <label>频道 <input name="channel" required placeholder="@handle / UC… / Twitch 登录名"></label>
+    <label>平台 <select name="platform"><option value="youtube">YouTube</option><option value="twitch">Twitch</option><option value="twitcasting">TwitCasting</option></select></label>
+    <label>频道 <input name="channel" required placeholder="@handle / UC… / Twitch 登录名 / TwitCasting ID"></label>
     <div class="msg" role="alert"></div>
     <div class="actions">
       <button type="button" value="cancel">取消</button>
