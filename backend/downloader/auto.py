@@ -493,7 +493,7 @@ class AutoDownloader:
                                f"影片和字幕都好了，但试了 {current.attempts} 次路灯表分析仍失败：\n"
                                f"```{current.last_error[:1500]}```")
                 else:
-                    self._send(EventKind.DOWNLOAD_FAILED, job, failure_detail(current))
+                    self._send(EventKind.DOWNLOAD_FAILED, job, failure_detail(current, self.settings))
                 return
         current.next_try = now + self.retry_interval
         self.save(rest + [current])
@@ -589,12 +589,13 @@ def top_segments_detail(archive: Archive, n: int = 5) -> str:
     return "\n".join(lines) or "路灯表已生成（没有打分的段落）"
 
 
-def failure_detail(job: Job) -> str:
+def failure_detail(job: Job, settings: DownloadSettings) -> str:
     text = f"试了 {job.attempts} 次仍失败：\n```{job.last_error[:1500]}```"
     error = job.last_error.lower()
     if job.status.streamer.platform == "twitcasting":
         if "login" in error:
-            text += "\n可能是 TwitCasting 的登录 cookies 过期：更新服务器上的 `data/twitcasting_cookies.txt`（见 docs/deploy.md）。"
+            text += ("\n可能是 TwitCasting 的登录 cookies 过期：更新服务器上的 "
+                     f"`{settings.twitcasting_cookies_file}`（见 docs/deploy.md）。")
         elif "not supported" in error:
             text += "\n不支持有合言葉（密码）或会员限定的 TwitCasting 直播。"
         return text
