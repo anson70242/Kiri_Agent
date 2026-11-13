@@ -14,12 +14,13 @@ on it (the wrong shape). What happens then is the caller's policy:
 - "recover" (runtime state: queues, live-stream state, history, sessions): rename it to
   "<name>.corrupt-<YYYYMMDD-HHMMSS>", report an Incident, and return default().
 
-Incidents are always logged, then go to the StateFile's own `on_incident`, or else to
-the hook the application installed with `set_incident_hook` (the operator alert; for a
-command line tool, `print_incidents`: the terminal). This module knows nothing about
-the alert channels. A strict store that re-reads its file
-while running and finds it damaged keeps its last good value and sends its own Incident
-(no backup) through `report`.
+Incidents are always logged, then go to the hook the application installed with
+`set_incident_hook` (the operator alert; for a command line tool, `print_incidents`: the
+terminal). This module knows nothing about the alert channels.
+
+A store shared with another process re-reads its file with `reload`. A strict file found
+damaged there never stops the running service: the last good value stays, and an Incident
+without a backup is reported once.
 """
 
 from __future__ import annotations
@@ -77,8 +78,7 @@ _hook: IncidentHook | None = None
 
 
 def set_incident_hook(hook: IncidentHook | None) -> IncidentHook | None:
-    """Where incidents of StateFiles without their own `on_incident` go (None: only
-    logged). Returns the hook it replaces."""
+    """Where incidents go (None: only logged). Returns the hook it replaces."""
     global _hook
     previous, _hook = _hook, hook
     return previous
@@ -95,14 +95,22 @@ def _print_incident(incident: Incident) -> None:
     print(incident.message, file=sys.stderr)
 
 
-def report(incident: Incident, on_incident: IncidentHook | None = None) -> None:
-    """Hand an incident to `on_incident`, or else to the installed hook (None: nowhere).
-    Never raises: reporting must never break the store. The caller logs it."""
-    if hook := on_incident or _hook:
+def _report(incident: Incident) -> None:
+    """Hand an incident to the installed hook (None: nowhere). Never raises: reporting
+    must never break the store. The caller logs it."""
+    if _hook:
         try:
-            hook(incident)
+            _hook(incident)
         except Exception:  # noqa: BLE001
             log.exception("could not report the incident with %s", incident.path)
+
+
+def expect_list(raw: Any, what: str) -> list[Any]:
+    """`raw` when it is a list; else the ValueError a `decode` raises for the wrong shape
+    (`what`: the records the file holds, e.g. "users")."""
+    if not isinstance(raw, list):
+        raise ValueError(f"expected a list of {what}, got {type(raw).__name__}")
+    return raw
 
 
 def _same(x: Any) -> Any:
@@ -114,14 +122,12 @@ class StateFile(Generic[T]):
     on the wrong shape), `encode` turns it back into something json.dumps takes."""
 
     def __init__(self, path: Path, default: Callable[[], T], policy: Policy,
-                 decode: Callable[[Any], T] = _same, encode: Callable[[T], Any] = _same,
-                 on_incident: IncidentHook | None = None):
+                 decode: Callable[[Any], T] = _same, encode: Callable[[T], Any] = _same):
         self.path = path
         self.default = default
         self.policy = policy
         self.decode = decode
         self.encode = encode
-        self.on_incident = on_incident
         self._stamp: tuple[int, int] | None = None  # the file as last loaded, tried or saved
         self.damaged: str | None = None  # strict: why the file could not be read when last tried
 
@@ -145,8 +151,22 @@ class StateFile(Generic[T]):
     def reload(self, current: T) -> T:
         """The file's value when it changed on disk since this object last loaded, tried or
         saved it (another process rewrote it); else `current`, without reading the file. A
-        damaged file is tried once until it changes again. Damaged: see the policy."""
-        return self.load() if self.changed() else current
+        damaged file is tried once until it changes again.
+
+        Damaged under the recover policy: as in `load`. Under the strict policy this never
+        raises: `current` (the last good value) stays in effect, the file is left alone, and
+        it is logged and reported once (an Incident without a backup); `damaged` says why
+        until a later read succeeds."""
+        if not self.changed():
+            return current
+        was_damaged = self.damaged is not None
+        try:
+            return self.load()
+        except StateFileError as e:
+            if not was_damaged:
+                log.error("%s is damaged (%s); kept the value read before", e.path, e.reason)
+                _report(Incident(e.path, None, e.reason))
+            return current
 
     def save(self, value: T) -> None:
         """Write atomically: never a half-written file, even if the process dies."""
@@ -181,7 +201,7 @@ class StateFile(Generic[T]):
         self.path.rename(backup)
         self._stamp = None
         log.error("%s is damaged (%s); kept it as %s and continued empty", self.path, reason, backup.name)
-        report(Incident(self.path, backup, reason), self.on_incident)
+        _report(Incident(self.path, backup, reason))
         return self.default()
 
     def _backup_name(self) -> Path:

@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from backend.state_file import StateFile
+from backend.state_file import StateFile, expect_list
 from backend.tencent_docs import parse_file_id
 
 from .base import PlatformMonitor, Streamer
@@ -33,9 +33,7 @@ def entry_id(e: dict[str, Any]) -> str:
 
 def decode_streamers(raw: Any) -> list[dict[str, Any]]:
     """The file's entries; raises on anything that isn't a list of streamers."""
-    if not isinstance(raw, list):
-        raise ValueError(f"expected a list of streamers, got {type(raw).__name__}")
-    for e in raw:
+    for e in expect_list(raw, "streamers"):
         if not (isinstance(e, dict) and isinstance(e.get("platform"), str) and isinstance(e.get("channel"), str)):
             raise ValueError(f"not a streamer (needs platform and channel): {e!r}")
     return raw
@@ -51,10 +49,6 @@ class Roster:
             self.save()
         else:
             self.entries = entries
-
-    @property
-    def path(self) -> Path:
-        return self._file.path
 
     def save(self) -> None:
         self._file.save(self.entries)

@@ -52,7 +52,7 @@ from backend.translate import translate as translate_transcript
 from backend.monitor import StreamMonitor, Streamer, StreamStatus
 from backend.monitor.roster import load_roster
 from backend.notify import EventKind, LiveNotifier, StreamEvent, load_notifier
-from backend.state_file import StateFile
+from backend.state_file import StateFile, expect_list
 
 from . import REPO_ROOT, download, downloader_for, load_settings
 from .base import DownloadError, DownloadResult, DownloadSettings
@@ -104,9 +104,7 @@ class Job:
 
 def decode_jobs(raw: Any) -> list[Job]:
     """The download queue file's JSON -> jobs; raises if it isn't a list of jobs."""
-    if not isinstance(raw, list):
-        raise ValueError(f"expected a list of jobs, got {type(raw).__name__}")
-    return [Job.from_dict(d) for d in raw]
+    return [Job.from_dict(d) for d in expect_list(raw, "jobs")]
 
 
 @dataclass

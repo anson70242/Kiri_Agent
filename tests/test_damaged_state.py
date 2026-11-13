@@ -13,7 +13,7 @@ from backend.monitor.server import create_app
 from backend.notify import Notifier
 from backend.state_file import StateFile
 
-from .helpers import AlertRecorder
+from .helpers import AlertRecorder, wait_for
 
 DAMAGED = "[{\"status\": "
 
@@ -39,15 +39,6 @@ def setup(tmp_path, monkeypatch, alerts: bool = True):
     monkeypatch.setenv("KIRI_T_REC", "https://alerts.test/hook")
     (tmp_path / "queue.json").write_text(DAMAGED, encoding="utf-8")
     return create_app(write_config(tmp_path, alerts))
-
-
-def wait_for(condition, timeout: float = 5) -> bool:
-    end = time.monotonic() + timeout
-    while not condition():
-        if time.monotonic() > end:
-            return False
-        time.sleep(0.02)
-    return True
 
 
 def backups(tmp_path) -> list[str]:

@@ -76,8 +76,9 @@ def test_recover_backs_up_a_damaged_file_reports_it_and_returns_the_default(tmp_
     path = tmp_path / "queue.json"
     path.write_bytes(content)
     incidents: list[Incident] = []
+    set_incident_hook(incidents.append)
 
-    assert items(path, policy="recover", on_incident=incidents.append).load() == []
+    assert items(path, policy="recover").load() == []
 
     (backup,) = [p for p in tmp_path.iterdir() if p.name != "queue.json"]
     assert BACKUP.fullmatch(backup.name) and backup.read_bytes() == content
@@ -91,7 +92,8 @@ def test_after_recovering_the_store_starts_over_from_empty(tmp_path):
     path = tmp_path / "queue.json"
     path.write_text("{oops", encoding="utf-8")
     incidents: list[Incident] = []
-    store = items(path, policy="recover", on_incident=incidents.append)
+    set_incident_hook(incidents.append)
+    store = items(path, policy="recover")
 
     assert store.load() == []
     assert store.load() == []  # the damaged file is out of the way: no second incident
@@ -102,30 +104,16 @@ def test_after_recovering_the_store_starts_over_from_empty(tmp_path):
 def test_every_incident_is_logged(tmp_path, caplog):
     path = tmp_path / "queue.json"
     path.write_text("{oops", encoding="utf-8")
-    items(path, policy="recover", on_incident=lambda _: None).load()
+    set_incident_hook(lambda _: None)
+    items(path, policy="recover").load()
     assert "queue.json" in caplog.text and "corrupt-" in caplog.text
-
-
-def test_without_its_own_hook_an_incident_goes_to_the_installed_one(tmp_path):
-    path = tmp_path / "queue.json"
-    path.write_text("{oops", encoding="utf-8")
-    incidents: list[Incident] = []
-    previous = set_incident_hook(incidents.append)
-    try:
-        items(path, policy="recover").load()
-    finally:
-        set_incident_hook(previous)
-    assert [i.path for i in incidents] == [path]
 
 
 def test_with_no_hook_installed_an_incident_is_only_logged(tmp_path, caplog):
     path = tmp_path / "queue.json"
     path.write_text("{oops", encoding="utf-8")
-    previous = set_incident_hook(None)
-    try:
-        assert items(path, policy="recover").load() == []
-    finally:
-        set_incident_hook(previous)
+    set_incident_hook(None)
+    assert items(path, policy="recover").load() == []
     assert "queue.json" in caplog.text
 
 
@@ -136,9 +124,10 @@ def test_strict_refuses_a_damaged_file_and_names_it_and_why(tmp_path, content):
     path = tmp_path / "queue.json"
     path.write_bytes(content)
     incidents: list[Incident] = []
+    set_incident_hook(incidents.append)
 
     with pytest.raises(StateFileError) as e:
-        items(path, policy="strict", on_incident=incidents.append).load()
+        items(path, policy="strict").load()
 
     assert e.value.path == path and e.value.reason
     assert str(path) in str(e.value) and e.value.reason in str(e.value)
@@ -164,14 +153,20 @@ def test_changed_tells_when_someone_else_rewrote_the_file(tmp_path):
     assert not mine.changed() and theirs.changed()
 
 
-def test_reload_reads_a_damaged_strict_file_once_until_it_changes(tmp_path):
+def test_reload_keeps_the_last_good_value_of_a_strict_file_damaged_meanwhile(tmp_path, caplog):
     path = tmp_path / "users.json"
     mine, theirs = items(path, policy="strict"), items(path, policy="strict")
+    incidents: list[Incident] = []
+    set_incident_hook(incidents.append)
     good = mine.load()
     path.write_text("[{", encoding="utf-8")  # damaged by someone else
 
+    assert mine.reload(good) is good and mine.damaged
+    assert mine.reload(good) is good  # not tried again while unchanged
+    assert [(i.path, i.backup) for i in incidents] == [(path, None)]  # reported once, no backup
+    assert incidents[0].message == "users.json 损坏，继续使用损坏前读到的内容，文件未改动，请修复或从备份恢复"
+    assert "users.json" in caplog.text and path.read_text(encoding="utf-8") == "[{"  # left alone
     with pytest.raises(StateFileError):
-        mine.reload(good)
-    assert mine.damaged and mine.reload(good) is good  # not tried again while unchanged
+        mine.load()  # starting on it is still refused
     theirs.save([Item("a", 1)])  # repaired
     assert mine.reload(good) == [Item("a", 1)] and mine.damaged is None

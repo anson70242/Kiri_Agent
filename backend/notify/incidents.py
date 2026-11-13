@@ -18,7 +18,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
-from typing import Literal
 
 from backend.state_file import Incident
 
@@ -30,21 +29,20 @@ log = logging.getLogger(__name__)
 class IncidentAlerts:
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._mode: Literal["hold", "deliver", "log"] = "hold"
-        self._held: list[str] = []
-        self._loop: asyncio.AbstractEventLoop | None = None
-        self._notifier: LiveNotifier | None = None
+        self._held: list[str] | None = []  # incidents before `start`; None once started
+        # where they go once started; None: nowhere (no alert channel, or stopped)
+        self._target: tuple[asyncio.AbstractEventLoop, LiveNotifier] | None = None
 
     def __call__(self, incident: Incident) -> None:
         text = incident.message
         with self._lock:
-            if self._mode == "hold":
+            if self._held is not None:
                 self._held.append(text)
                 return
-            if self._mode == "log":
-                return
-            loop, notifier = self._loop, self._notifier
-        assert loop and notifier
+            target = self._target
+        if target is None:
+            return
+        loop, notifier = target
         try:
             loop.call_soon_threadsafe(notifier.alert, text)  # alert() needs the loop's thread
         except RuntimeError as e:  # the loop closed meanwhile
@@ -54,15 +52,14 @@ class IncidentAlerts:
         """Deliver held incidents and every later one through `notifier.alert` (None: no
         alert channel, only logged). Call from inside the running event loop."""
         with self._lock:
-            held, self._held = self._held, []
+            held, self._held = self._held or [], None
             if notifier is None:
-                self._mode = "log"
                 return
-            self._loop, self._notifier, self._mode = asyncio.get_running_loop(), notifier, "deliver"
+            self._target = asyncio.get_running_loop(), notifier
         for text in held:
             notifier.alert(text)
 
     def stop(self) -> None:
         """From now on incidents are only logged (the notifier is shutting down)."""
         with self._lock:
-            self._mode, self._held, self._loop, self._notifier = "log", [], None, None
+            self._held, self._target = None, None

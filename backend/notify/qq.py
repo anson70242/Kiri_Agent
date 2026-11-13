@@ -33,7 +33,7 @@ from typing import Any
 
 import httpx
 
-from backend.state_file import StateFile
+from backend.state_file import StateFile, expect_list
 
 from .base import EventKind, Notifier, StreamEvent
 from .history import NotifyHistory
@@ -84,9 +84,7 @@ class QQSettings:
 
 def decode_groups(raw: Any) -> dict[str, dict[str, Any]]:
     """The file's list of groups, keyed by openid; raises on anything else."""
-    if not isinstance(raw, list):
-        raise ValueError(f"expected a list of groups, got {type(raw).__name__}")
-    for g in raw:
+    for g in expect_list(raw, "groups"):
         if not (isinstance(g, dict) and isinstance(g.get("openid"), str)):
             raise ValueError(f"not a group (needs an openid): {g!r}")
     return {g["openid"]: g for g in raw}

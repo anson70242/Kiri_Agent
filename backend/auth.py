@@ -41,7 +41,6 @@ import hashlib
 import hmac
 import ipaddress
 import json
-import logging
 import re
 import secrets
 import sys
@@ -51,9 +50,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from backend.state_file import Incident, StateFile, StateFileError, print_incidents, report
-
-log = logging.getLogger(__name__)
+from backend.state_file import StateFile, StateFileError, expect_list, print_incidents
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -130,9 +127,7 @@ def streamers_of(u: dict[str, Any]) -> str | list[str]:
 
 def decode_users(raw: Any) -> list[dict[str, Any]]:
     """The file's accounts; raises on anything that isn't a list of them."""
-    if not isinstance(raw, list):
-        raise ValueError(f"expected a list of users, got {type(raw).__name__}")
-    for u in raw:
+    for u in expect_list(raw, "users"):
         if not (isinstance(u, dict) and all(isinstance(u.get(k), str) for k in ("username", "role", "password_hash"))):
             raise ValueError("not a user (needs username, role and password_hash)")
     return raw
@@ -151,25 +146,14 @@ class UserStore:
         self._users = self.file.load()
 
     @property
-    def path(self) -> Path:
-        return self.file.path
-
-    @property
     def users(self) -> list[dict[str, Any]]:
         self.refresh()
         return self._users
 
     def refresh(self) -> None:
-        """Re-read the file if it changed on disk. Damaged: keep the users read before, and
-        log and report it once until it is repaired."""
-        was_damaged = self.file.damaged is not None
-        try:
-            self._users = self.file.reload(self._users)
-        except StateFileError as e:
-            if not was_damaged:
-                log.error("%s is damaged (%s); keeping the %d user(s) read before", e.path, e.reason,
-                          len(self._users))
-                report(Incident(e.path, None, e.reason))
+        """Re-read the file if it changed on disk. Damaged: the users read before stay (the
+        state file logs and reports it once until it is repaired)."""
+        self._users = self.file.reload(self._users)
 
     def _save(self) -> None:
         self.file.save(self._users)
@@ -178,7 +162,7 @@ class UserStore:
         """Never overwrite a damaged users file: a person repairs it (or restores a backup)."""
         self.refresh()
         if self.file.damaged is not None:
-            raise AuthError(503, f"{self.path.name} 已损坏，修复之前不能修改账号")
+            raise AuthError(503, f"{self.file.path.name} 已损坏，修复之前不能修改账号")
 
     def __bool__(self) -> bool:
         return bool(self.users)

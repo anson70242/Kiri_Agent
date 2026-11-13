@@ -20,7 +20,7 @@ from backend.monitor.server import create_app
 from backend.notify import Notifier
 from backend.state_file import StateFileError
 
-from .helpers import AlertRecorder
+from .helpers import AlertRecorder, wait_for
 
 DAMAGED = '[{"name": "A", "platform": '
 REPO = Path(__file__).resolve().parents[1]
@@ -156,15 +156,6 @@ def login(client, name: str) -> int:
 
 def names(client) -> list[str]:
     return [u["username"] for u in client.get("/api/users").json()["users"]]
-
-
-def wait_for(condition, timeout: float = 5) -> bool:
-    end = time.monotonic() + timeout
-    while not condition():
-        if time.monotonic() > end:
-            return False
-        time.sleep(0.02)
-    return True
 
 
 def test_users_damaged_while_running_stay_in_effect_and_the_owner_is_alerted(tmp_path, monkeypatch):

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import socket
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -144,3 +145,13 @@ class AlertRecorder(Recorder):
 
     async def alert(self, text: str) -> None:
         self.alerts.append(text)
+
+
+def wait_for(condition, timeout: float = 5) -> bool:
+    """Poll `condition` until it holds; False when it still does not after `timeout` seconds."""
+    end = time.monotonic() + timeout
+    while not condition():
+        if time.monotonic() > end:
+            return False
+        time.sleep(0.02)
+    return True

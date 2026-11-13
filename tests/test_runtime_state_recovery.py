@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -18,7 +17,7 @@ from backend.notify import LiveNotifier, Notifier
 from backend.notify.history import NotifyHistory
 from backend.state_file import set_incident_hook
 
-from .helpers import OFFLINE, AlertRecorder, Recorder, ev, live, off
+from .helpers import OFFLINE, AlertRecorder, Recorder, ev, live, off, wait_for
 
 DAMAGED = "[{\"info\": "
 
@@ -26,9 +25,8 @@ DAMAGED = "[{\"info\": "
 @pytest.fixture
 def incidents():
     got = []
-    previous = set_incident_hook(got.append)
-    yield got
-    set_incident_hook(previous)
+    set_incident_hook(got.append)  # conftest puts the previous hook back
+    return got
 
 
 def backups(folder, name: str) -> list:
@@ -165,31 +163,18 @@ def test_the_app_starts_on_a_damaged_live_stream_state_and_history_and_alerts_th
         "notify": {"state_file": str(tmp_path / "notify_state.json"), "log_file": str(tmp_path / "notify_log.json"),
                    "rec": {"webhook_env": "KIRI_T_REC"}},
     }), encoding="utf-8")
-    previous = set_incident_hook(None)
-    try:
-        app = create_app(cfg)
-        rec = app.state.notifier.notifiers[0]
-        with TestClient(app) as client:
-            assert wait_for(lambda: len(rec.alerts) == 2)
-            assert client.get("/healthz").json() == {"ok": True}
-            assert {e["summary"] for e in client.get("/api/notify").json()["log"]} == set(rec.alerts)
-    finally:
-        set_incident_hook(previous)
+    app = create_app(cfg)  # installs its own incident hook; conftest puts the previous one back
+    rec = app.state.notifier.notifiers[0]
+    with TestClient(app) as client:
+        assert wait_for(lambda: len(rec.alerts) == 2)
+        assert client.get("/healthz").json() == {"ok": True}
+        assert {e["summary"] for e in client.get("/api/notify").json()["log"]} == set(rec.alerts)
     (state_backup,) = backups(tmp_path, "notify_state.json")
     (log_backup,) = backups(tmp_path, "notify_log.json")
     assert sorted(rec.alerts) == sorted([
         f"notify_state.json 损坏，已备份为 {state_backup.name}，已按空文件继续运行",
         f"notify_log.json 损坏，已备份为 {log_backup.name}，已按空文件继续运行",
     ])
-
-
-def wait_for(condition, timeout: float = 5) -> bool:
-    end = time.monotonic() + timeout
-    while not condition():
-        if time.monotonic() > end:
-            return False
-        time.sleep(0.02)
-    return True
 
 
 # ---- command line tools: the person at the terminal is the owner ----

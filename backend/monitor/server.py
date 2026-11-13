@@ -65,8 +65,9 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
     `check_channel`: replaces the real "does this channel exist" check (tests).
     Login is on when the config has `"auth": {"enabled": true}` (never in dev mode).
     A damaged runtime state file reaches the owner as an operator alert (dev mode: logged)."""
-    # First, so incidents while the stores load below are held until the notifier runs.
-    alerts = None if dev else IncidentAlerts()
+    # First, so incidents while the stores load below are held until the notifier runs
+    # (dev mode has no notifier: they are only logged).
+    alerts = IncidentAlerts()
     set_incident_hook(alerts)
     _, cfg_interval = load_config(config)
     interval = interval or cfg_interval
@@ -88,8 +89,7 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
 
     @contextlib.asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        if alerts:
-            alerts.start(notifier)
+        alerts.start(notifier)
         task = asyncio.create_task(mon.run(interval))
         auto_task = asyncio.create_task(auto.run()) if auto else None
         qq_task = asyncio.create_task(gateway.run()) if gateway else None
@@ -101,8 +101,7 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
             qq_task.cancel()
             await gateway.aclose()
         await mon.aclose()
-        if alerts:
-            alerts.stop()
+        alerts.stop()
         if notifier:
             await notifier.aclose()
 

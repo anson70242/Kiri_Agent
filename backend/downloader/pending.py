@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.monitor import Streamer
-from backend.state_file import StateFile
+from backend.state_file import StateFile, expect_list
 
 from .base import ChatNotReady, DownloadError, DownloadSettings, VideoInfo
 
@@ -45,9 +45,7 @@ class PendingChat:
 
 def decode_pending_chats(raw: Any) -> list[PendingChat]:
     """The chat retry queue file's JSON -> entries; raises if it isn't a list of entries."""
-    if not isinstance(raw, list):
-        raise ValueError(f"expected a list of queued chats, got {type(raw).__name__}")
-    return [PendingChat.from_dict(d) for d in raw]
+    return [PendingChat.from_dict(d) for d in expect_list(raw, "queued chats")]
 
 
 @dataclass
@@ -65,7 +63,6 @@ class PendingChats:
         give_up: float = 48 * 3600,
         clock: Callable[[], float] = time.time,
     ):
-        self.path = path
         # Runtime state: a damaged queue is set aside as a backup (the owner is alerted).
         self._store = StateFile(path, default=list, policy="recover", decode=decode_pending_chats,
                                 encode=lambda entries: [e.to_dict() for e in entries])
