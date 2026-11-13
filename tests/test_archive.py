@@ -11,7 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from backend.archive import Archive, ArchiveNotFound, ArtifactDamaged, ArtifactMissing, Artifact, Downloads
+from backend.archive import (
+    Archive, ArchiveNotFound, ArtifactDamaged, ArtifactMissing, Artifact, Downloads, file_date)
 
 from .helpers import sample_archive
 
@@ -216,17 +217,12 @@ def test_a_named_file_is_served_only_from_directly_inside_the_archive(tmp_path):
             a.member(bad)
 
 
-def test_the_archive_date_comes_from_the_date_folder_else_the_file_name(tmp_path):
-    root = tmp_path / "downloads"
-    assert Archive.from_folder(sample_archive(root, "A", "20261105", "t", stem="[20261231][A] t")).date == "20261105"
-    loose = tmp_path / "copied"
-    loose.mkdir()
-    (loose / "[20261107][A] t.highlights.json").write_text("{}", encoding="utf-8")
-    assert Archive.from_folder(loose).date == "20261107"
-    (loose / "x.mp4").write_bytes(b"v")
-    assert Archive.from_folder(loose).date == "20261107"  # the video's name has no date: any file's
-    assert Archive.from_video(tmp_path / "elsewhere" / "[20261108][A] t.mp4").date == "20261108"
-    assert Archive.from_folder(tmp_path / "downloads" / "A" / "20261105").date == ""  # nothing dated
+def test_a_files_date_comes_from_the_date_folder_else_its_own_name(tmp_path):
+    folder = sample_archive(tmp_path / "downloads", "A", "20261105", "t", stem="[20261231][A] t")
+    assert file_date(folder / "[20261231][A] t.highlights.json") == "20261105"
+    loose = tmp_path / "copied"  # a table copied out of its archive
+    assert file_date(loose / "[20261107][A] t.highlights.json") == "20261107"
+    assert file_date(loose / "t.highlights.json") == ""  # nothing dated
 
 
 def test_the_archive_module_depends_on_no_monitor_downloader_notify_or_pipeline_code():

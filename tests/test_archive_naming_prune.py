@@ -53,7 +53,7 @@ def test_an_archive_finds_the_files_it_was_named_with(tmp_path):
         (out / name).write_bytes(b"x")
     a = Archive.from_video(out / artifact_name(stem, Artifact.VIDEO))
     assert a.present() == {Artifact.VIDEO, Artifact.RAW_CHAT}
-    assert a.date == "20261105" and a.creator == "柊優花" and a.title == "歌枠"
+    assert a.date_folder == "20261105" and a.creator == "柊優花" and a.title == "歌枠"
 
 
 # ---- prune ----

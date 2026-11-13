@@ -303,11 +303,6 @@ def find_table(path: Path) -> Path:
     return path
 
 
-def archive_date(file: Path) -> str:
-    """The YYYYMMDD of the highlight table `file` (see archive.file_date); "" when none is known."""
-    return file_date(file)
-
-
 def main(argv: list[str] | None = None) -> int:
     """uv run -m backend.tencent_docs <.highlights.json | archive folder> --sheet <link or id> [--title T]"""
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # sheet titles on a Windows console
@@ -325,7 +320,7 @@ def main(argv: list[str] | None = None) -> int:
         settings = dataclasses.replace(load_credentials(args.config), file_id=file_id)
         file = find_table(args.path)
         table = read_file(file, Artifact.HIGHLIGHTS)
-        url = upload_table(table, settings, sheet_title=args.title or sheet_title(table, archive_date(file)))
+        url = upload_table(table, settings, sheet_title=args.title or sheet_title(table, file_date(file)))
     except (TencentDocsError, ValueError) as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1

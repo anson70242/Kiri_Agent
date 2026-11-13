@@ -16,7 +16,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
 
-from backend.archive import Archive, ArchiveNotFound, ArtifactDamaged, ArtifactMissing, Artifact, Downloads, read_file
+from backend.archive import Archive, ArchiveNotFound, ArtifactDamaged, ArtifactMissing, Artifact, Downloads
 from backend.sheet import highlights_xlsx
 
 from .__main__ import REPO_ROOT
@@ -46,13 +46,12 @@ def summary(a: Archive) -> dict:
         f = a.file(artifact)
         return f.name if f else None
 
-    video = a.video
     return {
         "creator": a.creator,
         "date": a.date_folder,
         "title": a.title,
         "folder": a.ref,
-        "video": video.name if video else None,
+        "video": name(Artifact.VIDEO),
         "video_size": a.video_size,
         "downloading": a.downloading,
         "has_chat": a.has(Artifact.CHAT),
@@ -185,21 +184,15 @@ def create_router(output_dir: Path,
             density[minute] += 1
         return {"messages": messages, "density": density}
 
-    def load_transcript(folder: str, lang: str, request: Request) -> list[dict]:
-        return read_or_answer(lambda: open_archive(folder, request).read_transcript(lang),
+    def load_transcript(archive: Archive, lang: str) -> list[dict]:
+        return read_or_answer(lambda: archive.read_transcript(lang),
                               missing="no transcript", damaged="transcript is not valid JSON")
 
     # ---- 路灯表 ----
 
-    def load_highlights(archive: Archive) -> tuple[Path, dict]:
-        """The archive's 路灯表 file and its contents."""
-        def read() -> tuple[Path, dict]:
-            file = archive.file(Artifact.HIGHLIGHTS)
-            if file is None:
-                raise ArtifactMissing(Artifact.HIGHLIGHTS, archive.folder)
-            return file, read_file(file, Artifact.HIGHLIGHTS)
-
-        return read_or_answer(read, missing="no 路灯表 for this archive", damaged="路灯表 is not valid JSON")
+    def load_highlights(archive: Archive) -> dict:
+        return read_or_answer(archive.read_highlights,
+                              missing="no 路灯表 for this archive", damaged="路灯表 is not valid JSON")
 
     @router.get("/highlights", include_in_schema=False)
     def highlights_page() -> FileResponse:
@@ -225,13 +218,14 @@ def create_router(output_dir: Path,
 
     @router.get("/api/highlights/table")
     def highlights_table(folder: str, request: Request) -> dict:
-        return load_highlights(open_archive(folder, request))[1]
+        return load_highlights(open_archive(folder, request))
 
     @router.get("/api/highlights/xlsx")
     def highlights_xlsx_download(folder: str, request: Request) -> Response:
         """The 路灯表 as a formatted Excel sheet."""
-        file, table = load_highlights(open_archive(folder, request))
-        name = Artifact.HIGHLIGHTS.stem_of(file.name) + ".highlights.xlsx"
+        archive = open_archive(folder, request)
+        table = load_highlights(archive)
+        name = Artifact.HIGHLIGHTS.stem_of(archive.require(Artifact.HIGHLIGHTS).name) + ".highlights.xlsx"
         return Response(highlights_xlsx(table), media_type=XLSX_TYPE,
                         headers={"Content-Disposition": attachment(name)})
 
@@ -254,13 +248,14 @@ def create_router(output_dir: Path,
 
     @router.get("/api/archives/transcript")
     def transcript(folder: str, request: Request, lang: str = "ja") -> dict:
-        return {"segments": load_transcript(folder, lang, request)}
+        return {"segments": load_transcript(open_archive(folder, request), lang)}
 
     @router.get("/api/archives/srt")
     def srt_download(folder: str, request: Request, lang: str = "ja") -> Response:
         """Subtitles as an .srt file (`lang` ja or zh)."""
-        name = open_archive(folder, request).title + (".zh.srt" if lang == "zh" else ".ja.srt")
-        return Response(srt(load_transcript(folder, lang, request)), media_type="application/x-subrip; charset=utf-8",
+        archive = open_archive(folder, request)
+        name = archive.title + (".zh.srt" if lang == "zh" else ".ja.srt")
+        return Response(srt(load_transcript(archive, lang)), media_type="application/x-subrip; charset=utf-8",
                         headers={"Content-Disposition": attachment(name)})
 
     @router.get("/api/archives/subtitles.vtt")
@@ -268,7 +263,7 @@ def create_router(output_dir: Path,
         """The transcript (`lang` ja or zh) as WebVTT, for <track> on the video."""
         cues = "".join(
             f"\n{_vtt_time(s['start'])} --> {_vtt_time(s['end'])}\n{s['text']}\n"
-            for s in load_transcript(folder, lang, request)
+            for s in load_transcript(open_archive(folder, request), lang)
         )
         return Response("WEBVTT\n" + cues, media_type="text/vtt; charset=utf-8")
 

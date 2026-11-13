@@ -42,11 +42,11 @@ from typing import Any, Literal
 from urllib.parse import quote
 
 from backend.analysis import AnalysisSettings, analyze
-from backend.archive import Archive, Artifact, ArtifactDamaged, ArtifactMissing, Downloads, read_file
+from backend.archive import Archive, Artifact, ArtifactDamaged, ArtifactMissing, Downloads, file_date, read_file
 from backend.asr import ASRSettings, transcribe
 from backend.llm import LLMError, chat, load_llm
 from backend.tencent_docs import (
-    TencentDocsError, archive_date, load_credentials, sheet_title, upload_table)
+    TencentDocsError, load_credentials, sheet_title, upload_table)
 from backend.translate import TranslateSettings
 from backend.translate import translate as translate_transcript
 from backend.monitor import StreamMonitor, Streamer, StreamStatus
@@ -159,10 +159,6 @@ class AutoDownloader:
         self._active: dict[str, dict[str, Any] | None] = dict.fromkeys(STAGES)  # job + progress
 
     # ---- queue ----
-
-    @property
-    def state_file(self) -> Path:
-        return self._queue.path
 
     def load(self) -> list[Job]:
         return self._queue.load()
@@ -336,10 +332,7 @@ class AutoDownloader:
             sheet = self.uploads.get(s.streamer.id)
             if not sheet:
                 return Outcome("done", "")  # switched off in the gear meanwhile
-            archive = Archive.from_video(Path(job.video))
-            table = archive.file(Artifact.HIGHLIGHTS)
-            if table is None:
-                raise ArtifactMissing(Artifact.HIGHLIGHTS, archive.folder)
+            table = Archive.from_video(Path(job.video)).require(Artifact.HIGHLIGHTS)
             link = self.upload(table, sheet, s.streamer.name, s.title or "")
         except Exception as e:  # noqa: BLE001 - API errors, timeouts, expired token: all retried
             return Outcome("error", str(e) or type(e).__name__)
@@ -419,7 +412,8 @@ class AutoDownloader:
             log.info("auto-download done: %s %s", name, outcome.result and outcome.result.video)
             detail = success_detail(outcome)
             if self.site_url and outcome.result:
-                detail += "\n" + archive_link(self.site_url, self.settings.output_dir, outcome.result.output_dir)
+                ref = Downloads(self.settings.output_dir).ref(outcome.result.output_dir)
+                detail += "\n" + archive_link(self.site_url, ref)
             self._send(EventKind.DOWNLOADED, job, detail)
             video = outcome.result.video if outcome.result else None
             if self.transcribe and video:
@@ -505,7 +499,7 @@ def ready_detail(video: Path, site_url: str, output_dir: Path) -> str:
         ref = Downloads(output_dir).ref(archive.folder)
         lines += ["全部下载（影片、弹幕、中日字幕 SRT）：",
                   f"{site_url.rstrip('/')}/api/archives/zip?folder={quote(ref, safe='')}",
-                  "录播页面：", archive_link(site_url, output_dir, archive.folder)]
+                  "录播页面：", archive_link(site_url, ref)]
     return "\n".join(lines)
 
 
@@ -513,10 +507,10 @@ READY_ARTIFACTS = [("影片", Artifact.VIDEO), ("弹幕", Artifact.CHAT), ("日�
                    ("中文字幕", Artifact.CHINESE_TRANSCRIPT), ("路灯表", Artifact.HIGHLIGHTS)]  # in the message's order
 
 
-def archive_link(site_url: str, output_dir: Path, folder: Path) -> str:
-    """The archive's page on the dashboard (plays it, has the downloads). The folder is
-    escaped like the page's encodeURIComponent, so its detail view opens."""
-    ref = Downloads(output_dir).ref(folder)
+def archive_link(site_url: str, ref: str) -> str:
+    """The dashboard page of the archive with this folder reference (plays it, has the
+    downloads). The reference is escaped like the page's encodeURIComponent, so its detail
+    view opens."""
     return f"{site_url.rstrip('/')}/archives#{quote(ref, safe=SAFE_URI_CHARS)}"
 
 
@@ -622,7 +616,7 @@ def load_uploader(config: Path) -> Callable[[Path, str, str, str], str] | None:
         data.setdefault("streamer", streamer)
         data.setdefault("title", title)
         return upload_table(data, dataclasses.replace(creds, file_id=file_id),
-                            sheet_title=sheet_title(data, archive_date(table)))
+                            sheet_title=sheet_title(data, file_date(table)))
 
     return run
 

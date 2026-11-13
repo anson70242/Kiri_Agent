@@ -116,21 +116,14 @@ DATE_RE = re.compile(r"\d{8}")  # YYYYMMDD
 DATED_NAME_RE = re.compile(r"\[(\d{8})\]")  # a file name's `[YYYYMMDD]` prefix
 
 
-def _dated(date_folder: str, names: list[str]) -> str:
-    """`date_folder` when it is a `YYYYMMDD`, else the `[YYYYMMDD]` prefix of the first of
-    `names` that has one; "" when none says."""
-    if DATE_RE.fullmatch(date_folder):
-        return date_folder
-    for name in names:
-        if m := DATED_NAME_RE.match(name):
-            return m.group(1)
-    return ""
-
-
 def file_date(path: Path) -> str:
     """The `YYYYMMDD` of one artifact file: its archive's date folder, else the `[YYYYMMDD]`
     prefix of the file's own name (never another file's); "" when neither says."""
-    return _dated(path.parent.parent.name, [path.name])
+    date_folder = path.parent.parent.name
+    if DATE_RE.fullmatch(date_folder):
+        return date_folder
+    m = DATED_NAME_RE.match(path.name)
+    return m.group(1) if m else ""
 
 
 class Archive:
@@ -152,10 +145,10 @@ class Archive:
         return cls(folder, Artifact.VIDEO.stem_of(video.name) if video else None, snapshot, root)
 
     @classmethod
-    def from_video(cls, video: Path, root: Path | None = None) -> Archive:
+    def from_video(cls, video: Path) -> Archive:
         """The archive `video` belongs to (neither need exist yet); artifacts are named after
         it without its extension, whatever the format (`x.mkv` -> `x.transcript.json`)."""
-        return cls(video.parent, video.stem, _scan_if_there(video.parent), root)
+        return cls(video.parent, video.stem, _scan_if_there(video.parent), None)
 
     # ---- where it is ----
 
@@ -182,13 +175,6 @@ class Archive:
     @property
     def title(self) -> str:
         return self.folder.name
-
-    @property
-    def date(self) -> str:
-        """The archive's `YYYYMMDD`: from its date folder, else from the `[YYYYMMDD]` prefix of
-        its video's name or of any file's name (first in sorted order); "" when none says."""
-        names = ([self.stem] if self.stem is not None else []) + [e.name for e in self._entries]
-        return _dated(self.date_folder, names)
 
     @property
     def size(self) -> int:
@@ -242,6 +228,13 @@ class Archive:
         entry = self._entry(Artifact.VIDEO)
         return entry.size if entry else 0
 
+    def require(self, artifact: Artifact) -> Path:
+        """The artifact's file; raises ArtifactMissing when the archive lacks it."""
+        path = self.file(artifact)
+        if path is None:
+            raise ArtifactMissing(artifact, self.folder)
+        return path
+
     def has(self, artifact: Artifact) -> bool:
         return self.file(artifact) is not None
 
@@ -259,10 +252,7 @@ class Archive:
     def read(self, artifact: Artifact) -> Any:
         """The artifact's JSON contents, parsed. Raises ArtifactMissing when the archive
         lacks it, ArtifactDamaged when it is not readable JSON."""
-        path = self.file(artifact)
-        if path is None:
-            raise ArtifactMissing(artifact, self.folder)
-        return read_file(path, artifact)
+        return read_file(self.require(artifact), artifact)
 
     def read_chat(self) -> list[dict]:
         """The cleaned chat's messages (none when the file holds something other than a list)."""
@@ -297,13 +287,13 @@ class Archive:
     # ---- saving ----
 
     @classmethod
-    def from_file(cls, path: Path, root: Path | None = None) -> Archive:
+    def from_file(cls, path: Path) -> Archive:
         """The archive an artifact file (e.g. a raw chat) belongs to, its artifacts named after
         that file's stem. Raises ValueError when the name carries no artifact suffix."""
         artifact = next((a for a in Artifact if a.matches(path.name)), None)
         if artifact is None:
             raise ValueError(f"not an artifact file: {path.name}")
-        return cls(path.parent, artifact.stem_of(path.name), _scan_if_there(path.parent), root)
+        return cls(path.parent, artifact.stem_of(path.name), _scan_if_there(path.parent), None)
 
     def save(self, artifact: Artifact, content: Any) -> Path:
         """Write the artifact's content atomically (through `<name>.tmp`, then a rename) to the
