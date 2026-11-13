@@ -18,6 +18,9 @@ Incidents are always logged, then go to the hook the application installed with
 `set_incident_hook` (the operator alert; for a command line tool, `print_incidents`: the
 terminal). This module knows nothing about the alert channels.
 
+`dry_run` asks what would happen without touching a file: the deploy check
+(backend.check_state) runs the new code against the server's files with it.
+
 A store shared with another process re-reads its file with `reload`. A strict file found
 damaged there never stops the running service: the last good value stays, and an Incident
 without a backup is reported once.
@@ -25,11 +28,12 @@ without a backup is reported once.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Generic, Literal, TypeVar
@@ -105,6 +109,32 @@ def _report(incident: Incident) -> None:
             log.exception("could not report the incident with %s", incident.path)
 
 
+@dataclass(frozen=True)
+class Damage:
+    """A damaged state file found during a dry run, and the policy that would have handled it."""
+
+    path: Path
+    policy: Policy
+    reason: str
+
+
+_dry_run: list[Damage] | None = None  # the list of the dry run in progress
+
+
+@contextlib.contextmanager
+def dry_run() -> Iterator[list[Damage]]:
+    """Ask what the state files would do, changing nothing on disk. Inside the block every
+    StateFile loads as usual, except that a damaged file of either policy is left in
+    place, returned as default() and added to the list this yields (no backup, no
+    incident, no StateFileError), and a save writes nothing."""
+    global _dry_run
+    previous, _dry_run = _dry_run, []
+    try:
+        yield _dry_run
+    finally:
+        _dry_run = previous
+
+
 def expect_list(raw: Any, what: str) -> list[Any]:
     """`raw` when it is a list; else the ValueError a `decode` raises for the wrong shape
     (`what`: the records the file holds, e.g. "users")."""
@@ -170,6 +200,8 @@ class StateFile(Generic[T]):
 
     def save(self, value: T) -> None:
         """Write atomically: never a half-written file, even if the process dies."""
+        if _dry_run is not None:
+            return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_name(self.path.name + ".tmp")
         try:
@@ -194,6 +226,9 @@ class StateFile(Generic[T]):
 
     def _damaged(self, error: Exception) -> T:
         reason = f"{type(error).__name__}: {error}"
+        if _dry_run is not None:
+            _dry_run.append(Damage(self.path, self.policy, reason))
+            return self.default()
         if self.policy == "strict":
             self.damaged = reason
             raise StateFileError(self.path, reason) from error

@@ -64,3 +64,14 @@ jobs:
           done
           docker logs kiri-ci
           exit 1
+
+      # What deploy.yml does on the server before it restarts anything: with the service up
+      # under its fixed container name, a one-off container of the same image reads the
+      # state files (none here) and finds the download queue idle.
+      - name: Deploy check runs beside the live container
+        run: |
+          docker rm -f kiri-ci
+          docker compose up -d --no-deps kiri
+          docker compose run --rm --no-deps -T kiri \
+            /app/.venv/bin/python -m backend.check_state --require-idle
+          docker compose down

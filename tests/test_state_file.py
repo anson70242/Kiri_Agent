@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from backend.state_file import Incident, StateFile, StateFileError, set_incident_hook
+from backend.state_file import Incident, StateFile, StateFileError, dry_run, set_incident_hook
 
 
 def test_missing_file_yields_the_default(tmp_path):
@@ -170,3 +170,33 @@ def test_reload_keeps_the_last_good_value_of_a_strict_file_damaged_meanwhile(tmp
         mine.load()  # starting on it is still refused
     theirs.save([Item("a", 1)])  # repaired
     assert mine.reload(good) == [Item("a", 1)] and mine.damaged is None
+
+
+# ---- dry run (asking what would happen, touching nothing) ----
+
+def test_a_dry_run_lists_damaged_files_of_either_policy_and_leaves_them_alone(tmp_path):
+    queue, users = tmp_path / "queue.json", tmp_path / "users.json"
+    queue.write_text("{oops", encoding="utf-8")
+    users.write_text("[{", encoding="utf-8")
+    incidents: list[Incident] = []
+    set_incident_hook(incidents.append)
+
+    with dry_run() as damaged:
+        assert items(queue, policy="recover").load() == []
+        assert items(users, policy="strict").load() == []  # listed instead of raised
+        assert items(tmp_path / "missing.json", policy="strict").load() == []
+
+    assert [(d.path, d.policy) for d in damaged] == [(queue, "recover"), (users, "strict")]
+    assert all(d.reason for d in damaged) and incidents == []
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["queue.json", "users.json"]  # no backup made
+    assert (queue.read_text(encoding="utf-8"), users.read_text(encoding="utf-8")) == ("{oops", "[{")
+
+
+def test_a_dry_run_saves_nothing_and_ends_with_its_block(tmp_path):
+    path = tmp_path / "queue.json"
+    with dry_run():
+        items(path, policy="recover").save([Item("a", 1)])
+    assert not path.exists()
+
+    items(path, policy="recover").save([Item("a", 1)])  # back to normal afterwards
+    assert items(path, policy="recover").load() == [Item("a", 1)]
