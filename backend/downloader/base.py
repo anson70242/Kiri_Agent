@@ -178,10 +178,13 @@ class PlatformDownloader(ABC):
     def add_cookies(self, ydl: yt_dlp.YoutubeDL) -> None:
         """Put platform auth cookies into a fresh YoutubeDL."""
 
-    def find_vod(self, stream_url: str, channel: str, started_at: datetime | None) -> str | None:
-        """URL of the archive of a stream that just ended (from the monitor), or None
-        if it isn't up yet. YouTube: the stream URL itself is the archive."""
-        return stream_url
+    def find_replay(
+        self, live_url: str, channel: str, live_id: str | None, started_at: datetime | None
+    ) -> str | None:
+        """Address of the replay of a live that just ended (the monitor's watch address,
+        channel, live id and start time), or None if it isn't up yet. YouTube: the live's
+        address is its replay."""
+        return live_url
 
     # ---- metadata ----
 

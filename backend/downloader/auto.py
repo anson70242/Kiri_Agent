@@ -254,7 +254,7 @@ class AutoDownloader:
         s = job.status
         try:
             dl = downloader_for(s.url or "", self.settings, self.streamers)
-            url = dl.find_vod(s.url or "", s.streamer.channel, s.started_at)
+            url = dl.find_replay(s.url or "", s.streamer.channel, s.stream_id, s.started_at)
             if not url:
                 return Outcome("wait", "archive not listed yet")
             info = dl.info(url)
