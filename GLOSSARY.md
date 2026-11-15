@@ -15,7 +15,7 @@ One or more lives in a row by the same streamer that the group sees as one (一�
 _Avoid_: show, run
 
 **Singing live**:
-A live whose title marks it as a singing stream (歌回, 歌枠).
+A live whose title says the streamer will sing (歌回, 歌枠).
 _Avoid_: karaoke stream, song stream, 歌枠 live
 
 **Replay**:

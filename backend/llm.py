@@ -16,7 +16,7 @@ config.json:
     "llm": {
       "base_url": "http://127.0.0.1:8317/v1",   # e.g. CLIProxyAPI (Google agy) on the Japan PC
       "api_key_env": "AGY_API_KEY",             # .env variable holding the key
-      "model": "gemini-3.8-flash-high",
+      "model": "gemini-3-flash",                # the chat model (it cannot search)
       "proxy": true                             # send requests through LLM_PROXY
     }
 
@@ -30,6 +30,8 @@ from __future__ import annotations
 
 import json
 import os
+import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -89,18 +91,37 @@ def chat(settings: LLMSettings, messages: list[dict[str, Any]], client: OpenAI |
     return resp.choices[0].message.content or ""
 
 
-def ask_with_search(settings: LLMSettings, model: str, prompt: str) -> str:
-    """One prompt to `model` with Google Search available; returns the reply text."""
+class _TemporaryFailure(LLMError):
+    """No connection, a timeout, HTTP 429 or 5xx: worth another try."""
+
+
+def ask_with_search(settings: LLMSettings, model: str, prompt: str,
+                    retry_waits: Sequence[float] = (2.0, 5.0)) -> str:
+    """One prompt to `model` with Google Search available; returns the reply text. A failure
+    that looks temporary is retried after each of `retry_waits` seconds (twice), as the chat
+    call's client does; a reply without text raises."""
     root = settings.base_url.rstrip("/").removesuffix("/v1")
+    url = f"{root}/v1beta/models/{model}:generateContent"
     body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}], "tools": [{"googleSearch": {}}]}
+    for wait in retry_waits:
+        try:
+            return _search_once(settings, url, body)
+        except _TemporaryFailure:
+            time.sleep(wait)
+    return _search_once(settings, url, body)
+
+
+def _search_once(settings: LLMSettings, url: str, body: dict[str, Any]) -> str:
     try:
         with httpx.Client(proxy=settings.proxy, timeout=settings.timeout) as http:
-            resp = http.post(f"{root}/v1beta/models/{model}:generateContent", json=body,
-                             headers={"x-goog-api-key": settings.api_key})
+            resp = http.post(url, json=body, headers={"x-goog-api-key": settings.api_key})
+    except httpx.TransportError as e:
+        raise _TemporaryFailure(f"LLM request failed: {type(e).__name__}: {e}") from e
     except httpx.HTTPError as e:
         raise LLMError(f"LLM request failed: {type(e).__name__}: {e}") from e
     if resp.is_error:
-        raise LLMError(f"LLM request failed: HTTP {resp.status_code}: {_error_message(resp)}")
+        failure = _TemporaryFailure if resp.status_code == 429 or resp.status_code >= 500 else LLMError
+        raise failure(f"LLM request failed: HTTP {resp.status_code}: {_error_message(resp)}")
     try:
         parts = resp.json()["candidates"][0]["content"]["parts"]
         texts = [p.get("text", "") for p in parts if not p.get("thought")]
@@ -108,7 +129,9 @@ def ask_with_search(settings: LLMSettings, model: str, prompt: str) -> str:
             raise TypeError("a part's text is not a string")
     except (ValueError, LookupError, TypeError, AttributeError) as e:
         raise LLMError(f"LLM returned an unexpected reply ({type(e).__name__}: {e}): {resp.text[:200]}") from e
-    return "".join(texts)
+    if not (text := "".join(texts)):
+        raise LLMError(f"LLM reply has no text (only thoughts, or no parts): {resp.text[:200]}")
+    return text
 
 
 def _error_message(resp: httpx.Response) -> str:

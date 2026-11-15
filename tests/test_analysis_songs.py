@@ -68,7 +68,8 @@ class FakeLLM:
         user = messages[-1]["content"]
         if "【本段】" in user:
             start = user.split("【本段】")[1][:8]
-            return json.dumps({"timeline": self.logs[start]}, ensure_ascii=False)
+            default = [{"start": start, "end": start, "topic": "杂谈", "title": f"【{start}】", "detail": "细节"}]
+            return json.dumps({"timeline": self.logs.get(start, default)}, ensure_ascii=False)
         return json.dumps({"scores": SCORES}, ensure_ascii=False)
 
     @property
@@ -138,7 +139,7 @@ def test_songs_are_entries_in_the_row_where_they_start(tmp_path):
 
 
 @pytest.mark.parametrize("title", ["【歌枠】夜", "初めての歌回", "カラオケ配信", "弾き語りします", "karaoke night",
-                                   "Karaoke!", "KARAOKE"])
+                                   "Karaoke!", "KARAOKE", "【ＫＡＲＡＯＫＥ】", "ｋａｒａｏｋｅ"])
 def test_each_title_word_makes_one_song_naming_call(tmp_path, title):
     songs = FakeSongs(TWO_SONGS)
     rows, llm = run(tmp_path, songs, title=title)
@@ -203,7 +204,7 @@ def test_a_song_nobody_could_name_is_unnamed_with_the_heard_lyric(tmp_path):
 
 def test_songs_without_a_start_inside_the_live_are_ignored(tmp_path):
     rows, _ = run(tmp_path, FakeSongs({"songs": [
-        song("3:00", "00:07:30", "Bad Time"),  # not HH:MM:SS
+        song("3分钟", "00:07:30", "Bad Time"),  # not a time
         song("00:65:00", "00:66:00", "Bad Minutes"),
         song("01:00:00", "01:04:00", "After The Live"),
         {"end": "00:05:00", "title": "No Start", "title_sure": True},
@@ -229,8 +230,86 @@ def test_a_song_without_a_possible_end_is_kept_ending_at_its_start(tmp_path, end
     assert (entry["start"], entry["end"]) == ("00:03:00", "00:03:00")
 
 
+@pytest.mark.parametrize("start,end", [("0:03:00", "0:07:30"), ("03:00", "07:30"), ("3:00", "7:30"),
+                                       ("00:03:00.4", "00:07:30.95"), ("3:00,5", "07:30.0")])
+def test_song_times_are_read_tolerantly(tmp_path, start, end):
+    rows, _ = run(tmp_path, FakeSongs({"songs": [song(start, end, "Midori no Kasa", "Invented Artist")]}))
+
+    entry = rows[0]["timeline"][-1]
+    assert (entry["title"], entry["start"], entry["end"]) == ("【Midori no Kasa】", "00:03:00", "00:07:30")
+    assert titles(rows[1]) == ["【唱完道谢】"]  # the song's end was read too
+
+
+def test_segment_pass_times_are_read_tolerantly_when_removing(tmp_path):
+    logs = {**SEGMENT_LOGS, "00:00:00": [entry("0:00:10", "1:50", "【开场】"),
+                                         entry("2:40", "4:50", "【唱误听的歌名】", "唱歌")]}
+    rows, _ = run(tmp_path, FakeSongs({"songs": [song("00:03:00", "00:04:30", "Song Two", "Artist")]}), logs=logs)
+
+    assert titles(rows[0]) == ["【开场】", "【Song Two】"]
+
+
+def test_a_bracketed_name_is_unwrapped_and_a_literal_unnamed_stays_unnamed(tmp_path):
+    rows, _ = run(tmp_path, FakeSongs({"songs": [
+        song("00:03:00", "00:07:30", "【Midori no Kasa】", "Invented Artist"),
+        song("00:11:00", "00:12:00", "未识别", "Somebody", lyric="ほしのした"),  # marked sure all the same
+    ]}))
+
+    assert rows[0]["timeline"][-1]["title"] == "【Midori no Kasa】"
+    assert (rows[2]["timeline"][-1]["title"], rows[2]["timeline"][-1]["detail"]) == ("【未识别】", "歌词：ほしのした")
+
+
+def ignored_in_log(caplog) -> str:
+    return "\n".join(r.getMessage() for r in caplog.records if "ignored" in r.getMessage())
+
+
+def test_ignored_songs_are_named_in_the_log(tmp_path, caplog):
+    with caplog.at_level(logging.INFO, logger="backend.analysis"):
+        run(tmp_path, FakeSongs({"songs": [
+            song("3分钟", "00:07:30", "Bad Time"),
+            song("01:00:00", "01:04:00", "After The Live"),
+            song("00:03:00", "00:07:30", "Midori no Kasa", "Invented Artist"),
+        ]}))
+
+    logged = ignored_in_log(caplog)
+    assert "Bad Time" in logged and "After The Live" in logged
+    assert "Midori no Kasa" not in logged
+
+
+def test_a_song_listed_twice_is_one_entry(tmp_path, caplog):
+    with caplog.at_level(logging.INFO, logger="backend.analysis"):
+        rows, _ = run(tmp_path, FakeSongs({"songs": [
+            song("00:05:00", "00:06:00", "Midori Again", "Invented Artist"),  # starts inside the song below
+            song("00:03:00", "00:07:30", "Midori no Kasa", "Invented Artist"),
+        ]}))
+
+    names = [e["title"] for r in rows for e in r["timeline"] if e["topic"] == "唱歌"]
+    assert names == ["【Midori no Kasa】", "【安静的歌】"]
+    assert "Midori Again" in ignored_in_log(caplog)
+
+
+def test_a_song_starting_when_the_live_ends_is_outside_it(tmp_path, caplog):
+    transcript = [x for x in TRANSCRIPT if x["start"] < 590] + [tr(597.2, "またね")]  # ends at 599.2 s
+    with caplog.at_level(logging.INFO, logger="backend.analysis"):
+        rows, _ = run(tmp_path, FakeSongs({"songs": [song("00:09:59", "00:10:30", "Just In", "Artist"),
+                                                    song("00:10:00", "00:10:30", "Too Late", "Artist")]}),
+                      transcript=transcript)
+
+    assert titles(rows[1])[-1] == "【Just In】" and len(rows) == 2
+    assert "Too Late" in ignored_in_log(caplog) and "Just In" not in ignored_in_log(caplog)
+
+
+def test_a_song_too_long_to_believe_ends_at_its_start(tmp_path):
+    transcript = TRANSCRIPT + [tr(7190, "おしまい")]  # a two-hour live
+    rows, _ = run(tmp_path, FakeSongs({"songs": [song("00:05:00", "02:00:00", "Long Song", "Artist")]}),
+                  transcript=transcript)
+
+    entry = next(e for e in rows[1]["timeline"] if e["title"] == "【Long Song】")
+    assert (entry["start"], entry["end"]) == ("00:05:00", "00:05:00")
+    assert all(r["timeline"] for r in rows)  # no row emptied by the unbelievable end
+
+
 def test_a_song_end_past_the_live_ends_with_the_live(tmp_path):
-    rows, _ = run(tmp_path, FakeSongs({"songs": [song("00:11:00", "03:00:00", "Hoshi no Shita", "Somebody")]}))
+    rows, _ = run(tmp_path, FakeSongs({"songs": [song("00:11:00", "00:14:00", "Hoshi no Shita", "Somebody")]}))
 
     assert rows[2]["timeline"][-1]["end"] == "00:12:00"  # the last transcript line ends 00:12:00
 

@@ -19,17 +19,20 @@ Passes (AutoKiri's clip_highlight, adapted):
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import math
 import os
 import re
+import unicodedata
 from collections import Counter
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from backend import llm as llm_client
 from backend.archive import Archive, ArtifactMissing, Artifact
 
 log = logging.getLogger(__name__)
@@ -46,6 +49,7 @@ NameSongs = Callable[[str], str]
 SINGING_LIVE_WORDS = ("歌枠", "歌回", "カラオケ", "弾き語り", "karaoke")
 SONG_TOPIC = "唱歌"
 UNNAMED_SONG = "未识别"
+LONGEST_SONG = 20 * 60  # seconds; a song said to be longer has an end that is not believed
 
 SEGMENT_SYSTEM = """# Role
 你是专属的中文 B 站字幕组金牌运营助手，对日本虚拟主播（VTuber）有骨灰级了解。
@@ -141,33 +145,48 @@ class Segment:
 
 @dataclass
 class Song:
-    """One song of a singing live, with the song entry the topic log shows for it."""
+    """One song of a singing live: when it was sung, and how its song entry reads."""
 
     start: int
     end: int
-    entry: dict[str, str]
+    title: str  # 【name】, or 【未识别】
+    detail: str  # 原唱：artist, 歌词：a heard line, or empty
+
+    def entry(self) -> dict[str, str]:
+        """The song entry, an ordinary topic-log entry."""
+        return {"start": hms(self.start), "end": hms(self.end), "topic": SONG_TOPIC, "title": self.title,
+                "detail": self.detail}
 
 
 def is_singing_live(title: str) -> bool:
     """Whether the live's title marks it as a singing live (the songs then get named)."""
-    folded = title.casefold()
+    folded = unicodedata.normalize("NFKC", title).casefold()  # ＫＡＲＡＯＫＥ -> karaoke
     return any(word in folded for word in SINGING_LIVE_WORDS)
 
 
+TIME = re.compile(r"(?:(\d{1,2}):([0-5]?\d)|(\d{1,3})):([0-5]\d)(?:[.,]\d+)?")
+
+
+def parse_time(value: Any) -> int | None:
+    """Whole seconds of a time a model wrote, read tolerantly: `HH:MM:SS`, `H:MM:SS`,
+    `MM:SS`, with or without a fraction of a second. None when it is not a time."""
+    m = TIME.fullmatch(value.strip()) if isinstance(value, str) else None
+    if not m:
+        return None
+    hours, minutes = (int(m[1]), int(m[2])) if m[1] is not None else (0, int(m[3]))
+    return hours * 3600 + minutes * 60 + int(m[4])
+
+
 def seconds(t: str) -> int:
-    h, m, s = (int(x) for x in t.split(":"))
-    return h * 3600 + m * 60 + s
+    """Whole seconds of a time we wrote ourselves (chat times); ValueError when it is not one."""
+    if (s := parse_time(t)) is None:
+        raise ValueError(f"not a time: {t!r}")
+    return s
 
 
 def hms(s: float) -> str:
     s = max(0, int(s))
     return f"{s // 3600:02d}:{s % 3600 // 60:02d}:{s % 60:02d}"
-
-
-def parse_time(value: Any) -> int | None:
-    """Seconds of an `HH:MM:SS` time a model wrote; None when it is not one."""
-    m = re.fullmatch(r"(\d{1,2}):([0-5]\d):([0-5]\d)", value.strip()) if isinstance(value, str) else None
-    return int(m[1]) * 3600 + int(m[2]) * 60 + int(m[3]) if m else None
 
 
 def audience_chat(chat: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -310,12 +329,12 @@ def segment_prompt(seg: Segment, header: str) -> str:
     ])
 
 
-def segment_digest(seg: Segment, timeline: list[dict[str, Any]], songs: Sequence[Song] = ()) -> str:
+def segment_digest(seg: Segment, timeline: list[dict[str, Any]], songs: list[Song]) -> str:
     """The segment as the scoring pass reads it: its topic log, after the songs that began
     before it and are still being sung (so a row inside a long song is not dead air)."""
     lines = [f"## {hms(seg.start)}–{hms(seg.end)}（弹幕密度为整场平均的 {seg.chat_ratio} 倍）"]
-    lines += [f"- [{sg.entry['start']}–{sg.entry['end']}] [{SONG_TOPIC}] {sg.entry['title']}（接上段，本段仍在唱这首歌）"
-              for sg in songs if sg.start < seg.start < sg.end]
+    lines += [f"- [{hms(song.start)}–{hms(song.end)}] [{SONG_TOPIC}] {song.title}（接上段，本段仍在唱这首歌）"
+              for song in songs if song.start < seg.start < song.end]
     lines += [f"- [{e.get('start')}–{e.get('end')}] [{e.get('topic')}] {e.get('title')} {e.get('detail')}"
               for e in timeline]
     return "\n".join(lines)
@@ -332,27 +351,46 @@ def live_end(transcript: list[dict[str, Any]]) -> int:
     return math.ceil(max([x["end"] for x in transcript] + [0]))
 
 
-def find_songs(name_songs: NameSongs, prompt: str, end: int, retries: int = 3) -> list[Song]:
+def find_songs(name_songs: NameSongs, prompt: str, end_of_live: int, retries: int = 3) -> list[Song]:
     """One song-naming call (retried while the reply is not the JSON asked for), read as
-    songs within 00:00:00–`end`."""
-    reply = ""
-    for _ in range(retries):
-        reply = name_songs(prompt)
-        if (data := parse_json(reply)) is not None and isinstance(data.get("songs"), list):
-            return sorted((sg for x in data["songs"] if (sg := read_song(x, end))), key=lambda sg: sg.start)
-    raise AnalysisError(f"song naming did not return the songs JSON after {retries} tries: {reply[:200]!r}")
+    songs within 00:00:00–`end_of_live`."""
+    data = retry_json(lambda: name_songs(prompt), retries, "the songs JSON",
+                      expected=lambda data: isinstance(data.get("songs"), list))
+    return read_songs(data["songs"], end_of_live)
 
 
-def read_song(item: Any, live_end: int) -> Song | None:
-    """A song from the model's untrusted reply: None without a start inside the live; a
-    missing or impossible end becomes the start; an unsure or empty name becomes 未识别."""
+def read_songs(items: list[Any], end_of_live: int) -> list[Song]:
+    """The songs of the model's untrusted reply, in time order. A song that starts inside an
+    earlier one is the model listing a song twice: it is ignored. Every ignored song is logged."""
+    songs: list[Song] = []
+    read = filter(None, (read_song(item, end_of_live) for item in items))
+    for song in sorted(read, key=lambda song: song.start):
+        if earlier := next((kept for kept in songs if kept.start <= song.start < kept.end), None):
+            ignored(f"{song.title} at {hms(song.start)}", f"starts inside {earlier.title}")
+        else:
+            songs.append(song)
+    return songs
+
+
+def ignored(song: str, reason: str) -> None:
+    log.warning("song naming: ignored %s: %s", song, reason)
+
+
+def read_song(item: Any, end_of_live: int) -> Song | None:
+    """A song from the model's untrusted reply: None (logged) without a start inside the
+    live; a missing or impossible end, or one more than LONGEST_SONG after the start,
+    becomes the start; an end past the live is cut back to the live's end; an unsure or
+    empty name becomes 未识别."""
     if not isinstance(item, dict):
+        ignored(repr(item)[:80], "not an object")
         return None
     start = parse_time(item.get("start"))
-    if start is None or start > live_end:
+    if start is None or start >= end_of_live:
+        ignored(f"{item.get('title')!r} at {item.get('start')!r}",
+                "no valid start" if start is None else "starts at or after the live's end")
         return None
     end = parse_time(item.get("end"))
-    end = min(end, live_end) if end is not None and end > start else start
+    end = min(end, end_of_live) if end is not None and start < end <= start + LONGEST_SONG else start
     name = str(item.get("title") or "").strip().strip("【】").strip()
     if name and name != UNNAMED_SONG and item.get("title_sure") is True:
         artist = str(item.get("artist") or "").strip()
@@ -360,8 +398,7 @@ def read_song(item: Any, live_end: int) -> Song | None:
     else:
         name, lyric = UNNAMED_SONG, str(item.get("lyric") or "").strip()
         detail = f"歌词：{lyric}" if lyric else ""
-    entry = {"start": hms(start), "end": hms(end), "topic": SONG_TOPIC, "title": f"【{name}】", "detail": detail}
-    return Song(start, end, entry)
+    return Song(start, end, f"【{name}】", detail)
 
 
 def with_songs(timeline: list[dict[str, Any]], seg: Segment, songs: list[Song]) -> list[dict[str, Any]]:
@@ -375,25 +412,34 @@ def with_songs(timeline: list[dict[str, Any]], seg: Segment, songs: list[Song]) 
         if start is None:
             return False
         length = end - start if end is not None and end > start else 0
-        return any(sg.start <= start < sg.end
-                   or (length and 2 * (min(end, sg.end) - max(start, sg.start)) > length) for sg in songs)
+        return any(song.start <= start < song.end
+                   or (length and 2 * (min(end, song.end) - max(start, song.start)) > length) for song in songs)
 
     merged = [e for e in timeline if not during_a_song(e)]
-    for sg in songs:
-        if seg.start <= sg.start < seg.end:
-            later = (i for i, e in enumerate(merged) if (t := parse_time(e.get("start"))) is not None and t > sg.start)
-            merged.insert(next(later, len(merged)), dict(sg.entry))
+    for song in songs:
+        if seg.start <= song.start < seg.end:
+            later = (i for i, e in enumerate(merged)
+                     if (t := parse_time(e.get("start"))) is not None and t > song.start)
+            merged.insert(next(later, len(merged)), song.entry())
     return merged
 
 
 def ask_json(complete: Complete, system: str, user: str, retries: int = 3) -> dict[str, Any]:
-    """One LLM call that must answer a JSON object; retried when it doesn't."""
+    """One chat call that must answer a JSON object; retried when it doesn't."""
+    return retry_json(lambda: complete([{"role": "system", "content": system}, {"role": "user", "content": user}]),
+                      retries)
+
+
+def retry_json(ask: Callable[[], str], retries: int, wanted: str = "valid JSON",
+               expected: Callable[[dict[str, Any]], bool] = lambda data: True) -> dict[str, Any]:
+    """The JSON object in the reply of `ask()`, asked up to `retries` times until the reply
+    holds one that `expected` accepts."""
     reply = ""
     for _ in range(retries):
-        reply = complete([{"role": "system", "content": system}, {"role": "user", "content": user}])
-        if (data := parse_json(reply)) is not None:
+        reply = ask()
+        if (data := parse_json(reply)) is not None and expected(data):
             return data
-    raise AnalysisError(f"LLM did not return valid JSON after {retries} tries: {reply[:200]!r}")
+    raise AnalysisError(f"LLM did not return {wanted} after {retries} tries: {reply[:200]!r}")
 
 
 def parse_json(text: str) -> dict[str, Any] | None:
@@ -409,17 +455,24 @@ def parse_json(text: str) -> dict[str, Any] | None:
     return None
 
 
+def song_naming(llm: llm_client.LLMSettings, analysis: dict[str, Any]) -> NameSongs | None:
+    """The song-naming callable for config.json's `analysis` section: its `song_model`
+    through the search-backed call, on the gateway, key and proxy switch of `llm`. None
+    (no song naming) when `song_model` is absent or empty."""
+    model = str(analysis.get("song_model") or "").strip()
+    return functools.partial(llm_client.ask_with_search, llm, model) if model else None
+
+
 def main() -> int:
     """uv run -m backend.analysis <video> [--streamer NAME] [--title TITLE]
 
     With `analysis.song_model` in config.json, a singing live (by `--title`) gets song entries."""
     import argparse
-    import functools
     import sys
 
     from dotenv import load_dotenv
 
-    from backend.llm import LLMError, ask_with_search, chat, load_llm
+    from backend.llm import LLMError, chat, load_llm
 
     p = argparse.ArgumentParser(description="Build the 路灯表 for a downloaded, transcribed stream.")
     p.add_argument("video", type=Path)
@@ -447,10 +500,8 @@ def main() -> int:
                                 context_seconds=int(a.get("context_seconds", 30)), min_score=int(a.get("min_score", 7)),
                                 limit_seconds=args.minutes * 60 if args.minutes else None)
     complete = functools.partial(chat, llm, response_format={"type": "json_object"})
-    song_model = str(a.get("song_model") or "").strip()  # absent or empty: no song naming
-    name_songs = functools.partial(ask_with_search, llm, song_model) if song_model else None
     try:
-        print(analyze(args.video, complete, args.streamer, args.title, settings, name_songs))
+        print(analyze(args.video, complete, args.streamer, args.title, settings, song_naming(llm, a)))
     except AnalysisError as e:
         print(e, file=sys.stderr)
         return 1
