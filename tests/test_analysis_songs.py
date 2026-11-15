@@ -10,7 +10,7 @@ import logging
 
 import pytest
 
-from backend.analysis import AnalysisSettings, analyze
+from backend.analysis import AnalysisSettings, analyze, is_singing_live
 from backend.archive import Archive
 
 from .helpers import sample_archive
@@ -132,3 +132,34 @@ def test_songs_are_entries_in_the_row_where_they_start(tmp_path):
     assert titles(third) == ["【报下一首】", "【Hoshi no Shita】"]
     # a sure name with an unsure artist: the name alone
     assert third["timeline"][-1]["detail"] == ""
+
+
+@pytest.mark.parametrize("title", ["【歌枠】夜", "初めての歌回", "カラオケ配信", "弾き語りします", "karaoke night",
+                                   "Karaoke!", "KARAOKE"])
+def test_each_title_word_makes_one_song_naming_call(tmp_path, title):
+    songs = FakeSongs(TWO_SONGS)
+    rows, llm = run(tmp_path, songs, title=title)
+
+    assert len(songs.prompts) == 1
+    assert "【Midori no Kasa】" in titles(rows[0])
+    assert len(llm.calls) == 4  # the segment and scoring passes as before
+
+
+def test_other_lives_make_no_song_naming_call(tmp_path):
+    songs = FakeSongs(TWO_SONGS)
+    rows, _ = run(tmp_path, songs, title="ゲーム雑談")
+
+    assert songs.prompts == []
+    assert [titles(r) for r in rows] == [[e["title"] for e in SEGMENT_LOGS[r["start"]]] for r in rows]
+
+
+def test_a_singing_live_without_song_naming_is_analyzed_as_today(tmp_path):
+    rows, _ = run(tmp_path, None, title="【歌枠】みんなでうたう")
+
+    assert [r["timeline"] for r in rows] == [SEGMENT_LOGS[r["start"]] for r in rows]
+    assert "唱歌" in rows[0]["topics"]  # the segment pass's own topic, as today
+
+
+def test_is_singing_live_is_the_rule_callers_ask():
+    assert is_singing_live("【歌回】ゆるっと") and is_singing_live("Karaoke time")
+    assert not is_singing_live("マイクラ") and not is_singing_live("")
