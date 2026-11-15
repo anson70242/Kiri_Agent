@@ -14,6 +14,10 @@ _Avoid_: stream, broadcast
 One or more lives in a row by the same streamer that the group sees as one (一次开播): announced once when it starts and once when it ends. A new live continues the sitting when it starts at the same watch address shortly after the previous one stopped.
 _Avoid_: show, run
 
+**Singing live**:
+A live whose title marks it as a singing stream (歌回, 歌枠).
+_Avoid_: karaoke stream, song stream, 歌枠 live
+
 **Replay**:
 The platform's own video of a finished live (回放). It may be unpublished, or need a login to watch.
 _Avoid_: VOD, platform archive
@@ -43,6 +47,10 @@ _Avoid_: zh transcript, translation
 **Highlight table**:
 The 路灯表: the scored table of an archive's segments that editors pick clips from.
 _Avoid_: analysis, score sheet
+
+**Song entry**:
+One song sung in a singing live, as the highlight table shows it: when it was sung, its name and its original artist. A song nobody could name is still an entry, marked 未识别.
+_Avoid_: setlist item, track
 
 ### State files
 
