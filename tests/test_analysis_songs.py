@@ -262,6 +262,37 @@ def test_failed_song_naming_leaves_the_table_as_today(tmp_path, caplog, reply):
         assert len(songs.prompts) == AnalysisSettings().retries
 
 
+def scoring_sections(llm) -> dict[str, str]:
+    """The scoring input's description of each row, by the row's start."""
+    return {part[3:11]: part for part in llm.scoring_input.split("\n\n") if part.startswith("## ")}
+
+
+def test_the_scoring_pass_knows_which_song_was_sung_where(tmp_path):
+    _, llm = run(tmp_path, FakeSongs(TWO_SONGS))
+
+    sections = scoring_sections(llm)
+    assert "【Midori no Kasa】" in sections["00:00:00"] and "【Hoshi no Shita】" in sections["00:10:00"]
+    # a row in the middle of a song is described as part of it, not as dead air
+    assert "【Midori no Kasa】" in sections["00:05:00"]
+    assert "【Hoshi no Shita】" not in sections["00:05:00"]
+
+
+def test_a_row_inside_a_long_song_keeps_an_empty_topic_log(tmp_path):
+    rows, llm = run(tmp_path, FakeSongs({"songs": [song("00:03:00", "00:10:30", "Long Song", "Somebody")]}))
+
+    assert (rows[1]["timeline"], rows[1]["topics"]) == ([], [])
+    assert rows[0]["timeline"][-1]["end"] == "00:10:30"
+    assert titles(rows[2]) == ["【安静的歌】"]  # 00:10:00 is inside the song, 00:11:10 after it
+    assert "【Long Song】" in scoring_sections(llm)["00:05:00"]
+
+
+def test_rows_keep_their_keys(tmp_path):
+    rows, _ = run(tmp_path, FakeSongs(TWO_SONGS))
+
+    assert all(list(r) == ["start", "end", "topics", "timeline", "highlights", "top_pick", "score", "reason",
+                           "chat_count", "chat_ratio", "chat_level"] for r in rows)
+
+
 def test_is_singing_live_is_the_rule_callers_ask():
     assert is_singing_live("【歌回】ゆるっと") and is_singing_live("Karaoke time")
     assert not is_singing_live("マイクラ") and not is_singing_live("")

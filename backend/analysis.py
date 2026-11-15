@@ -21,7 +21,7 @@ import math
 import os
 import re
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -252,15 +252,15 @@ def analyze(
         timelines.append(reply.get("timeline") or [])
         log.info("analysis %s: segment %d/%d", video.name, i + 1, len(segs))
 
+    songs: list[Song] = []
     if name_songs is not None and is_singing_live(title):
         try:  # never fails the analysis: without songs, the table is as it would be anyway
             songs = find_songs(name_songs, song_prompt(transcript, streamer, title), live_end(transcript), s.retries)
         except Exception as e:
             log.warning("analysis %s: song naming failed, no song entries: %s", video.name, e)
-            songs = []
         timelines = [with_songs(tl, seg, songs) for seg, tl in zip(segs, timelines)]
 
-    digest = "\n\n".join(segment_digest(seg, tl) for seg, tl in zip(segs, timelines))
+    digest = "\n\n".join(segment_digest(seg, tl, songs) for seg, tl in zip(segs, timelines))
     scored = ask_json(complete, SCORE_SYSTEM.format(min_score=s.min_score), f"{header}\n\n{digest}", s.retries)
     by_start = {str(x.get("start")): x for x in scored.get("scores") or [] if isinstance(x, dict)}
 
@@ -306,8 +306,12 @@ def segment_prompt(seg: Segment, header: str) -> str:
     ])
 
 
-def segment_digest(seg: Segment, timeline: list[dict[str, Any]]) -> str:
+def segment_digest(seg: Segment, timeline: list[dict[str, Any]], songs: Sequence[Song] = ()) -> str:
+    """The segment as the scoring pass reads it: its topic log, after the songs that began
+    before it and are still being sung (so a row inside a long song is not dead air)."""
     lines = [f"## {hms(seg.start)}–{hms(seg.end)}（弹幕密度为整场平均的 {seg.chat_ratio} 倍）"]
+    lines += [f"- [{sg.entry['start']}–{sg.entry['end']}] [{SONG_TOPIC}] {sg.entry['title']}（接上段，本段仍在唱这首歌）"
+              for sg in songs if sg.start < seg.start < sg.end]
     lines += [f"- [{e.get('start')}–{e.get('end')}] [{e.get('topic')}] {e.get('title')} {e.get('detail')}"
               for e in timeline]
     return "\n".join(lines)
