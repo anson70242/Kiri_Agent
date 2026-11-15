@@ -27,7 +27,7 @@ import os
 import re
 import unicodedata
 from collections import Counter
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -145,11 +145,17 @@ class Segment:
 
 @dataclass
 class Song:
-    """One song of a singing live, with the song entry the topic log shows for it."""
+    """One song of a singing live: when it was sung, and how its song entry reads."""
 
     start: int
     end: int
-    entry: dict[str, str]
+    title: str  # 【name】, or 【未识别】
+    detail: str  # 原唱：artist, 歌词：a heard line, or empty
+
+    def entry(self) -> dict[str, str]:
+        """The song entry, an ordinary topic-log entry."""
+        return {"start": hms(self.start), "end": hms(self.end), "topic": SONG_TOPIC, "title": self.title,
+                "detail": self.detail}
 
 
 def is_singing_live(title: str) -> bool:
@@ -323,12 +329,12 @@ def segment_prompt(seg: Segment, header: str) -> str:
     ])
 
 
-def segment_digest(seg: Segment, timeline: list[dict[str, Any]], songs: Sequence[Song] = ()) -> str:
+def segment_digest(seg: Segment, timeline: list[dict[str, Any]], songs: list[Song]) -> str:
     """The segment as the scoring pass reads it: its topic log, after the songs that began
     before it and are still being sung (so a row inside a long song is not dead air)."""
     lines = [f"## {hms(seg.start)}–{hms(seg.end)}（弹幕密度为整场平均的 {seg.chat_ratio} 倍）"]
-    lines += [f"- [{sg.entry['start']}–{sg.entry['end']}] [{SONG_TOPIC}] {sg.entry['title']}（接上段，本段仍在唱这首歌）"
-              for sg in songs if sg.start < seg.start < sg.end]
+    lines += [f"- [{hms(song.start)}–{hms(song.end)}] [{SONG_TOPIC}] {song.title}（接上段，本段仍在唱这首歌）"
+              for song in songs if song.start < seg.start < song.end]
     lines += [f"- [{e.get('start')}–{e.get('end')}] [{e.get('topic')}] {e.get('title')} {e.get('detail')}"
               for e in timeline]
     return "\n".join(lines)
@@ -345,24 +351,22 @@ def live_end(transcript: list[dict[str, Any]]) -> int:
     return math.ceil(max([x["end"] for x in transcript] + [0]))
 
 
-def find_songs(name_songs: NameSongs, prompt: str, end: int, retries: int = 3) -> list[Song]:
+def find_songs(name_songs: NameSongs, prompt: str, end_of_live: int, retries: int = 3) -> list[Song]:
     """One song-naming call (retried while the reply is not the JSON asked for), read as
-    songs within 00:00:00–`end`."""
-    reply = ""
-    for _ in range(retries):
-        reply = name_songs(prompt)
-        if (data := parse_json(reply)) is not None and isinstance(data.get("songs"), list):
-            return read_songs(data["songs"], end)
-    raise AnalysisError(f"song naming did not return the songs JSON after {retries} tries: {reply[:200]!r}")
+    songs within 00:00:00–`end_of_live`."""
+    data = retry_json(lambda: name_songs(prompt), retries, "the songs JSON",
+                      expected=lambda data: isinstance(data.get("songs"), list))
+    return read_songs(data["songs"], end_of_live)
 
 
-def read_songs(items: list[Any], live_end: int) -> list[Song]:
+def read_songs(items: list[Any], end_of_live: int) -> list[Song]:
     """The songs of the model's untrusted reply, in time order. A song that starts inside an
     earlier one is the model listing a song twice: it is ignored. Every ignored song is logged."""
     songs: list[Song] = []
-    for song in sorted((s for item in items if (s := read_song(item, live_end))), key=lambda s: s.start):
-        if earlier := next((s for s in songs if s.start <= song.start < s.end), None):
-            ignored(f"{song.entry['title']} at {song.entry['start']}", f"starts inside {earlier.entry['title']}")
+    read = filter(None, (read_song(item, end_of_live) for item in items))
+    for song in sorted(read, key=lambda song: song.start):
+        if earlier := next((kept for kept in songs if kept.start <= song.start < kept.end), None):
+            ignored(f"{song.title} at {hms(song.start)}", f"starts inside {earlier.title}")
         else:
             songs.append(song)
     return songs
@@ -372,7 +376,7 @@ def ignored(song: str, reason: str) -> None:
     log.warning("song naming: ignored %s: %s", song, reason)
 
 
-def read_song(item: Any, live_end: int) -> Song | None:
+def read_song(item: Any, end_of_live: int) -> Song | None:
     """A song from the model's untrusted reply: None (logged) without a start inside the
     live; a missing or impossible end, or one more than LONGEST_SONG after the start,
     becomes the start; an end past the live is cut back to the live's end; an unsure or
@@ -381,12 +385,12 @@ def read_song(item: Any, live_end: int) -> Song | None:
         ignored(repr(item)[:80], "not an object")
         return None
     start = parse_time(item.get("start"))
-    if start is None or start >= live_end:
+    if start is None or start >= end_of_live:
         ignored(f"{item.get('title')!r} at {item.get('start')!r}",
                 "no valid start" if start is None else "starts at or after the live's end")
         return None
     end = parse_time(item.get("end"))
-    end = min(end, live_end) if end is not None and start < end <= start + LONGEST_SONG else start
+    end = min(end, end_of_live) if end is not None and start < end <= start + LONGEST_SONG else start
     name = str(item.get("title") or "").strip().strip("【】").strip()
     if name and name != UNNAMED_SONG and item.get("title_sure") is True:
         artist = str(item.get("artist") or "").strip()
@@ -394,8 +398,7 @@ def read_song(item: Any, live_end: int) -> Song | None:
     else:
         name, lyric = UNNAMED_SONG, str(item.get("lyric") or "").strip()
         detail = f"歌词：{lyric}" if lyric else ""
-    entry = {"start": hms(start), "end": hms(end), "topic": SONG_TOPIC, "title": f"【{name}】", "detail": detail}
-    return Song(start, end, entry)
+    return Song(start, end, f"【{name}】", detail)
 
 
 def with_songs(timeline: list[dict[str, Any]], seg: Segment, songs: list[Song]) -> list[dict[str, Any]]:
@@ -409,25 +412,34 @@ def with_songs(timeline: list[dict[str, Any]], seg: Segment, songs: list[Song]) 
         if start is None:
             return False
         length = end - start if end is not None and end > start else 0
-        return any(sg.start <= start < sg.end
-                   or (length and 2 * (min(end, sg.end) - max(start, sg.start)) > length) for sg in songs)
+        return any(song.start <= start < song.end
+                   or (length and 2 * (min(end, song.end) - max(start, song.start)) > length) for song in songs)
 
     merged = [e for e in timeline if not during_a_song(e)]
-    for sg in songs:
-        if seg.start <= sg.start < seg.end:
-            later = (i for i, e in enumerate(merged) if (t := parse_time(e.get("start"))) is not None and t > sg.start)
-            merged.insert(next(later, len(merged)), dict(sg.entry))
+    for song in songs:
+        if seg.start <= song.start < seg.end:
+            later = (i for i, e in enumerate(merged)
+                     if (t := parse_time(e.get("start"))) is not None and t > song.start)
+            merged.insert(next(later, len(merged)), song.entry())
     return merged
 
 
 def ask_json(complete: Complete, system: str, user: str, retries: int = 3) -> dict[str, Any]:
-    """One LLM call that must answer a JSON object; retried when it doesn't."""
+    """One chat call that must answer a JSON object; retried when it doesn't."""
+    return retry_json(lambda: complete([{"role": "system", "content": system}, {"role": "user", "content": user}]),
+                      retries)
+
+
+def retry_json(ask: Callable[[], str], retries: int, wanted: str = "valid JSON",
+               expected: Callable[[dict[str, Any]], bool] = lambda data: True) -> dict[str, Any]:
+    """The JSON object in the reply of `ask()`, asked up to `retries` times until the reply
+    holds one that `expected` accepts."""
     reply = ""
     for _ in range(retries):
-        reply = complete([{"role": "system", "content": system}, {"role": "user", "content": user}])
-        if (data := parse_json(reply)) is not None:
+        reply = ask()
+        if (data := parse_json(reply)) is not None and expected(data):
             return data
-    raise AnalysisError(f"LLM did not return valid JSON after {retries} tries: {reply[:200]!r}")
+    raise AnalysisError(f"LLM did not return {wanted} after {retries} tries: {reply[:200]!r}")
 
 
 def parse_json(text: str) -> dict[str, Any] | None:
