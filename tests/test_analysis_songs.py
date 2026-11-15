@@ -203,7 +203,7 @@ def test_a_song_nobody_could_name_is_unnamed_with_the_heard_lyric(tmp_path):
 
 def test_songs_without_a_start_inside_the_live_are_ignored(tmp_path):
     rows, _ = run(tmp_path, FakeSongs({"songs": [
-        song("3:00", "00:07:30", "Bad Time"),  # not HH:MM:SS
+        song("3分钟", "00:07:30", "Bad Time"),  # not a time
         song("00:65:00", "00:66:00", "Bad Minutes"),
         song("01:00:00", "01:04:00", "After The Live"),
         {"end": "00:05:00", "title": "No Start", "title_sure": True},
@@ -229,8 +229,26 @@ def test_a_song_without_a_possible_end_is_kept_ending_at_its_start(tmp_path, end
     assert (entry["start"], entry["end"]) == ("00:03:00", "00:03:00")
 
 
+@pytest.mark.parametrize("start,end", [("0:03:00", "0:07:30"), ("03:00", "07:30"), ("3:00", "7:30"),
+                                       ("00:03:00.4", "00:07:30.95"), ("3:00,5", "07:30.0")])
+def test_song_times_are_read_tolerantly(tmp_path, start, end):
+    rows, _ = run(tmp_path, FakeSongs({"songs": [song(start, end, "Midori no Kasa", "Invented Artist")]}))
+
+    entry = rows[0]["timeline"][-1]
+    assert (entry["title"], entry["start"], entry["end"]) == ("【Midori no Kasa】", "00:03:00", "00:07:30")
+    assert titles(rows[1]) == ["【唱完道谢】"]  # the song's end was read too
+
+
+def test_segment_pass_times_are_read_tolerantly_when_removing(tmp_path):
+    logs = {**SEGMENT_LOGS, "00:00:00": [entry("0:00:10", "1:50", "【开场】"),
+                                         entry("2:40", "4:50", "【唱误听的歌名】", "唱歌")]}
+    rows, _ = run(tmp_path, FakeSongs({"songs": [song("00:03:00", "00:04:30", "Song Two", "Artist")]}), logs=logs)
+
+    assert titles(rows[0]) == ["【开场】", "【Song Two】"]
+
+
 def test_a_song_end_past_the_live_ends_with_the_live(tmp_path):
-    rows, _ = run(tmp_path, FakeSongs({"songs": [song("00:11:00", "03:00:00", "Hoshi no Shita", "Somebody")]}))
+    rows, _ = run(tmp_path, FakeSongs({"songs": [song("00:11:00", "00:14:00", "Hoshi no Shita", "Somebody")]}))
 
     assert rows[2]["timeline"][-1]["end"] == "00:12:00"  # the last transcript line ends 00:12:00
 

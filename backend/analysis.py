@@ -154,20 +154,29 @@ def is_singing_live(title: str) -> bool:
     return any(word in folded for word in SINGING_LIVE_WORDS)
 
 
+TIME = re.compile(r"(?:(\d{1,2}):([0-5]?\d)|(\d{1,3})):([0-5]\d)(?:[.,]\d+)?")
+
+
+def parse_time(value: Any) -> int | None:
+    """Whole seconds of a time a model wrote, read tolerantly: `HH:MM:SS`, `H:MM:SS`,
+    `MM:SS`, with or without a fraction of a second. None when it is not a time."""
+    m = TIME.fullmatch(value.strip()) if isinstance(value, str) else None
+    if not m:
+        return None
+    hours, minutes = (int(m[1]), int(m[2])) if m[1] is not None else (0, int(m[3]))
+    return hours * 3600 + minutes * 60 + int(m[4])
+
+
 def seconds(t: str) -> int:
-    h, m, s = (int(x) for x in t.split(":"))
-    return h * 3600 + m * 60 + s
+    """Whole seconds of a time we wrote ourselves (chat times); ValueError when it is not one."""
+    if (s := parse_time(t)) is None:
+        raise ValueError(f"not a time: {t!r}")
+    return s
 
 
 def hms(s: float) -> str:
     s = max(0, int(s))
     return f"{s // 3600:02d}:{s % 3600 // 60:02d}:{s % 60:02d}"
-
-
-def parse_time(value: Any) -> int | None:
-    """Seconds of an `HH:MM:SS` time a model wrote; None when it is not one."""
-    m = re.fullmatch(r"(\d{1,2}):([0-5]\d):([0-5]\d)", value.strip()) if isinstance(value, str) else None
-    return int(m[1]) * 3600 + int(m[2]) * 60 + int(m[3]) if m else None
 
 
 def audience_chat(chat: list[dict[str, Any]]) -> list[dict[str, Any]]:
