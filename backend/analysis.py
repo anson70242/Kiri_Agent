@@ -24,6 +24,7 @@ import logging
 import math
 import os
 import re
+import unicodedata
 from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -46,6 +47,7 @@ NameSongs = Callable[[str], str]
 SINGING_LIVE_WORDS = ("歌枠", "歌回", "カラオケ", "弾き語り", "karaoke")
 SONG_TOPIC = "唱歌"
 UNNAMED_SONG = "未识别"
+LONGEST_SONG = 20 * 60  # seconds; a song said to be longer has an end that is not believed
 
 SEGMENT_SYSTEM = """# Role
 你是专属的中文 B 站字幕组金牌运营助手，对日本虚拟主播（VTuber）有骨灰级了解。
@@ -150,7 +152,7 @@ class Song:
 
 def is_singing_live(title: str) -> bool:
     """Whether the live's title marks it as a singing live (the songs then get named)."""
-    folded = title.casefold()
+    folded = unicodedata.normalize("NFKC", title).casefold()  # ＫＡＲＡＯＫＥ -> karaoke
     return any(word in folded for word in SINGING_LIVE_WORDS)
 
 
@@ -348,20 +350,41 @@ def find_songs(name_songs: NameSongs, prompt: str, end: int, retries: int = 3) -
     for _ in range(retries):
         reply = name_songs(prompt)
         if (data := parse_json(reply)) is not None and isinstance(data.get("songs"), list):
-            return sorted((sg for x in data["songs"] if (sg := read_song(x, end))), key=lambda sg: sg.start)
+            return read_songs(data["songs"], end)
     raise AnalysisError(f"song naming did not return the songs JSON after {retries} tries: {reply[:200]!r}")
 
 
+def read_songs(items: list[Any], live_end: int) -> list[Song]:
+    """The songs of the model's untrusted reply, in time order. A song that starts inside an
+    earlier one is the model listing a song twice: it is ignored. Every ignored song is logged."""
+    songs: list[Song] = []
+    for song in sorted((s for item in items if (s := read_song(item, live_end))), key=lambda s: s.start):
+        if earlier := next((s for s in songs if s.start <= song.start < s.end), None):
+            ignored(f"{song.entry['title']} at {song.entry['start']}", f"starts inside {earlier.entry['title']}")
+        else:
+            songs.append(song)
+    return songs
+
+
+def ignored(song: str, reason: str) -> None:
+    log.warning("song naming: ignored %s: %s", song, reason)
+
+
 def read_song(item: Any, live_end: int) -> Song | None:
-    """A song from the model's untrusted reply: None without a start inside the live; a
-    missing or impossible end becomes the start; an unsure or empty name becomes 未识别."""
+    """A song from the model's untrusted reply: None (logged) without a start inside the
+    live; a missing or impossible end, or one more than LONGEST_SONG after the start,
+    becomes the start; an end past the live is cut back to the live's end; an unsure or
+    empty name becomes 未识别."""
     if not isinstance(item, dict):
+        ignored(repr(item)[:80], "not an object")
         return None
     start = parse_time(item.get("start"))
-    if start is None or start > live_end:
+    if start is None or start >= live_end:
+        ignored(f"{item.get('title')!r} at {item.get('start')!r}",
+                "no valid start" if start is None else "starts at or after the live's end")
         return None
     end = parse_time(item.get("end"))
-    end = min(end, live_end) if end is not None and end > start else start
+    end = min(end, live_end) if end is not None and start < end <= start + LONGEST_SONG else start
     name = str(item.get("title") or "").strip().strip("【】").strip()
     if name and name != UNNAMED_SONG and item.get("title_sure") is True:
         artist = str(item.get("artist") or "").strip()
