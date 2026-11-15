@@ -574,7 +574,7 @@ def test_load_auto_names_songs_only_with_a_song_model(tmp_path, monkeypatch):
                 ' "artist": "Invented Artist", "artist_sure": true}]}')
 
     monkeypatch.setattr(auto_mod, "chat", fake_chat)
-    monkeypatch.setattr(auto_mod, "ask_with_search", fake_search)
+    monkeypatch.setattr("backend.llm.ask_with_search", fake_search)
 
     def analyzer(analysis):
         cfg = tmp_path / "config.json"

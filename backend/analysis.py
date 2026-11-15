@@ -19,6 +19,7 @@ Passes (AutoKiri's clip_highlight, adapted):
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import math
@@ -31,6 +32,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from backend import llm as llm_client
 from backend.archive import Archive, ArtifactMissing, Artifact
 
 log = logging.getLogger(__name__)
@@ -441,17 +443,24 @@ def parse_json(text: str) -> dict[str, Any] | None:
     return None
 
 
+def song_naming(llm: llm_client.LLMSettings, analysis: dict[str, Any]) -> NameSongs | None:
+    """The song-naming callable for config.json's `analysis` section: its `song_model`
+    through the search-backed call, on the gateway, key and proxy switch of `llm`. None
+    (no song naming) when `song_model` is absent or empty."""
+    model = str(analysis.get("song_model") or "").strip()
+    return functools.partial(llm_client.ask_with_search, llm, model) if model else None
+
+
 def main() -> int:
     """uv run -m backend.analysis <video> [--streamer NAME] [--title TITLE]
 
     With `analysis.song_model` in config.json, a singing live (by `--title`) gets song entries."""
     import argparse
-    import functools
     import sys
 
     from dotenv import load_dotenv
 
-    from backend.llm import LLMError, ask_with_search, chat, load_llm
+    from backend.llm import LLMError, chat, load_llm
 
     p = argparse.ArgumentParser(description="Build the 路灯表 for a downloaded, transcribed stream.")
     p.add_argument("video", type=Path)
@@ -479,10 +488,8 @@ def main() -> int:
                                 context_seconds=int(a.get("context_seconds", 30)), min_score=int(a.get("min_score", 7)),
                                 limit_seconds=args.minutes * 60 if args.minutes else None)
     complete = functools.partial(chat, llm, response_format={"type": "json_object"})
-    song_model = str(a.get("song_model") or "").strip()  # absent or empty: no song naming
-    name_songs = functools.partial(ask_with_search, llm, song_model) if song_model else None
     try:
-        print(analyze(args.video, complete, args.streamer, args.title, settings, name_songs))
+        print(analyze(args.video, complete, args.streamer, args.title, settings, song_naming(llm, a)))
     except AnalysisError as e:
         print(e, file=sys.stderr)
         return 1

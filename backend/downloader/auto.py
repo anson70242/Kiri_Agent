@@ -44,10 +44,10 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import quote
 
-from backend.analysis import AnalysisSettings, analyze
+from backend.analysis import AnalysisSettings, analyze, song_naming
 from backend.archive import Archive, Artifact, ArtifactDamaged, ArtifactMissing, Downloads, file_date, read_file
 from backend.asr import ASRSettings, transcribe
-from backend.llm import LLMError, ask_with_search, chat, load_llm
+from backend.llm import LLMError, chat, load_llm
 from backend.tencent_docs import (
     TencentDocsError, load_credentials, sheet_title, upload_table)
 from backend.translate import TranslateSettings
@@ -710,8 +710,7 @@ def load_analyzer(config: Path, cfg: dict[str, Any]) -> Callable[[Path, str, str
         min_score=int(a.get("min_score", 7)),
     )
     complete = functools.partial(chat, llm, response_format={"type": "json_object"})
-    song_model = str(a.get("song_model") or "").strip()  # absent or empty: no song naming
-    name_songs = functools.partial(ask_with_search, llm, song_model) if song_model else None
+    name_songs = song_naming(llm, a)
 
     def run(video: Path, streamer: str, title: str) -> Path:
         return analyze(video, complete, streamer=streamer, title=title, settings=settings, name_songs=name_songs)
