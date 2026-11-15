@@ -1,4 +1,15 @@
-"""LLM client for the analysis pipeline (OpenAI-compatible chat completions).
+"""LLM client for the analysis pipeline. Two call paths to the same gateway:
+
+- `chat`: OpenAI-compatible chat completion with the configured model (`llm.model`).
+  Used for the segment, scoring and translation passes.
+- `ask_with_search`: one prompt to a model named by the caller, on the gateway's
+  Gemini-native endpoint (`<base_url without /v1>/v1beta/models/<model>:generateContent`)
+  with the Google Search tool declared. It exists because the chat path cannot search:
+  the configured chat model never searches (the tool is dropped without an error), and
+  on the OpenAI endpoint no model could be confirmed to search. Song naming in a
+  singing live uses it, with a search-capable model.
+
+Both take the same settings: base URL, API key, proxy switch and timeout.
 
 config.json:
 
