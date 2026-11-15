@@ -160,6 +160,31 @@ def test_a_singing_live_without_song_naming_is_analyzed_as_today(tmp_path):
     assert "唱歌" in rows[0]["topics"]  # the segment pass's own topic, as today
 
 
+def test_the_song_naming_prompt_carries_the_whole_transcript_and_no_chat(tmp_path):
+    songs = FakeSongs(TWO_SONGS)
+    run(tmp_path, songs, title="【歌枠】みんなでうたう")
+
+    (prompt,) = songs.prompts
+    assert "A" in prompt and "【歌枠】みんなでうたう" in prompt
+    assert "00:00:10 こんばんは、今日はうたう日です" in prompt
+    assert "00:05:00 かさをひらいて あるいていこう" in prompt
+    assert "00:11:58 おやすみなさい" in prompt
+    assert "待ってた" not in prompt  # no chat
+    # the reply keys the reading relies on are asked for
+    assert all(key in prompt for key in ('"title_sure"', '"artist_sure"', '"lyric"', '"start"', '"end"'))
+
+
+def test_a_trial_run_names_only_the_songs_within_the_limit(tmp_path):
+    songs = FakeSongs(TWO_SONGS)  # the second song starts at 00:11:00, beyond the limit
+    rows, _ = run(tmp_path, songs, settings=AnalysisSettings(limit_seconds=600))
+
+    (prompt,) = songs.prompts
+    assert "00:07:40 ありがとうございました" in prompt
+    assert "次はしずかな曲です" not in prompt and "ほしのした" not in prompt
+    assert [r["start"] for r in rows] == ["00:00:00", "00:05:00"]
+    assert "【Hoshi no Shita】" not in str(rows)
+
+
 def test_is_singing_live_is_the_rule_callers_ask():
     assert is_singing_live("【歌回】ゆるっと") and is_singing_live("Karaoke time")
     assert not is_singing_live("マイクラ") and not is_singing_live("")
