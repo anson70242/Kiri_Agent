@@ -11,6 +11,7 @@ import logging
 import pytest
 
 from backend.analysis import AnalysisSettings, analyze, is_singing_live
+from backend.analysis import main as analysis_cli
 from backend.archive import Archive
 
 from .helpers import sample_archive
@@ -291,6 +292,44 @@ def test_rows_keep_their_keys(tmp_path):
 
     assert all(list(r) == ["start", "end", "topics", "timeline", "highlights", "top_pick", "score", "reason",
                            "chat_count", "chat_ratio", "chat_level"] for r in rows)
+
+
+def test_the_command_line_tool_names_songs_with_the_song_model(tmp_path, monkeypatch):
+    video = make_live(tmp_path / "dl")
+    llm = {"base_url": "http://gateway:8317/v1", "api_key_env": "AGY_API_KEY", "model": "chat-model", "proxy": True}
+    monkeypatch.setenv("AGY_API_KEY", "sk-test")
+    searched = []
+
+    def fake_search(settings, model, prompt):
+        searched.append((settings.proxy, model, prompt))
+        return json.dumps(TWO_SONGS)
+
+    monkeypatch.setattr("backend.llm.chat", lambda settings, messages, **kw: FakeLLM()(messages))
+    monkeypatch.setattr("backend.llm.ask_with_search", fake_search)
+
+    def cli(analysis, *args):
+        cfg = tmp_path / "config.json"
+        cfg.write_text(json.dumps({"llm": llm, "analysis": analysis}), encoding="utf-8")
+        monkeypatch.setattr("sys.argv", ["backend.analysis", str(video), "--streamer", "A",
+                                         "--title", "【歌枠】みんなでうたう", "--config", str(cfg), *args])
+        assert analysis_cli() == 0
+        return Archive.from_video(video).read_highlights()["rows"]
+
+    monkeypatch.setenv("LLM_PROXY", "http://llm-proxy:8318")
+    rows = cli({"song_model": "search-model"})
+    assert [(proxy, model) for proxy, model, _ in searched] == [("http://llm-proxy:8318", "search-model")]
+    assert "【Hoshi no Shita】" in titles(rows[2])
+
+    # ignoring the proxy, on a trial run of the first 10 minutes
+    monkeypatch.delenv("LLM_PROXY")
+    rows = cli({"song_model": "search-model"}, "--no-proxy", "--minutes", "10")
+    proxy, _, prompt = searched[-1]
+    assert proxy is None and "ほしのした" not in prompt
+    assert "【Midori no Kasa】" in titles(rows[0]) and len(rows) == 2
+
+    cli({"song_model": ""}, "--no-proxy")
+    cli({}, "--no-proxy")
+    assert len(searched) == 2  # no song model: no song naming
 
 
 def test_is_singing_live_is_the_rule_callers_ask():
