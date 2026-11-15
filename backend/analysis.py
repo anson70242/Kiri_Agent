@@ -403,14 +403,16 @@ def parse_json(text: str) -> dict[str, Any] | None:
 
 
 def main() -> int:
-    """uv run -m backend.analysis <video> [--streamer NAME] [--title TITLE]"""
+    """uv run -m backend.analysis <video> [--streamer NAME] [--title TITLE]
+
+    With `analysis.song_model` in config.json, a singing live (by `--title`) gets song entries."""
     import argparse
     import functools
     import sys
 
     from dotenv import load_dotenv
 
-    from backend.llm import LLMError, chat, load_llm
+    from backend.llm import LLMError, ask_with_search, chat, load_llm
 
     p = argparse.ArgumentParser(description="Build the 路灯表 for a downloaded, transcribed stream.")
     p.add_argument("video", type=Path)
@@ -438,8 +440,10 @@ def main() -> int:
                                 context_seconds=int(a.get("context_seconds", 30)), min_score=int(a.get("min_score", 7)),
                                 limit_seconds=args.minutes * 60 if args.minutes else None)
     complete = functools.partial(chat, llm, response_format={"type": "json_object"})
+    song_model = str(a.get("song_model") or "").strip()  # absent or empty: no song naming
+    name_songs = functools.partial(ask_with_search, llm, song_model) if song_model else None
     try:
-        print(analyze(args.video, complete, args.streamer, args.title, settings))
+        print(analyze(args.video, complete, args.streamer, args.title, settings, name_songs))
     except AnalysisError as e:
         print(e, file=sys.stderr)
         return 1

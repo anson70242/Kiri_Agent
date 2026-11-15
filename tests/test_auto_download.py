@@ -554,6 +554,50 @@ def test_load_auto_with_analysis(tmp_path, monkeypatch):
     assert ad is not None and ad.analyze is None
 
 
+def test_load_auto_names_songs_only_with_a_song_model(tmp_path, monkeypatch):
+    streamers = {"streamers": [{"name": "A", "platform": "youtube", "channel": "@a", "auto_download": True}]}
+    llm = {"base_url": "http://gateway:8317/v1", "api_key_env": "AGY_API_KEY", "model": "chat-model", "proxy": True}
+    monkeypatch.setenv("AGY_API_KEY", "sk-test")
+    monkeypatch.setenv("LLM_PROXY", "http://llm-proxy:8318")
+    folder = bare_archive(tmp_path / "dl", "A", "20261115", "歌枠", transcript=[
+        {"start": 10.0, "end": 12.0, "text": "ららら みどりのかさ"}])  # an invented line
+    video = folder / "[20261115][A] 歌枠.mp4"
+
+    def fake_chat(settings, messages, **kw):
+        return '{"timeline": []}' if "【本段】" in messages[-1]["content"] else '{"scores": []}'
+
+    searched = []
+
+    def fake_search(settings, model, prompt):
+        searched.append((settings, model))
+        return ('{"songs": [{"start": "00:00:10", "end": "00:00:12", "title": "Midori no Kasa", "title_sure": true,'
+                ' "artist": "Invented Artist", "artist_sure": true}]}')
+
+    monkeypatch.setattr(auto_mod, "chat", fake_chat)
+    monkeypatch.setattr(auto_mod, "ask_with_search", fake_search)
+
+    def analyzer(analysis):
+        cfg = tmp_path / "config.json"
+        cfg.write_text(json.dumps({"monitor": streamers, "asr": {"url": "http://whisper:8000"}, "llm": llm,
+                                   "analysis": analysis}), encoding="utf-8")
+        return load_auto(cfg).analyze
+
+    analyze = analyzer({"song_model": "search-model"})
+    table = analyze(video, "A", "【歌枠】みんなでうたう")
+    (settings, model), = searched
+    assert model == "search-model"  # the song model, not the chat model
+    assert (settings.base_url, settings.api_key, settings.proxy) == ("http://gateway:8317/v1", "sk-test",
+                                                                     "http://llm-proxy:8318")
+    assert "【Midori no Kasa】" in table.read_text(encoding="utf-8")
+
+    analyze(video, "A", "ゲーム雑談")  # not a singing live: no extra request
+    assert len(searched) == 1
+
+    for analysis in ({}, {"song_model": ""}):  # no song model: no song naming for any live
+        analyzer(analysis)(video, "A", "【歌枠】みんなでうたう")
+    assert len(searched) == 1
+
+
 def test_load_auto_with_asr(tmp_path):
     cfg = tmp_path / "config.json"
     cfg.write_text(json.dumps({
