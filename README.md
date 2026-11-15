@@ -232,6 +232,12 @@ It uses the `llm` settings (see LLM proxy).
    `top_pick`, `score`, `reason`, `chat_count`, `chat_ratio`, `chat_level`
    (高 / 中 / 低, high / medium / low: the top 20% / bottom 30% by density rank).
 
+A singing live (its title contains 歌枠, 歌回, カラオケ, 弾き語り or karaoke, in any letter case) gets every song named in the topic log
+of the row where it starts, as `【song name】 原唱：original artist` (topic 唱歌; `【未识别】` with a heard lyric line when the song could not be named).
+This takes one extra call per singing live, after step 1, to the model in `analysis.song_model` (`gemini-3.8-flash-high`), with web search,
+through the same gateway, key and proxy switch as `llm`. Remove the key or leave it empty to turn song naming off;
+if the call fails, the highlight table is made without song entries.
+
 The highlight table is shown on the 路灯表 (highlight tables) page and can be downloaded as Excel (see [Web pages](#web-pages)). Discord gets the 5 highest-scoring segments.
 A 5-hour live takes about 3 minutes with `gemini-3-flash`. By hand: `uv run -m backend.analysis <video> --streamer NAME --title T`
 (add `--no-proxy` when running it directly on the proxy machine).
