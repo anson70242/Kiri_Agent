@@ -16,7 +16,7 @@ config.json:
     "llm": {
       "base_url": "http://127.0.0.1:8317/v1",   # e.g. CLIProxyAPI (Google agy) on the Japan PC
       "api_key_env": "AGY_API_KEY",             # .env variable holding the key
-      "model": "gemini-3.8-flash-high",
+      "model": "gemini-3-flash",                # the chat model (it cannot search)
       "proxy": true                             # send requests through LLM_PROXY
     }
 

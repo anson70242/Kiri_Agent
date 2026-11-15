@@ -583,12 +583,13 @@ def test_load_auto_names_songs_only_with_a_song_model(tmp_path, monkeypatch):
         return load_auto(cfg).analyze
 
     analyze = analyzer({"song_model": "search-model"})
-    table = analyze(video, "A", "【歌枠】みんなでうたう")
+    analyze(video, "A", "【歌枠】みんなでうたう")
     (settings, model), = searched
     assert model == "search-model"  # the song model, not the chat model
     assert (settings.base_url, settings.api_key, settings.proxy) == ("http://gateway:8317/v1", "sk-test",
                                                                      "http://llm-proxy:8318")
-    assert "【Midori no Kasa】" in table.read_text(encoding="utf-8")
+    rows = Archive.from_video(video).read_highlights()["rows"]
+    assert "【Midori no Kasa】" in [e["title"] for r in rows for e in r["timeline"]]
 
     analyze(video, "A", "ゲーム雑談")  # not a singing live: no extra request
     assert len(searched) == 1
