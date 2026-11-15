@@ -366,10 +366,17 @@ def read_song(item: Any, live_end: int) -> Song | None:
 
 def with_songs(timeline: list[dict[str, Any]], seg: Segment, songs: list[Song]) -> list[dict[str, Any]]:
     """The segment's topic log with the song entries of the songs starting in it, in time
-    order, and without the entries the segment pass wrote while a song was sung."""
+    order, and without the entries the segment pass wrote while a song was sung: those
+    starting inside a song, and those with more than half their length inside one (the
+    segment pass often starts its entry for a song at the announcement, before the first
+    lyric line). An entry without a valid end or with no length is judged by its start."""
     def during_a_song(entry: dict[str, Any]) -> bool:
-        t = parse_time(entry.get("start"))
-        return t is not None and any(sg.start <= t < sg.end for sg in songs)
+        start, end = parse_time(entry.get("start")), parse_time(entry.get("end"))
+        if start is None:
+            return False
+        length = end - start if end is not None and end > start else 0
+        return any(sg.start <= start < sg.end
+                   or (length and 2 * (min(end, sg.end) - max(start, sg.start)) > length) for sg in songs)
 
     merged = [e for e in timeline if not during_a_song(e)]
     for sg in songs:
