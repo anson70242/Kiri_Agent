@@ -7,6 +7,10 @@
 Passes (AutoKiri's clip_highlight, adapted):
 1. Every 5-minute segment (with 30 s of context each side): transcript + a chat digest
    -> a topic log, about 3 entries of 1–3 minutes each.
+   A singing live (`is_singing_live`), given a song-naming model (`name_songs`), then gets one
+   call over the whole transcript -> its songs, merged into the topic logs as song entries
+   (one per song, in the segment where it starts; the segment pass's own entries during a
+   song are dropped). If that call fails, the topic logs stay as they are.
 2. One call over the whole stream: every segment's topic log + chat density
    -> a score per segment (relative within the stream), and for segments scoring
    >= 7 the highlights and the best clip.
