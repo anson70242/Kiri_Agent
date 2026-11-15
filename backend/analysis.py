@@ -253,7 +253,11 @@ def analyze(
         log.info("analysis %s: segment %d/%d", video.name, i + 1, len(segs))
 
     if name_songs is not None and is_singing_live(title):
-        songs = find_songs(name_songs, song_prompt(transcript, streamer, title), live_end(transcript), s.retries)
+        try:  # never fails the analysis: without songs, the table is as it would be anyway
+            songs = find_songs(name_songs, song_prompt(transcript, streamer, title), live_end(transcript), s.retries)
+        except Exception as e:
+            log.warning("analysis %s: song naming failed, no song entries: %s", video.name, e)
+            songs = []
         timelines = [with_songs(tl, seg, songs) for seg, tl in zip(segs, timelines)]
 
     digest = "\n\n".join(segment_digest(seg, tl) for seg, tl in zip(segs, timelines))

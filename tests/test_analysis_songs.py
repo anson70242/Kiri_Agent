@@ -239,6 +239,29 @@ def test_an_empty_song_list_changes_nothing(tmp_path):
     assert with_songs == without
 
 
+def test_a_reply_that_is_not_the_songs_json_is_retried(tmp_path):
+    songs = FakeSongs("我搜索了一下，但是没找到", {"result": "no songs key"}, TWO_SONGS)
+    rows, _ = run(tmp_path, songs)
+
+    assert len(songs.prompts) == 3
+    assert "【Midori no Kasa】" in titles(rows[0])
+
+
+@pytest.mark.parametrize("reply", [RuntimeError("gateway said 502"), "not json at all"],
+                         ids=["raises", "invalid every time"])
+def test_failed_song_naming_leaves_the_table_as_today(tmp_path, caplog, reply):
+    songs = FakeSongs(reply)
+    with caplog.at_level(logging.WARNING, logger="backend.analysis"):
+        rows, llm = run(tmp_path, songs)
+
+    assert [r["timeline"] for r in rows] == [SEGMENT_LOGS[r["start"]] for r in rows]
+    assert len(llm.calls) == 4  # the scoring pass still ran
+    warning = " ".join(r.getMessage() for r in caplog.records if r.levelno == logging.WARNING)
+    assert "song" in warning and ("gateway said 502" in warning or "not json at all" in warning)
+    if isinstance(reply, str):
+        assert len(songs.prompts) == AnalysisSettings().retries
+
+
 def test_is_singing_live_is_the_rule_callers_ask():
     assert is_singing_live("【歌回】ゆるっと") and is_singing_live("Karaoke time")
     assert not is_singing_live("マイクラ") and not is_singing_live("")
