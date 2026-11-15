@@ -185,6 +185,60 @@ def test_a_trial_run_names_only_the_songs_within_the_limit(tmp_path):
     assert "【Hoshi no Shita】" not in str(rows)
 
 
+def test_a_song_nobody_could_name_is_unnamed_with_the_heard_lyric(tmp_path):
+    rows, _ = run(tmp_path, FakeSongs({"songs": [
+        song("00:03:00", "00:07:30", "Midori no Kasa", "Invented Artist", title_sure=False,
+             lyric="あめあめ ふらふら みどりのかさ"),
+        song("00:11:00", "00:12:00", "", "", title_sure=True, lyric="ほしのした ゆらゆら"),
+    ]}))
+
+    first, third = rows[0]["timeline"][-1], rows[2]["timeline"][-1]
+    assert (first["title"], first["detail"]) == ("【未识别】", "歌词：あめあめ ふらふら みどりのかさ")
+    assert (third["title"], third["detail"]) == ("【未识别】", "歌词：ほしのした ゆらゆら")
+    assert first["topic"] == third["topic"] == "唱歌"
+
+
+def test_songs_without_a_start_inside_the_live_are_ignored(tmp_path):
+    rows, _ = run(tmp_path, FakeSongs({"songs": [
+        song("3:00", "00:07:30", "Bad Time"),  # not HH:MM:SS
+        song("00:65:00", "00:66:00", "Bad Minutes"),
+        song("01:00:00", "01:04:00", "After The Live"),
+        {"end": "00:05:00", "title": "No Start", "title_sure": True},
+        "not a song",
+        song("00:11:00", "00:12:00", "Hoshi no Shita", "Somebody"),
+    ]}))
+
+    names = [e["title"] for r in rows for e in r["timeline"] if e["topic"] == "唱歌"]
+    # the segment pass's entries stay where no valid song covers them
+    assert names == ["【唱了一首歌】", "【继续唱】", "【Hoshi no Shita】"]
+
+
+@pytest.mark.parametrize("end", [None, "", "later", "00:02:00", "00:03:00"])
+def test_a_song_without_a_possible_end_is_kept_ending_at_its_start(tmp_path, end):
+    item = song("00:03:00", end, "Midori no Kasa", "Invented Artist")
+    if end is None:
+        del item["end"]
+    rows, _ = run(tmp_path, FakeSongs({"songs": [item]}))
+
+    # covering no time, it removes none of the segment pass's entries
+    assert titles(rows[0]) == ["【开场】", "【报歌名】", "【Midori no Kasa】", "【唱了一首歌】"]
+    entry = rows[0]["timeline"][2]
+    assert (entry["start"], entry["end"]) == ("00:03:00", "00:03:00")
+
+
+def test_a_song_end_past_the_live_ends_with_the_live(tmp_path):
+    rows, _ = run(tmp_path, FakeSongs({"songs": [song("00:11:00", "03:00:00", "Hoshi no Shita", "Somebody")]}))
+
+    assert rows[2]["timeline"][-1]["end"] == "00:12:00"  # the last transcript line ends 00:12:00
+
+
+def test_an_empty_song_list_changes_nothing(tmp_path):
+    with_songs, _ = run(tmp_path / "a", FakeSongs({"songs": []}))
+    without, _ = run(tmp_path / "b", None)
+
+    assert with_songs == without
+
+
 def test_is_singing_live_is_the_rule_callers_ask():
     assert is_singing_live("【歌回】ゆるっと") and is_singing_live("Karaoke time")
     assert not is_singing_live("マイクラ") and not is_singing_live("")
