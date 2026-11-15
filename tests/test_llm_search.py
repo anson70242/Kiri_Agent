@@ -68,3 +68,14 @@ def test_reply_text_leaves_out_thought_parts():
                       {"text": '```json\n{"songs": []', "thoughtSignature": "abc"}, {"text": "}\n```"})
     reply, _, _ = asyncio.run(ask(direct, body=body))
     assert reply == '```json\n{"songs": []}\n```'
+
+
+def test_proxy_on_goes_through_the_proxy():
+    reply, seen, proxy_hits = asyncio.run(ask(
+        lambda url, proxy: LLMSettings(base_url=url, api_key="k", model="m", proxy=proxy)))
+    assert reply == "好的" and len(seen) == 1 and proxy_hits == 1
+
+
+def test_proxy_off_connects_directly():
+    reply, seen, proxy_hits = asyncio.run(ask(direct))
+    assert reply == "好的" and len(seen) == 1 and proxy_hits == 0

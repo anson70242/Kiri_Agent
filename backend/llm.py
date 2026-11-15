@@ -82,7 +82,8 @@ def ask_with_search(settings: LLMSettings, model: str, prompt: str) -> str:
     """One prompt to `model` with Google Search available; returns the reply text."""
     root = settings.base_url.rstrip("/").removesuffix("/v1")
     body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}], "tools": [{"googleSearch": {}}]}
-    resp = httpx.post(f"{root}/v1beta/models/{model}:generateContent", json=body,
-                      headers={"x-goog-api-key": settings.api_key}, timeout=settings.timeout)
+    with httpx.Client(proxy=settings.proxy, timeout=settings.timeout) as http:
+        resp = http.post(f"{root}/v1beta/models/{model}:generateContent", json=body,
+                         headers={"x-goog-api-key": settings.api_key})
     parts = resp.json()["candidates"][0]["content"]["parts"]
     return "".join(p.get("text", "") for p in parts if not p.get("thought"))
