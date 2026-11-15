@@ -2,8 +2,12 @@
 
 import asyncio
 import json
+import socket
+import time
 
-from backend.llm import LLMSettings, ask_with_search
+import pytest
+
+from backend.llm import LLMError, LLMSettings, ask_with_search
 from backend.llm_proxy import Proxy
 
 TOKEN = "s3cret-token-1234567"
@@ -14,12 +18,14 @@ def reply_with(*parts):
             "usageMetadata": {"totalTokenCount": 10}}
 
 
-async def ask(settings_for, model="song-model", prompt="哪首歌？", status=200, body=None):
+async def ask(settings_for, model="song-model", prompt="哪首歌？", status=200, body=None, hang=False):
     """Fake gateway + our Proxy; `settings_for(base_url, proxy_url)` builds the settings.
+    `body` is the gateway's reply (a str is sent as is); `hang` never replies, until the client hangs up.
     Returns (reply, requests the gateway saw, proxy connection count)."""
     seen = []
     hits = {"proxy": 0}
-    payload = json.dumps(reply_with({"text": "好的"}) if body is None else body).encode()
+    body = reply_with({"text": "好的"}) if body is None else body
+    payload = (body if isinstance(body, str) else json.dumps(body)).encode()
 
     async def gateway(r, w):
         head = (await r.readuntil(b"\r\n\r\n")).decode()
@@ -28,6 +34,10 @@ async def ask(settings_for, model="song-model", prompt="哪首歌？", status=20
         headers = {k.strip().lower(): v.strip() for k, v in (ln.split(":", 1) for ln in lines[1:] if ":" in ln)}
         raw = await r.readexactly(int(headers.get("content-length", 0)))
         seen.append({"method": method, "path": path, "headers": headers, "body": json.loads(raw or b"null")})
+        if hang:
+            await r.read()
+            w.close()
+            return
         w.write(b"HTTP/1.1 %d X\r\nContent-Type: application/json\r\nContent-Length: %d\r\n"
                 b"Connection: close\r\n\r\n%s" % (status, len(payload), payload))
         await w.drain()
@@ -68,6 +78,44 @@ def test_reply_text_leaves_out_thought_parts():
                       {"text": '```json\n{"songs": []', "thoughtSignature": "abc"}, {"text": "}\n```"})
     reply, _, _ = asyncio.run(ask(direct, body=body))
     assert reply == '```json\n{"songs": []}\n```'
+
+
+def test_error_status_raises_with_the_status_and_message():
+    body = {"error": {"code": 429, "message": "quota exhausted", "status": "RESOURCE_EXHAUSTED"}}
+    with pytest.raises(LLMError, match=r"429.*quota exhausted"):
+        asyncio.run(ask(direct, status=429, body=body))
+
+
+@pytest.mark.parametrize("body", [
+    "not json at all",
+    {"candidates": []},
+    {"promptFeedback": {"blockReason": "SAFETY"}},
+    {"candidates": [{"finishReason": "SAFETY"}]},
+    {"candidates": [{"content": {"role": "model"}}]},
+    {"candidates": [{"content": {"parts": ["junk"]}}]},
+    {"candidates": [{"content": {"parts": [{"text": 5}]}}]},
+    ["candidates"],
+], ids=["not-json", "no-candidates", "blocked", "no-content", "no-parts", "part-not-object", "text-not-string", "list"])
+def test_reply_without_the_expected_shape_raises(body):
+    with pytest.raises(LLMError, match="unexpected reply"):
+        asyncio.run(ask(direct, body=body))
+
+
+def test_unreachable_gateway_raises():
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    settings = LLMSettings(base_url=f"http://127.0.0.1:{port}/v1", api_key="k", model="m", timeout=5)
+    with pytest.raises(LLMError, match="request failed"):
+        ask_with_search(settings, "song-model", "哪首歌？")
+
+
+def test_settings_timeout_applies():
+    started = time.monotonic()
+    with pytest.raises(LLMError, match="request failed"):
+        asyncio.run(ask(lambda url, proxy: LLMSettings(base_url=url, api_key="k", model="m", timeout=0.3),
+                        hang=True))
+    assert time.monotonic() - started < 3
 
 
 def test_proxy_on_goes_through_the_proxy():

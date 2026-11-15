@@ -82,8 +82,26 @@ def ask_with_search(settings: LLMSettings, model: str, prompt: str) -> str:
     """One prompt to `model` with Google Search available; returns the reply text."""
     root = settings.base_url.rstrip("/").removesuffix("/v1")
     body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}], "tools": [{"googleSearch": {}}]}
-    with httpx.Client(proxy=settings.proxy, timeout=settings.timeout) as http:
-        resp = http.post(f"{root}/v1beta/models/{model}:generateContent", json=body,
-                         headers={"x-goog-api-key": settings.api_key})
-    parts = resp.json()["candidates"][0]["content"]["parts"]
-    return "".join(p.get("text", "") for p in parts if not p.get("thought"))
+    try:
+        with httpx.Client(proxy=settings.proxy, timeout=settings.timeout) as http:
+            resp = http.post(f"{root}/v1beta/models/{model}:generateContent", json=body,
+                             headers={"x-goog-api-key": settings.api_key})
+    except httpx.HTTPError as e:
+        raise LLMError(f"LLM request failed: {type(e).__name__}: {e}") from e
+    if resp.is_error:
+        raise LLMError(f"LLM request failed: HTTP {resp.status_code}: {_error_message(resp)}")
+    try:
+        parts = resp.json()["candidates"][0]["content"]["parts"]
+        texts = [p.get("text", "") for p in parts if not p.get("thought")]
+        if not all(isinstance(t, str) for t in texts):
+            raise TypeError("a part's text is not a string")
+    except (ValueError, LookupError, TypeError, AttributeError) as e:
+        raise LLMError(f"LLM returned an unexpected reply ({type(e).__name__}: {e}): {resp.text[:200]}") from e
+    return "".join(texts)
+
+
+def _error_message(resp: httpx.Response) -> str:
+    try:
+        return str(resp.json()["error"]["message"])
+    except (ValueError, LookupError, TypeError):
+        return resp.text[:200]
