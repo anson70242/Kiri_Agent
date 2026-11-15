@@ -44,7 +44,7 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import quote
 
-from backend.analysis import AnalysisSettings, analyze
+from backend.analysis import AnalysisSettings, analyze, song_naming
 from backend.archive import Archive, Artifact, ArtifactDamaged, ArtifactMissing, Downloads, file_date, read_file
 from backend.asr import ASRSettings, transcribe
 from backend.llm import LLMError, chat, load_llm
@@ -693,7 +693,8 @@ def load_translator(config: Path, cfg: dict[str, Any]) -> Callable[[Path], Path]
 
 def load_analyzer(config: Path, cfg: dict[str, Any]) -> Callable[[Path, str, str], Path] | None:
     """`analysis` section + a usable `llm` section -> (video, streamer, title) -> 路灯表.
-    A broken LLM setup turns analysis off (logged) instead of stopping the service."""
+    With `analysis.song_model`, a singing live's songs are named by that model through the
+    search-backed call (same gateway, key and proxy switch). A broken LLM setup turns analysis off (logged) instead of stopping the service."""
     a = cfg.get("analysis")
     if a is None or (isinstance(a, dict) and a.get("enabled") is False):
         return None
@@ -709,9 +710,10 @@ def load_analyzer(config: Path, cfg: dict[str, Any]) -> Callable[[Path, str, str
         min_score=int(a.get("min_score", 7)),
     )
     complete = functools.partial(chat, llm, response_format={"type": "json_object"})
+    name_songs = song_naming(llm, a)
 
     def run(video: Path, streamer: str, title: str) -> Path:
-        return analyze(video, complete, streamer=streamer, title=title, settings=settings)
+        return analyze(video, complete, streamer=streamer, title=title, settings=settings, name_songs=name_songs)
 
     return run
 

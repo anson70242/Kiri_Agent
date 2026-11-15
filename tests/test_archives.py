@@ -139,6 +139,21 @@ def test_highlights_xlsx(client):
     assert client.get("/api/highlights/xlsx", params={"folder": "柊優花/20261106/雑談"}).status_code == 404
 
 
+def test_highlights_xlsx_shows_a_song_entry_with_its_own_end(client, tmp_path):
+    song = {"start": "00:03:00", "end": "00:07:30", "topic": "唱歌", "title": "【Midori no Kasa】",
+            "detail": "原唱：Invented Artist"}  # ends past its row's end
+    table = {"streamer": "柊優花", "title": "歌枠", "rows": [
+        {"start": "00:00:00", "end": "00:05:00", "topics": ["开场", "唱歌"], "score": 6, "top_pick": None,
+         "timeline": [{"start": "00:00:10", "end": "00:02:50", "topic": "开场", "title": "【开场】", "detail": "打招呼"},
+                      song]}]}
+    sample_archive(tmp_path / "downloads", "柊優花", "20261108", "歌枠", highlights=table)
+
+    r = client.get("/api/highlights/xlsx", params={"folder": "柊優花/20261108/歌枠"})
+    ws = openpyxl.load_workbook(io.BytesIO(r.content)).active
+    assert ws["D2"].value.split("\n\n")[-1] == "00:03:00–00:07:30 【Midori no Kasa】 原唱：Invented Artist"
+    assert ws["C2"].value == "开场\n唱歌"
+
+
 def test_zip_has_what_editors_use(client):
     # The video, the cleaned chat, and subtitles as SRT in both languages; nothing else.
     r = client.get("/api/archives/zip", params={"folder": FOLDER})
