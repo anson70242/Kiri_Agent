@@ -56,9 +56,11 @@ SCORES = [{"start": s, "score": 5, "reason": "普通", "highlights": [], "top_pi
 
 
 class FakeLLM:
-    """The chat completion: segment calls get SEGMENT_LOGS, the last call gets the scores."""
+    """The chat completion: segment calls get `logs` (SEGMENT_LOGS by default), the last
+    call gets the scores."""
 
-    def __init__(self):
+    def __init__(self, logs=None):
+        self.logs = logs or SEGMENT_LOGS
         self.calls: list[list[dict]] = []
 
     def __call__(self, messages):
@@ -66,7 +68,7 @@ class FakeLLM:
         user = messages[-1]["content"]
         if "【本段】" in user:
             start = user.split("【本段】")[1][:8]
-            return json.dumps({"timeline": SEGMENT_LOGS[start]}, ensure_ascii=False)
+            return json.dumps({"timeline": self.logs[start]}, ensure_ascii=False)
         return json.dumps({"scores": SCORES}, ensure_ascii=False)
 
     @property
@@ -109,9 +111,9 @@ def make_live(tmp_path, transcript=TRANSCRIPT):
     return folder / "[20261115][A] 歌枠.mp4"
 
 
-def run(tmp_path, songs=None, title="【歌枠】みんなでうたう", transcript=TRANSCRIPT, settings=None):
+def run(tmp_path, songs=None, title="【歌枠】みんなでうたう", transcript=TRANSCRIPT, settings=None, logs=None):
     video = make_live(tmp_path, transcript)
-    llm = FakeLLM()
+    llm = FakeLLM(logs)
     analyze(video, llm, streamer="A", title=title, settings=settings, name_songs=songs)
     return Archive.from_video(video).read_highlights()["rows"], llm
 
@@ -285,6 +287,54 @@ def test_a_row_inside_a_long_song_keeps_an_empty_topic_log(tmp_path):
     assert rows[0]["timeline"][-1]["end"] == "00:10:30"
     assert titles(rows[2]) == ["【安静的歌】"]  # 00:10:00 is inside the song, 00:11:10 after it
     assert "【Long Song】" in scoring_sections(llm)["00:05:00"]
+
+
+def entry(start, end, title, topic="杂谈"):
+    return {"start": start, "end": end, "topic": topic, "title": title, "detail": "细节"}
+
+
+# The segment pass often starts its "sings X" entry at the announcement, before the first
+# lyric line the song-naming model takes as the song's start.
+ANNOUNCED_LOGS = {
+    "00:00:00": [
+        entry("00:00:10", "00:01:00", "【开场】"),
+        entry("00:01:11", "00:01:51", "【歌前聊天】"),  # talk that ends just before a song
+        entry("00:02:40", "00:04:50", "【唱误听的歌名】", "唱歌"),  # 90 s of its 130 s inside the song
+    ],
+    "00:05:00": [
+        entry("00:05:35", "00:08:00", "【唱第二首】", "唱歌"),  # 126 s of 145 s inside the song
+        entry("00:09:10", "00:09:50", "【道谢】"),
+    ],
+    "00:10:00": [
+        entry("00:10:00", "00:11:30", "【聊天然后唱】"),  # 18 s of 90 s inside the song
+    ],
+}
+ANNOUNCED_SONGS = {"songs": [
+    song("00:01:52", "00:02:30", "Song One", "Artist"),
+    song("00:03:00", "00:04:30", "Song Two", "Artist"),
+    song("00:05:54", "00:09:03", "Song Three", "Artist"),
+    song("00:11:10", "00:11:28", "Song Four", "Artist"),
+]}
+
+
+def test_an_entry_mostly_inside_a_song_is_removed_even_when_it_starts_before_it(tmp_path):
+    rows, llm = run(tmp_path, FakeSongs(ANNOUNCED_SONGS), logs=ANNOUNCED_LOGS)
+
+    assert titles(rows[0]) == ["【开场】", "【歌前聊天】", "【Song One】", "【Song Two】"]
+    assert titles(rows[1]) == ["【Song Three】", "【道谢】"]
+    assert titles(rows[2]) == ["【聊天然后唱】", "【Song Four】"]
+    # the scoring pass reads the song entries in place of the removed ones
+    sections = scoring_sections(llm)
+    assert "【Song Two】" in sections["00:00:00"] and "唱误听的歌名" not in sections["00:00:00"]
+    assert "【Song Three】" in sections["00:05:00"] and "唱第二首" not in sections["00:05:00"]
+
+
+@pytest.mark.parametrize("end", ["", "later", "00:02:40", "00:02:00"])
+def test_an_entry_without_a_length_is_judged_by_its_start_alone(tmp_path, end):
+    logs = {**ANNOUNCED_LOGS, "00:00:00": [entry("00:02:40", end, "【唱误听的歌名】", "唱歌")]}
+    rows, _ = run(tmp_path, FakeSongs({"songs": [song("00:03:00", "00:04:30", "Song Two", "Artist")]}), logs=logs)
+
+    assert titles(rows[0]) == ["【唱误听的歌名】", "【Song Two】"]
 
 
 def test_rows_keep_their_keys(tmp_path):
