@@ -51,6 +51,19 @@ SONG_TOPIC = "唱歌"
 UNNAMED_SONG = "未识别"
 LONGEST_SONG = 20 * 60  # seconds; a song said to be longer has an end that is not believed
 
+# A text is narrated in Japanese when hiragana is more than this share of its kana and
+# kanji. Chinese has no hiragana; Japanese sentences are full of it. On four real tables
+# (2026-11-16) every Chinese entry was under 0.07 and every entry written in Japanese over
+# 0.36, Japanese names and quoted originals included.
+JAPANESE_SHARE = 0.2
+JUDGED_FROM = 8  # kana and kanji; a shorter text is too little to judge
+REWRITE_IN_CHINESE = ("\n\n【重写要求】上一次的输出里有用日语写的叙述。请全部用简体中文重写；"
+                      "日语只能出现在中文后面括号里的原文、歌名和人名里。")
+HIRAGANA = re.compile(r"[ぁ-ゟ]")
+KANA_OR_KANJI = re.compile(r"[ぁ-ゟァ-ヿ一-鿿]")
+# Where Japanese is allowed inside Chinese text: an original in brackets, a quoted line, a title.
+QUOTED = re.compile(r"（[^（）]*）|\([^()]*\)|《[^《》]*》|「[^「」]*」|『[^『』]*』|“[^“”]*”")
+
 SEGMENT_SYSTEM = """# Role
 你是专属的中文 B 站字幕组金牌运营助手，对日本虚拟主播（VTuber）有骨灰级了解。
 你的任务：以“切片机”般的精度，无遗漏地记录直播内容，供剪辑组挑选切片。
@@ -271,7 +284,8 @@ def analyze(
     header = f"主播：{streamer}　直播标题：{title}"
     timelines = []
     for i, seg in enumerate(segs):
-        reply = ask_json(complete, SEGMENT_SYSTEM, segment_prompt(seg, header), s.retries)
+        reply = ask_in_chinese(complete, SEGMENT_SYSTEM, segment_prompt(seg, header), s.retries,
+                               f"the topic log of segment {hms(seg.start)}", topic_log_texts, names=(streamer,))
         timelines.append(reply.get("timeline") or [])
         log.info("analysis %s: segment %d/%d", video.name, i + 1, len(segs))
 
@@ -284,7 +298,8 @@ def analyze(
         timelines = [with_songs(tl, seg, songs) for seg, tl in zip(segs, timelines)]
 
     digest = "\n\n".join(segment_digest(seg, tl, songs) for seg, tl in zip(segs, timelines))
-    scored = ask_json(complete, SCORE_SYSTEM.format(min_score=s.min_score), f"{header}\n\n{digest}", s.retries)
+    scored = ask_in_chinese(complete, SCORE_SYSTEM.format(min_score=s.min_score), f"{header}\n\n{digest}", s.retries,
+                            "the scoring", score_texts, names=(streamer,))
     by_start = {str(x.get("start")): x for x in scored.get("scores") or [] if isinstance(x, dict)}
 
     levels = chat_levels([seg.chat_ratio for seg in segs])
@@ -424,10 +439,57 @@ def with_songs(timeline: list[dict[str, Any]], seg: Segment, songs: list[Song]) 
     return merged
 
 
-def ask_json(complete: Complete, system: str, user: str, retries: int = 3) -> dict[str, Any]:
-    """One chat call that must answer a JSON object; retried when it doesn't."""
-    return retry_json(lambda: complete([{"role": "system", "content": system}, {"role": "user", "content": user}]),
-                      retries)
+def ask_in_chinese(complete: Complete, system: str, user: str, retries: int, what: str,
+                   texts: Callable[[dict[str, Any]], list[str]], names: tuple[str, ...] = ()) -> dict[str, Any]:
+    """One chat call that must answer a JSON object people read in Chinese, made up to
+    `retries` times: again when the reply is not JSON, and again, asking for a rewrite in
+    Chinese, when one of `texts(reply)` is narrated in Japanese. A reply still in Japanese
+    on the last try is used as it is (logged, naming `what`): a table partly in Japanese
+    beats no table. Never any JSON: AnalysisError."""
+    japanese: dict[str, Any] | None = None
+    reply = ""
+    for _ in range(retries):
+        prompt = user + REWRITE_IN_CHINESE if japanese is not None else user
+        reply = complete([{"role": "system", "content": system}, {"role": "user", "content": prompt}])
+        if (data := parse_json(reply)) is None:
+            continue
+        if not any(narrated_in_japanese(text, names) for text in texts(data)):
+            return data
+        japanese = data
+    if japanese is not None:
+        log.warning("analysis: %s is still narrated in Japanese after %d tries; used as it is", what, retries)
+        return japanese
+    raise AnalysisError(f"LLM did not return valid JSON after {retries} tries: {reply[:200]!r}")
+
+
+def narrated_in_japanese(text: str, names: tuple[str, ...] = ()) -> bool:
+    """Whether `text` is Japanese narration, not Chinese. Japanese that is allowed does not
+    count: what is quoted or in brackets, and `names` (a streamer's name may be kana)."""
+    for name in names:
+        text = text.replace(name, "") if name else text
+    text = QUOTED.sub("", text)
+    letters = len(KANA_OR_KANJI.findall(text))
+    return letters >= JUDGED_FROM and len(HIRAGANA.findall(text)) > JAPANESE_SHARE * letters
+
+
+def score_texts(reply: dict[str, Any]) -> list[str]:
+    """What a person reads of a scoring reply: each reason and each title, on its own (a
+    title in Japanese next to a reason in Chinese is still a title in Japanese)."""
+    texts: list[Any] = []
+    for score in reply.get("scores") or []:
+        if not isinstance(score, dict):
+            continue
+        pick = score.get("top_pick") if isinstance(score.get("top_pick"), dict) else {}
+        highlights = score.get("highlights") if isinstance(score.get("highlights"), list) else []
+        texts += [score.get("reason"), pick.get("title"), pick.get("reason"),
+                  *(h.get("title") for h in highlights if isinstance(h, dict))]
+    return [str(text) for text in texts if text]
+
+
+def topic_log_texts(reply: dict[str, Any]) -> list[str]:
+    """What a person reads of a segment reply: each entry as one text."""
+    return [" ".join(str(e.get(k) or "") for k in ("topic", "title", "detail"))
+            for e in reply.get("timeline") or [] if isinstance(e, dict)]
 
 
 def retry_json(ask: Callable[[], str], retries: int, wanted: str = "valid JSON",
