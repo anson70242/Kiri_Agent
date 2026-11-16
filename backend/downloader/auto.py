@@ -44,7 +44,7 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import quote
 
-from backend.analysis import AnalysisSettings, analyze, song_naming
+from backend.analysis import AnalysisSettings, analyze, is_singing_live, song_naming
 from backend.archive import Archive, Artifact, ArtifactDamaged, ArtifactMissing, Downloads, file_date, read_file
 from backend.asr import ASRSettings, transcribe
 from backend.llm import LLMError, chat, load_llm
@@ -147,7 +147,8 @@ class AutoDownloader:
         default_keep: int = 6,  # for streamers without their own `keep`
         notify: Callable[[StreamEvent], None] | None = None,
         clock: Callable[[], float] = time.time,
-        transcribe: Callable[[Path], Any] | None = None,  # video -> transcript; None: skip
+        # video -> transcript, called with singing=True for a singing live; None: skip
+        transcribe: Callable[..., Any] | None = None,
         analyze: Callable[[Path, str, str], Path] | None = None,  # (video, streamer, title) -> table
         translate: Callable[[Path], Any] | None = None,  # video -> Chinese subtitles; None: skip
         # (路灯表, spreadsheet id, streamer, title) -> sheet link; None: no credentials, skip
@@ -311,7 +312,9 @@ class AutoDownloader:
             "percent": None, "downloaded": 0, "total": None, "speed": None, "eta": None}
         try:
             assert self.transcribe and job.video
-            self.transcribe(Path(job.video))
+            # A singing live is transcribed whole, so its lyrics are there for song naming.
+            extra = {"singing": True} if is_singing_live(s.title or "") else {}
+            self.transcribe(Path(job.video), **extra)
         except Exception as e:  # noqa: BLE001 - ASR, ffmpeg or a missing file: all retried
             return Outcome("error", str(e) or type(e).__name__)
         finally:

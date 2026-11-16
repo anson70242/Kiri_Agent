@@ -61,6 +61,58 @@ def test_transcribe_writes_transcript_next_to_video(tmp_path):
     assert 'name="audio"' in body  # the extracted audio, not the whole video
 
 
+def form_fields(request: httpx.Request) -> dict[str, str]:
+    """The plain form fields of a multipart request (not the audio)."""
+    fields = {}
+    for part in request.read().decode("latin-1").split("\r\n--")[:-1]:
+        head, _, value = part.partition("\r\n\r\n")
+        if 'name="' in head and "filename=" not in head:
+            fields[head.split('name="')[1].split('"')[0]] = value
+    return fields
+
+
+@needs_ffmpeg
+def test_a_singing_live_is_transcribed_whole_so_quiet_singing_keeps_its_lyrics(tmp_path):
+    video = make_video(tmp_path / "[20261110][A] 歌枠.mp4")
+    whisper = FakeWhisper([{"id": 0, "start": 1.0, "end": 4.0, "text": "あめあめ ふらふら"}])
+
+    transcribe(video, ASRSettings(), client=whisper.client(), singing=True)
+
+    fields = form_fields(whisper.requests[0])
+    assert fields["vad_filter"] == "false"  # voice detection drops quiet singing
+    assert fields["condition_on_previous_text"] == "false"  # or one hallucinated line repeats for minutes
+    assert fields["language"] == "ja"
+
+
+@needs_ffmpeg
+def test_a_singing_live_loses_the_lines_whisper_invents_over_music(tmp_path):
+    video = make_video(tmp_path / "[20261110][A] 歌枠.mp4")
+    invented = "ご視聴ありがとうございました"  # what whisper writes for a 30-second window with no speech
+    whisper = FakeWhisper([
+        {"id": 0, "start": 0.0, "end": 29.98, "text": invented},  # the waiting room: a whole window, one short line
+        {"id": 1, "start": 30.0, "end": 59.98, "text": invented},
+        {"id": 2, "start": 120.0, "end": 122.5, "text": "さて、はじめます"},
+        {"id": 3, "start": 200.0, "end": 213.0, "text": "ゆっくり ながれる ほしのうた"},  # a slow sung line: kept
+        {"id": 4, "start": 230.0, "end": 239.0, "text": "あるきだす"},  # a held note: short, kept
+        {"id": 5, "start": 7000.0, "end": 7002.5, "text": invented},  # the streamer really says it: kept
+    ])
+
+    out = transcribe(video, ASRSettings(), client=whisper.client(), singing=True)
+
+    assert [line["text"] for line in json.loads(out.read_text(encoding="utf-8"))] == [
+        "さて、はじめます", "ゆっくり ながれる ほしのうた", "あるきだす", invented]
+
+
+@needs_ffmpeg
+def test_any_other_live_is_asked_as_before(tmp_path):
+    video = make_video(tmp_path / "[20261110][A] 杂谈.mp4")
+    whisper = FakeWhisper([{"id": 0, "start": 1.0, "end": 4.0, "text": "こんばんは"}])
+
+    transcribe(video, ASRSettings(), client=whisper.client())
+
+    assert form_fields(whisper.requests[0]) == {"language": "ja", "vad_filter": "true"}
+
+
 @needs_ffmpeg
 def test_whisper_error_raises_and_writes_nothing(tmp_path):
     video = make_video(tmp_path / "v.mp4")

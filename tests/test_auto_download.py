@@ -1,6 +1,7 @@
 """Auto-download after a stream ends: queue, retries, failure messages, retention."""
 
 import asyncio
+import dataclasses
 import json
 import os
 import re
@@ -136,6 +137,21 @@ def test_download_done_moves_job_to_transcription(tmp_path):
     assert outcome.kind == "done" and calls == [tmp_path / "v.mp4"]
     ad.finish(job, outcome)
     assert ad.load() == []
+
+
+def test_a_singing_live_is_transcribed_as_one(tmp_path):
+    calls = []
+    ad, _, _ = make(tmp_path, transcribe=lambda video, **kw: calls.append((video, kw)))
+    for sid, title in (("v1", "【歌枠】ねむれるうた"), ("v2", "雑談します")):
+        status = dataclasses.replace(live(A, sid=sid), title=title)
+        ad.on_ended(StreamEvent(EventKind.OFFLINE, status, later(60)))
+        job = next(j for j in ad.load() if j.status.stream_id == sid)
+        ad.finish(job, downloaded(tmp_path))
+        job = next(j for j in ad.load() if j.status.stream_id == sid)
+        assert ad.attempt(job).kind == "done"
+
+    # the title rule is the song naming's; any other live is asked exactly as before
+    assert calls == [(tmp_path / "v.mp4", {"singing": True}), (tmp_path / "v.mp4", {})]
 
 
 def test_transcription_failures_give_up_with_message(tmp_path):

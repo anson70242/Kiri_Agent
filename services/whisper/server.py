@@ -128,12 +128,17 @@ async def transcribe_full(
     vad_filter: bool = Form(False),
     vad_threshold: float = Form(0.5),
     min_silence_duration_ms: int = Form(500),
+    condition_on_previous_text: bool = Form(True),
 ):
     """
     Transcribe an audio file and return per-segment timestamps.
 
     Returns a list of segments with id, start, end, and text
     instead of concatenated text.
+
+    condition_on_previous_text=false decodes every 30-second window on its own. Without
+    voice detection that is what stops one invented line (over music with no speech) from
+    being repeated for minutes; kiri asks for both on singing streams.
     """
     raw = await audio.read()
 
@@ -154,6 +159,7 @@ async def transcribe_full(
             threshold=vad_threshold,
             min_silence_duration_ms=min_silence_duration_ms,
         ) if vad_filter else None,
+        condition_on_previous_text=condition_on_previous_text,
     )
 
     result_segments = []
