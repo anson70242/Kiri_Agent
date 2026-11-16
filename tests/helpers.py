@@ -26,8 +26,13 @@ def off(s: Streamer = A) -> StreamStatus:
     return StreamStatus(s, LiveState.OFFLINE)
 
 
-def up(s: Streamer = A) -> StreamStatus:
-    return StreamStatus(s, LiveState.UPCOMING)
+def up(s: Streamer = A, sid: str | None = None, starts: datetime | None = None) -> StreamStatus:
+    """Upcoming. With `sid`, a scheduled live as YouTube reports it: id, title, address and
+    the scheduled start (`starts`, T0 + 1 day by default)."""
+    if sid is None:
+        return StreamStatus(s, LiveState.UPCOMING)
+    return StreamStatus(s, LiveState.UPCOMING, title=f"title {sid}", url=f"https://x/{sid}", stream_id=sid,
+                        started_at=starts or T0 + timedelta(days=1))
 
 
 def unk(s: Streamer = A) -> StreamStatus:

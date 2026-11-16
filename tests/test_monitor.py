@@ -19,7 +19,7 @@ class FakeMonitor(PlatformMonitor):
         if isinstance(item, Exception):
             raise item
         if isinstance(item, tuple):
-            return StreamStatus(s, LiveState.LIVE, url=f"https://x/{item[1]}", stream_id=item[1])
+            return StreamStatus(s, LiveState(item[0]), url=f"https://x/{item[1]}", stream_id=item[1])
         return StreamStatus(s, item)
 
 
@@ -49,6 +49,18 @@ def test_failed_check_does_not_overwrite_known_state():
         async with StreamMonitor([X]) as mon:
             changes = await poll(mon, 5)
         assert changes == [[("offline", None)], [], [], [], [("live", "offline")]]
+
+    asyncio.run(go())
+
+
+def test_another_scheduled_live_is_a_change():
+    async def go():
+        # The waiting room shown changes while the state stays "upcoming"; an unknown id
+        # counts as the same one.
+        SCRIPT["x"] = [("upcoming", "u1"), ("upcoming", "u1"), ("upcoming", "u2"), ("upcoming", None)]
+        async with StreamMonitor([X]) as mon:
+            changes = await poll(mon, 4)
+        assert changes == [[("upcoming", None)], [], [("upcoming", "upcoming")], []]
 
     asyncio.run(go())
 

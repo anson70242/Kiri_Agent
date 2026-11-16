@@ -11,9 +11,9 @@ import httpx
 import pytest
 
 from backend.notify import EventKind, Link, StreamEvent
-from backend.notify.qq import QQGroups, QQNotifier, QQSettings
+from backend.notify.qq import KIND_LABELS, QQGroups, QQNotifier, QQSettings
 
-from .helpers import A, B, T0, live
+from .helpers import A, B, T0, live, up
 
 SECRET = "app-SECRET-xyz"
 COVER = "https://i.ytimg.com/vi/v1/hqdefault.jpg"
@@ -115,6 +115,37 @@ def test_live_goes_to_subscribed_groups_with_the_cover_on_the_second_line(tmp_pa
     assert "[https://x/v1](https://x/v1)" in lines
     assert lines[-1] == "切片小助手 直播通知"
     assert fake.uploads == 1
+
+
+def test_a_scheduled_live_goes_to_the_groups_that_want_it(tmp_path):
+    fake = FakeQQ()
+    n = notifier(tmp_path, fake, {**SUBSCRIBED, "kinds": ["upcoming", "live"]},
+                 {**SUBSCRIBED, "openid": "G2"})  # did not tick 直播预告
+    status = up(A, sid="u1")  # scheduled for 2026-11-11 08:00 UTC
+    status.thumbnail = COVER
+    send(n, StreamEvent(EventKind.UPCOMING, status))
+
+    assert [g for g, _ in fake.messages] == ["G1"]
+    lines = fake.texts("G1")[0].split("\n")
+    assert lines[0] == "📅 **A** 发布了直播预告"
+    assert lines[1].startswith("![") and lines[1].endswith("(qqbot-media://image/v1/COVER1)")
+    assert lines[2:] == ["A · youtube", "title u1", "🕒 预定 11月11日 16:00 开播",  # local time (UTC+8)
+                         "[https://x/u1](https://x/u1)", "切片小助手 直播通知"]
+
+
+def test_a_scheduled_live_without_a_time_says_nothing_about_when(tmp_path):
+    fake = FakeQQ(cover_ok=False)
+    status = up(A, sid="u1")
+    status.started_at = None
+    send(notifier(tmp_path, fake, {**SUBSCRIBED, "kinds": ["upcoming"]}), StreamEvent(EventKind.UPCOMING, status))
+    assert fake.texts("G1")[0].split("\n") == [
+        "📅 **A** 发布了直播预告", "A · youtube", "title u1", "[https://x/u1](https://x/u1)", "切片小助手 直播通知"]
+
+
+def test_a_new_group_starts_with_scheduled_lives_ticked_and_the_page_can_name_the_kind(tmp_path):
+    group, new = QQGroups(tmp_path / "g.json").register("G9")
+    assert new and "upcoming" in group["kinds"]
+    assert KIND_LABELS["upcoming"] == "直播预告"
 
 
 def test_without_a_cover_the_message_is_text_only(tmp_path):

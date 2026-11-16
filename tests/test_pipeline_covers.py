@@ -51,7 +51,11 @@ def test_downloaded_and_ready_carry_the_cover_after_the_headline(tmp_path, kind,
     assert lines[2] == "title v1"
 
 
-@pytest.mark.parametrize("kind", sorted(set(EventKind) - {EventKind.LIVE, EventKind.DOWNLOADED, EventKind.READY}))
+# The messages about the live itself (scheduled, went live) and these two show the cover.
+WITH_COVER = {EventKind.UPCOMING, EventKind.LIVE, EventKind.DOWNLOADED, EventKind.READY}
+
+
+@pytest.mark.parametrize("kind", sorted(set(EventKind) - WITH_COVER))
 def test_the_other_messages_stay_text_only(tmp_path, kind):
     fake = CoverQQ()
     send(qq(tmp_path, fake), StreamEvent(kind, live(A, thumbnail=COVER), detail="x"))
@@ -172,7 +176,7 @@ def discord_embed(event: StreamEvent) -> dict:
     return payload["embeds"][0]
 
 
-PIPELINE_KINDS = sorted(set(EventKind) - {EventKind.LIVE, EventKind.OFFLINE})
+PIPELINE_KINDS = sorted(set(EventKind) - {EventKind.UPCOMING, EventKind.LIVE, EventKind.OFFLINE})
 
 
 @pytest.mark.parametrize("kind", PIPELINE_KINDS)

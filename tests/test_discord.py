@@ -10,7 +10,7 @@ import pytest
 from backend.notify import EventKind, Link, LiveNotifier, PermanentNotifyError, StreamEvent
 from backend.notify.discord import DiscordNotifier
 
-from .helpers import T0, B, live, off
+from .helpers import T0, B, live, off, up
 
 
 def fake_discord(*responses):
@@ -53,6 +53,31 @@ def test_live_message():
     assert e["image"]["url"] == "https://cdn/cover.jpg"
     assert e["author"]["icon_url"] == "https://cdn/a.png"
     assert e["color"] == 0xFF0000
+
+
+def test_scheduled_live_message_shows_when_it_starts_and_pings_nobody():
+    n, sent = fake_discord(httpx.Response(204))
+    status = up(sid="u1")  # scheduled for T0 + 1 day = 2026-11-11 08:00 UTC
+    status.thumbnail, status.avatar = "https://cdn/cover.jpg", "https://cdn/a.png"
+    send(n, StreamEvent(EventKind.UPCOMING, status))
+    msg = sent[0]
+    assert msg["content"] == "📅 **A** 发布了直播预告"
+    assert msg["allowed_mentions"] == {"parse": []}  # the ping is for going live
+    e = msg["embeds"][0]
+    assert e["title"] == "title u1" and e["url"] == "https://x/u1"
+    assert e["image"]["url"] == "https://cdn/cover.jpg"
+    assert e["author"] == {"name": "A · youtube", "url": "https://x/u1", "icon_url": "https://cdn/a.png"}
+    # Discord shows this in each reader's own time zone, with "in 3 hours" after it.
+    assert e["fields"] == [{"name": "预定开播", "value": "<t:1794384000:F>（<t:1794384000:R>）", "inline": False}]
+    assert e["color"] != 0xFF0000  # not the colour of a live that is on
+
+
+def test_scheduled_live_without_a_time_has_no_time_field():
+    n, sent = fake_discord(httpx.Response(204))
+    status = up(sid="u1")
+    status.started_at = None
+    send(n, StreamEvent(EventKind.UPCOMING, status))
+    assert sent[0]["content"] == "📅 **A** 发布了直播预告" and "fields" not in sent[0]["embeds"][0]
 
 
 def test_offline_message_has_duration_and_no_ping():

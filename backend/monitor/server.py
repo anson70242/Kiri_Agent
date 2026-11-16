@@ -33,7 +33,7 @@ from .__main__ import REPO_ROOT, load_config
 from .archives import create_router
 from .auth_api import install_auth, install_open_me, visible_streamers
 from .notify_api import create_notify_router
-from .base import LiveState, Streamer
+from .base import LiveState, Streamer, StreamStatus
 from .roster import RosterError, entry_id, load_roster
 
 PAGE = REPO_ROOT / "frontend" / "monitor.html"
@@ -173,12 +173,14 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
                                for k in ("active", "queue")}}
         return {"enabled": True, **snap}
 
+    checked: dict[Streamer, StreamStatus] = {}  # a new streamer's check, until she is in the roster
+
     async def live_check(s: Streamer) -> str | None:
-        """Real channel check; its result also fills the new card right away."""
+        """Real channel check; its result is the new streamer's first status (`add_streamer`)."""
         st = await mon.monitor_for(s.platform).check(s)
         if st.state is LiveState.UNKNOWN:
             return st.error or "频道检查失败"
-        mon.statuses[s] = st
+        checked[s] = st
         return None
 
     verify = check_channel or live_check
@@ -207,8 +209,13 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
         s = roster.streamers()[-1]
         if err := await verify(s):
             roster.entries = before
+            checked.pop(s, None)
             raise HTTPException(422, f"找不到这个频道: {err}")
         apply()
+        if st := checked.pop(s, None):
+            # Fills the new card right away, and tells the notifier: a streamer added
+            # while live is announced, and so is the end of that live.
+            await mon.observe(st)
         return {"id": entry_id(entry)}
 
     @app.patch("/api/streamers")

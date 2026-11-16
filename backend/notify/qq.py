@@ -44,7 +44,7 @@ log = logging.getLogger(__name__)
 TOKEN_URL = "https://bots.qq.com/app/getAppAccessToken"
 API = "https://api.sgroup.qq.com"
 LOCAL_TZ = timezone(timedelta(hours=8))  # the group lives in China / Hong Kong time
-DEFAULT_KINDS = ["live", "offline", "ready", "uploaded"]  # editors start once everything is ready
+DEFAULT_KINDS = ["upcoming", "live", "offline", "ready", "uploaded"]  # editors start once everything is ready
 MEDIA_PREFIX = "kiri-"
 LIBRARY_FULL = 40035007
 # Lives whose uploaded cover is kept for reuse. Well under the library's 100: our oldest
@@ -70,8 +70,8 @@ PIPELINE = {
 }
 # The messages that show the live's cover. The other pipeline messages stay text: a cover
 # on every message of one live would flood the group.
-COVER_KINDS = {EventKind.LIVE, EventKind.DOWNLOADED, EventKind.READY}
-KIND_LABELS = {"live": "开播", "offline": "下播", "downloaded": "录播已下载", "replay_unpublished": "回放未公开",
+COVER_KINDS = {EventKind.UPCOMING, EventKind.LIVE, EventKind.DOWNLOADED, EventKind.READY}
+KIND_LABELS = {"upcoming": "直播预告", "live": "开播", "offline": "下播", "downloaded": "录播已下载", "replay_unpublished": "回放未公开",
                "prune_failed": "旧录播没能删除", "uploaded": "上传完成",
                "analyzed": "路灯表已生成", "download_failed": "下载失败", "transcribe_failed": "转写失败",
                "translate_failed": "翻译失败", "analyze_failed": "分析失败", "upload_failed": "上传失败",
@@ -217,6 +217,14 @@ def message(event: StreamEvent, cover: str | None = None) -> str:
             info.append(f"开始于 {s.started_at.astimezone(LOCAL_TZ):%H:%M}")
         if info:
             lines.append("👀 " + " · ".join(info))
+        if s.url:
+            lines.append(link(s.url))
+        lines.append(FOOTER_LIVE)
+    elif event.kind is EventKind.UPCOMING:
+        lines = [f"📅 **{name}** 发布了直播预告", f"{name} · {s.streamer.platform}", title]
+        if s.started_at:  # the scheduled start
+            at = s.started_at.astimezone(LOCAL_TZ)
+            lines.append(f"🕒 预定 {at.month}月{at.day}日 {at:%H:%M} 开播")
         if s.url:
             lines.append(link(s.url))
         lines.append(FOOTER_LIVE)

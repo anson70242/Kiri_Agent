@@ -1,7 +1,7 @@
 """Shared pieces for every notification channel.
 
 A channel subclasses `Notifier`, sets `name = "<channel>"` and implements `send()`.
-`LiveNotifier` decides *when* to notify (went live / ended), remembers state across
+`LiveNotifier` decides *when* to notify (scheduled / went live / ended), remembers state across
 restarts, and delivers events in order with retries.
 """
 
@@ -24,8 +24,13 @@ from .history import NotifyHistory
 
 log = logging.getLogger(__name__)
 
+# Announced upcoming lives remembered per streamer. More than one, because a channel with
+# two waiting rooms (a permanent chat room and the next live) is shown flipping between them.
+SCHEDULED_KEPT = 20
+
 
 class EventKind(StrEnum):
+    UPCOMING = "upcoming"  # scheduled a live (the waiting room is up)
     LIVE = "live"  # went live
     OFFLINE = "offline"  # stream ended
     DOWNLOADED = "downloaded"  # archive auto-downloaded (backend.downloader.auto)
@@ -106,6 +111,11 @@ class LiveNotifier:
       live.
     - `on_ended` listeners get every live once, with that live's own details, also the
       lives that a sitting continued past.
+    - Scheduled: an upcoming live (a waiting room with an id) is announced once, whatever
+      happens to it later; going live is still announced. What was already scheduled when
+      a run first checks a streamer is not announced while nothing is saved about upcoming
+      lives (a first start, or the first start that knows this rule), unless
+      `notify_on_startup`.
 
     With `state_file`, the last live per streamer survives restarts, so a live that
     ended (or a new one that started) while the monitor was down, or during a pending
@@ -155,6 +165,12 @@ class LiveNotifier:
         # "went live" and "ended" carry. Saved with the live state, so a sitting that
         # continued past its first live keeps its start time across a restart.
         self._sitting: dict[str, StreamStatus] = saved.sittings
+        # streamer id -> ids of the upcoming lives already announced, newest last.
+        self._scheduled: dict[str, list[str]] = saved.scheduled
+        # Nothing saved about upcoming lives (a first start, or the first one that knows
+        # them): what a streamer has scheduled when first checked by this run is old news.
+        self._scheduled_unknown = not self._scheduled
+        self._checked: set[str] = set()  # streamers this run has a status for
         self._pending_end: dict[str, asyncio.Task[None]] = {}
         # Called with every "ended" event (even when on_offline is off), e.g. to
         # start the auto-download. Must return quickly.
@@ -172,6 +188,9 @@ class LiveNotifier:
         first_sighting = sid not in self._live
         prev = self._live.get(sid)
 
+        if new.state is LiveState.UPCOMING:
+            self._announce_scheduled(new)
+        self._checked.add(sid)
         if new.is_live:
             same = prev is not None and prev.same_stream(new)
             # A different live at the same watch address, while the previous one is
@@ -209,6 +228,23 @@ class LiveNotifier:
         elif first_sighting:
             self._live[sid] = None
             self._save_state()
+
+    def _announce_scheduled(self, new: StreamStatus) -> None:
+        """An upcoming live: announced once, by its id (without one it cannot be told from
+        the last one, so it is never announced). Not announced, unless `notify_on_startup`:
+        what was already scheduled when this run first checked the streamer, while nothing
+        was saved about upcoming lives."""
+        if new.stream_id is None:
+            return
+        announced = self._scheduled.setdefault(new.streamer.id, [])
+        if new.stream_id in announced:
+            return
+        announced.append(new.stream_id)
+        del announced[:-SCHEDULED_KEPT]
+        self._save_state()
+        old_news = self._scheduled_unknown and new.streamer.id not in self._checked
+        if not old_news or self.notify_on_startup:
+            self._enqueue(StreamEvent(EventKind.UPCOMING, new))
 
     async def _end_after_grace(self, sid: str, prev: StreamStatus, ended_at: datetime) -> None:
         await asyncio.sleep(self.offline_grace)
@@ -342,7 +378,7 @@ class LiveNotifier:
         if not self._state:
             return
         try:
-            self._state.save(SavedLives(self._live, self._sitting))
+            self._state.save(SavedLives(self._live, self._sitting, self._scheduled))
         except Exception:  # noqa: BLE001
             log.exception("could not save %s", self.state_file)
 
@@ -362,20 +398,26 @@ class SavedLives:
     # sitting continues past it; only then is it written to the file). Only for
     # streamers that are live.
     sittings: dict[str, StreamStatus] = field(default_factory=dict)
+    # streamer id -> ids of the upcoming lives already announced, newest last.
+    scheduled: dict[str, list[str]] = field(default_factory=dict)
 
 
 def decode_live_state(raw: Any) -> SavedLives:
     """The live-stream state file's JSON -> the saved lives; raises if it isn't that shape.
-    The optional "sittings" entry is ignored by versions that don't know it."""
+    The optional "sittings" and "upcoming" entries are ignored by versions that don't know them."""
     if not isinstance(raw, dict) or not isinstance(streamers := raw.get("streamers", {}), dict):
         raise ValueError("expected {\"streamers\": {streamer id: status or null}}")
     if not isinstance(sittings := raw.get("sittings", {}), dict) or not all(
             isinstance(v, dict) for v in sittings.values()):
         raise ValueError("expected {\"sittings\": {streamer id: status}}")
+    if not isinstance(scheduled := raw.get("upcoming", {}), dict) or not all(
+            isinstance(ids, list) and all(isinstance(i, str) for i in ids) for ids in scheduled.values()):
+        raise ValueError("expected {\"upcoming\": {streamer id: [stream id]}}")
     live = {sid: StreamStatus.from_dict(v) if v else None for sid, v in streamers.items()}
     # A live streamer without an entry is in a sitting that is still its first live.
     return SavedLives(live, {sid: StreamStatus.from_dict(sittings[sid]) if sid in sittings else current
-                             for sid, current in live.items() if current is not None})
+                             for sid, current in live.items() if current is not None},
+                      {sid: list(ids) for sid, ids in scheduled.items()})
 
 
 def encode_live_state(saved: SavedLives) -> dict[str, Any]:
@@ -385,4 +427,6 @@ def encode_live_state(saved: SavedLives) -> dict[str, Any]:
                 if (current := saved.live.get(sid)) is not None and first is not current}
     if sittings:
         raw["sittings"] = sittings
+    if scheduled := {sid: ids for sid, ids in saved.scheduled.items() if ids}:
+        raw["upcoming"] = scheduled
     return raw

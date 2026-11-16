@@ -43,9 +43,11 @@ def test_status_lists_channels_groups_and_choices(tmp_path, monkeypatch):
     assert body["discord"]["configured"] is True
     assert body["qq"]["configured"] is True and body["qq"]["online"] is False
     (g,) = body["groups"]
-    assert g["openid"] == "G1" and g["enabled"] is False and g["kinds"] == ["live", "offline", "ready", "uploaded"]
+    assert g["openid"] == "G1" and g["enabled"] is False
+    assert g["kinds"] == ["upcoming", "live", "offline", "ready", "uploaded"]
     assert [s["id"] for s in body["streamers"]] == ["A", "B"]  # one per person, not per channel
-    assert {"id": "live", "label": "开播"} in body["kinds"] and len(body["kinds"]) == 13
+    assert {"id": "live", "label": "开播"} in body["kinds"] and len(body["kinds"]) == 14
+    assert body["kinds"][0] == {"id": "upcoming", "label": "直播预告"}  # first, before 开播
     assert {"id": "ready", "label": "全部处理完成"} in body["kinds"]
     assert body["log"] == []
 

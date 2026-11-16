@@ -240,30 +240,47 @@ class StreamMonitor:
         changes. UNKNOWN results don't overwrite a known state, so a single network
         blip doesn't fire a false "went offline"."""
         async with self._refresh_lock:
-            changes = []
-            for status in await self.poll_once():
-                old = self.statuses.get(status.streamer)
-                if status.state is LiveState.UNKNOWN and old and old.state is not LiveState.UNKNOWN:
-                    continue
-                self.statuses[status.streamer] = status
-                if (
-                    old is None
-                    or old.state != status.state
-                    # Ended and restarted between two polls: live -> live, new broadcast.
-                    or (old.is_live and not status.same_stream(old))
-                ):
-                    changes.append((status, old))
+            changes = [change for status in await self.poll_once() if (change := self._take(status))]
             self.last_refresh = datetime.now(timezone.utc)
-            for new, old in changes:
-                for cb in self.on_change:
-                    try:
-                        result = cb(new, old)
-                        if asyncio.iscoroutine(result):
-                            await result
-                    except Exception:
-                        # A broken callback must never stop monitoring.
-                        log.exception("on_change callback failed for %s", new.streamer.name)
+            await self._report(changes)
             return changes
+
+    async def observe(self, status: StreamStatus) -> None:
+        """Take in the result of a check made outside `refresh` (a streamer just added from
+        the dashboard) exactly as `refresh` would: a change is reported to `on_change`.
+        Without this the first status of a streamer added while live would never be
+        reported, and neither the live nor its end announced."""
+        async with self._refresh_lock:
+            if change := self._take(status):
+                await self._report([change])
+
+    def _take(self, status: StreamStatus) -> tuple[StreamStatus, StreamStatus | None] | None:
+        """Store a check's result; (new, old) when it is a change to report."""
+        old = self.statuses.get(status.streamer)
+        if status.state is LiveState.UNKNOWN and old and old.state is not LiveState.UNKNOWN:
+            return None
+        self.statuses[status.streamer] = status
+        changed = (
+            old is None
+            or old.state != status.state
+            # Ended and restarted between two polls: live -> live, new broadcast.
+            or (old.is_live and not status.same_stream(old))
+            # Another live is scheduled: upcoming -> upcoming, another id.
+            or (status.state is LiveState.UPCOMING and None not in (status.stream_id, old.stream_id)
+                and status.stream_id != old.stream_id)
+        )
+        return (status, old) if changed else None
+
+    async def _report(self, changes: list[tuple[StreamStatus, StreamStatus | None]]) -> None:
+        for new, old in changes:
+            for cb in self.on_change:
+                try:
+                    result = cb(new, old)
+                    if asyncio.iscoroutine(result):
+                        await result
+                except Exception:
+                    # A broken callback must never stop monitoring.
+                    log.exception("on_change callback failed for %s", new.streamer.name)
 
     async def run(self, interval: float) -> None:
         """Poll forever; never dies on an error. Register `self.on_change` first."""

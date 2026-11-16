@@ -17,6 +17,7 @@ from .base import EventKind, Notifier, PermanentNotifyError, StreamEvent
 PLATFORM_COLORS = {"youtube": 0xFF0000, "twitch": 0x9146FF, "twitcasting": 0x3381FF}
 DEFAULT_COLOR = 0xE11D48
 OFFLINE_COLOR = 0x6B7280
+UPCOMING_COLOR = 0x3B82F6  # the dashboard's "待机中" blue: not live yet
 DOWNLOADED_COLOR = 0x16A34A
 FAILED_COLOR = 0xDC2626
 WAITING_COLOR = OFFLINE_COLOR
@@ -61,9 +62,11 @@ class DiscordNotifier(Notifier):
         status = event.status
         s = status.streamer
         live = event.kind is EventKind.LIVE
+        upcoming = event.kind is EventKind.UPCOMING
         embed: dict[str, Any] = {
-            "title": (status.title or ("直播中" if live else "直播已结束"))[:256],
-            "color": PLATFORM_COLORS.get(s.platform, DEFAULT_COLOR) if live else OFFLINE_COLOR,
+            "title": (status.title or ("直播中" if live else "直播预告" if upcoming else "直播已结束"))[:256],
+            "color": (PLATFORM_COLORS.get(s.platform, DEFAULT_COLOR) if live
+                      else UPCOMING_COLOR if upcoming else OFFLINE_COLOR),
             "author": {"name": f"{s.name} · {s.platform}"},
             "footer": {"text": FOOTER_LIVE},
         }
@@ -84,6 +87,13 @@ class DiscordNotifier(Notifier):
             content = f"🔴 **{s.name}** 开播了！"
             if self.mention:
                 content = f"{self.mention} {content}"
+        elif upcoming:
+            if status.thumbnail:
+                embed["image"] = {"url": status.thumbnail}
+            if status.started_at:  # the scheduled start; Discord shows it in the reader's time zone
+                at = int(status.started_at.timestamp())
+                fields.append({"name": "预定开播", "value": f"<t:{at}:F>（<t:{at}:R>）", "inline": False})
+            content = f"📅 **{s.name}** 发布了直播预告"
         else:
             if status.thumbnail:
                 embed["thumbnail"] = {"url": status.thumbnail}
