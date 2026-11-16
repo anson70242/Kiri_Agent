@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
@@ -122,7 +122,7 @@ def test_a_scheduled_live_goes_to_the_groups_that_want_it(tmp_path):
     n = notifier(tmp_path, fake, {**SUBSCRIBED, "kinds": ["upcoming", "live"]},
                  {**SUBSCRIBED, "openid": "G2"})  # did not tick 直播预告
     status = up(A, sid="u1")  # scheduled for 2026-11-11 08:00 UTC
-    status.thumbnail = COVER
+    status.thumbnail, status.checked_at = COVER, T0  # seen on 2026-11-10: the same year
     send(n, StreamEvent(EventKind.UPCOMING, status))
 
     assert [g for g, _ in fake.messages] == ["G1"]
@@ -131,6 +131,15 @@ def test_a_scheduled_live_goes_to_the_groups_that_want_it(tmp_path):
     assert lines[1].startswith("![") and lines[1].endswith("(qqbot-media://image/v1/COVER1)")
     assert lines[2:] == ["A · youtube", "title u1", "🕒 预定 11月11日 16:00 开播",  # local time (UTC+8)
                          "[https://x/u1](https://x/u1)", "切片小助手 直播通知"]
+
+
+def test_a_live_scheduled_for_another_year_says_which_year(tmp_path):
+    # A permanent waiting room is scheduled a year out: "10月25日" alone would read as this year.
+    fake = FakeQQ(cover_ok=False)
+    status = up(A, sid="u1", starts=datetime(2027, 10, 25, 14, 20, tzinfo=timezone.utc))
+    status.checked_at = T0  # seen on 2026-11-10
+    send(notifier(tmp_path, fake, {**SUBSCRIBED, "kinds": ["upcoming"]}), StreamEvent(EventKind.UPCOMING, status))
+    assert "🕒 预定 2027年10月25日 22:20 开播" in fake.texts("G1")[0].split("\n")
 
 
 def test_a_scheduled_live_without_a_time_says_nothing_about_when(tmp_path):

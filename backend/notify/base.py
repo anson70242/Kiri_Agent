@@ -26,6 +26,8 @@ log = logging.getLogger(__name__)
 
 # Announced upcoming lives remembered per streamer. More than one, because a channel with
 # two waiting rooms (a permanent chat room and the next live) is shown flipping between them.
+# The ones seen longest ago are forgotten first, so a permanent room, which shows again
+# after every live, is never forgotten.
 SCHEDULED_KEPT = 20
 
 
@@ -115,7 +117,10 @@ class LiveNotifier:
       happens to it later; going live is still announced. What was already scheduled when
       a run first checks a streamer is not announced while nothing is saved about upcoming
       lives (a first start, or the first start that knows this rule), unless
-      `notify_on_startup`.
+      `notify_on_startup`. However far ahead it is scheduled: a permanent "news" or
+      free-chat room is announced the first time it shows, like any other. One seen while
+      a live is ending is announced after that live's "ended", and not at all if it is on
+      air by then.
 
     With `state_file`, the last live per streamer survives restarts, so a live that
     ended (or a new one that started) while the monitor was down, or during a pending
@@ -171,6 +176,9 @@ class LiveNotifier:
         # them): what a streamer has scheduled when first checked by this run is old news.
         self._scheduled_unknown = not self._scheduled
         self._checked: set[str] = set()  # streamers this run has a status for
+        # streamer id -> an upcoming live seen while a live was ending: announced once
+        # that live's "ended" is out.
+        self._held_scheduled: dict[str, StreamStatus] = {}
         self._pending_end: dict[str, asyncio.Task[None]] = {}
         # Called with every "ended" event (even when on_offline is off), e.g. to
         # start the auto-download. Must return quickly.
@@ -189,9 +197,17 @@ class LiveNotifier:
         prev = self._live.get(sid)
 
         if new.state is LiveState.UPCOMING:
-            self._announce_scheduled(new)
+            if prev is not None:
+                # The waiting room shows the moment a live stops (or drops out): that
+                # live's "ended" goes out first.
+                self._held_scheduled[sid] = new
+            else:
+                self._announce_scheduled(new)
         self._checked.add(sid)
         if new.is_live:
+            held = self._held_scheduled.get(sid)
+            if held is not None and held.stream_id == new.stream_id:
+                del self._held_scheduled[sid]  # it is on air: "went live" says it all
             same = prev is not None and prev.same_stream(new)
             # A different live at the same watch address, while the previous one is
             # still live or inside its grace period, both seen by this run.
@@ -238,6 +254,10 @@ class LiveNotifier:
             return
         announced = self._scheduled.setdefault(new.streamer.id, [])
         if new.stream_id in announced:
+            if announced[-1] != new.stream_id:  # seen again: the last one to be forgotten
+                announced.remove(new.stream_id)
+                announced.append(new.stream_id)
+                self._save_state()
             return
         announced.append(new.stream_id)
         del announced[:-SCHEDULED_KEPT]
@@ -264,6 +284,8 @@ class LiveNotifier:
             last = replace(last, stream_id=first.stream_id, started_at=first.started_at)
         if self.notify_offline:
             self._enqueue(StreamEvent(EventKind.OFFLINE, last, ended_at))
+        if held := self._held_scheduled.pop(sid, None):
+            self._announce_scheduled(held)
 
     def _end_live(self, live: StreamStatus, ended_at: datetime) -> None:
         """Tell the "a live ended" listeners about one live, with its own details."""

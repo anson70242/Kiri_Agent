@@ -1,10 +1,12 @@
 """When "scheduled a live" is announced (LiveNotifier rules for an upcoming live)."""
 
 import asyncio
+from dataclasses import replace
+from datetime import timedelta
 
 from backend.notify import EventKind, LiveNotifier
 
-from .helpers import LIVE, OFFLINE, Recorder, ev, live, off, up
+from .helpers import LIVE, OFFLINE, T0, Recorder, ev, live, off, up
 
 UPCOMING = EventKind.UPCOMING
 GRACE = 0.05
@@ -42,9 +44,71 @@ def test_going_live_is_still_announced_after_the_schedule_was():
     check([(off(), None), (up(sid="v1"), off()), (live(sid="v1"), up(sid="v1"))], [ev(UPCOMING, "v1"), ev(LIVE, "v1")])
 
 
-def test_the_next_live_scheduled_right_after_one_ends():
+def test_the_next_live_scheduled_as_one_ends_is_announced_after_the_end():
+    # The waiting room shows the moment the live stops; "ended" still waits out its grace
+    # period, and the schedule is not announced ahead of it.
     check([(off(), None), (live(sid="v1"), off()), (up(sid="u2"), live(sid="v1"))],
-          [ev(LIVE, "v1"), ev(UPCOMING, "u2"), ev(OFFLINE, "v1")])
+          [ev(LIVE, "v1"), ev(OFFLINE, "v1"), ev(UPCOMING, "u2")])
+
+
+def test_a_waiting_room_seen_during_a_dropout_is_announced_when_that_live_really_ends():
+    check([(off(), None), (live(sid="v1"), off()), (up(sid="u2"), live(sid="v1")), (live(sid="v1"), up(sid="u2")),
+           (off(), live(sid="v1"))],
+          [ev(LIVE, "v1"), ev(OFFLINE, "v1"), ev(UPCOMING, "u2")])
+
+
+def test_a_waiting_room_that_goes_live_right_after_the_last_live_is_not_announced_as_scheduled():
+    # Seen as the last live stopped, on air by the next check: "went live" says it all.
+    check([(off(), None), (live(sid="v1"), off()), (up(sid="u2"), live(sid="v1")), (live(sid="u2"), up(sid="u2"))],
+          [ev(LIVE, "v1"), ev(OFFLINE, "v1"), ev(LIVE, "u2")])
+
+
+# ---- whenever it is scheduled for ----
+
+def scheduled_in(days: float, sid: str = "u1"):
+    """An upcoming live checked at T0 and scheduled `days` later."""
+    return replace(up(sid=sid, starts=T0 + timedelta(days=days)), checked_at=T0)
+
+
+def test_a_waiting_room_scheduled_a_year_ahead_is_announced_once_like_any_other():
+    # A permanent "news" or free-chat room shows whenever the streamer is not live: news
+    # the first time, never again (the owner's choice, 2026-11-16).
+    far = scheduled_in(343)
+    check([(off(), None), (far, off()), (off(), far), (far, off())], [ev(UPCOMING, "u1")])
+    check([(off(), None), (live(sid="v1"), off()), (far, live(sid="v1")), (off(), far), (far, off())],
+          [ev(LIVE, "v1"), ev(OFFLINE, "v1"), ev(UPCOMING, "u1")])
+
+
+def test_a_live_that_ends_back_into_a_waiting_room_already_announced_says_only_ended():
+    # The permanent room was announced when it first showed. Every live after that ends
+    # with the state going from live straight back to that room: "ended", nothing else.
+    room = scheduled_in(343, sid="room")
+    check([(off(), None), (room, off()),
+           (live(sid="v1"), room), (room, live(sid="v1")),
+           (live(sid="v2"), room), (room, live(sid="v2"))],
+          [ev(UPCOMING, "room"), ev(LIVE, "v1"), ev(OFFLINE, "v1"), ev(LIVE, "v2"), ev(OFFLINE, "v2")])
+
+
+def test_a_permanent_waiting_room_is_not_forgotten_however_many_lives_are_scheduled_after_it(tmp_path):
+    # Only so many announced rooms are remembered per streamer. The permanent one shows
+    # again after every live, so it must stay remembered: never announced a second time.
+    room = up(sid="room")
+    steps = [(off(), None), (room, off())]
+    for i in range(30):
+        steps += [(up(sid=f"u{i}"), room), (room, up(sid=f"u{i}"))]
+    f = tmp_path / "s.json"
+
+    events = asyncio.run(session(steps, f))
+    after_restart = asyncio.run(session([(room, None), (off(), room), (room, off())], f))
+
+    assert events == [ev(UPCOMING, "room")] + [ev(UPCOMING, f"u{i}") for i in range(30)]
+    assert after_restart == []
+
+
+def test_a_scheduled_live_whose_time_has_passed_or_is_unknown_is_still_announced():
+    check([(off(), None), (scheduled_in(-0.01), off())], [ev(UPCOMING, "u1")])  # waiting room open, running late
+    unknown = replace(up(sid="u1"), started_at=None)
+    check([(off(), None), (unknown, off())], [ev(UPCOMING, "u1")])
 
 
 def test_an_upcoming_live_without_an_id_is_never_announced():

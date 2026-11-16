@@ -224,7 +224,9 @@ def message(event: StreamEvent, cover: str | None = None) -> str:
         lines = [f"📅 **{name}** 发布了直播预告", f"{name} · {s.streamer.platform}", title]
         if s.started_at:  # the scheduled start
             at = s.started_at.astimezone(LOCAL_TZ)
-            lines.append(f"🕒 预定 {at.month}月{at.day}日 {at:%H:%M} 开播")
+            # The year only when it is not this one (a permanent waiting room is a year out).
+            year = "" if at.year == s.checked_at.astimezone(LOCAL_TZ).year else f"{at.year}年"
+            lines.append(f"🕒 预定 {year}{at.month}月{at.day}日 {at:%H:%M} 开播")
         if s.url:
             lines.append(link(s.url))
         lines.append(FOOTER_LIVE)
