@@ -44,20 +44,21 @@ def drive_folder(e: dict[str, Any]) -> str:
     return e.get("drive_folder") or default_drive_folder(e.get("name") or e["channel"])
 
 
-def drive_folder_error(folder: str) -> str | None:
-    """Why a (trimmed, `/`-separated) drive folder is refused, or None; blank is fine.
-    A backslash was turned into `/` already, so it never stays inside a part.
-    Which characters Quark itself refuses is not verified: this is the safe default."""
-    if not folder:
-        return None
-    for part in folder.split("/"):
+def drive_folder_as_typed(text: str) -> str:
+    """A drive folder as the owner typed it (the gear, the upload command's `--folder`), as
+    stored: surrounding spaces and slashes removed, both kinds of slash as `/` (so a
+    backslash never stays inside a part); blank stays blank. Raises ValueError with the
+    reason, in Chinese, for a folder a drive cannot have. Which characters Quark itself
+    refuses is not verified: this is the safe default."""
+    folder = text.replace("\\", "/").strip(" /")
+    for part in folder.split("/") if folder else ():
         if not part:
-            return "网盘文件夹里不能有空的一级（//）"
+            raise ValueError("网盘文件夹里不能有空的一级（//）")
         if part in (".", ".."):
-            return "网盘文件夹里不能有 . 或 .. 这一级"
+            raise ValueError("网盘文件夹里不能有 . 或 .. 这一级")
         if bad := [c for c in ':*?"<>|' if c in part]:
-            return f"网盘文件夹名不能含有 {' '.join(bad)}"
-    return None
+            raise ValueError(f"网盘文件夹名不能含有 {' '.join(bad)}")
+    return folder
 
 
 def decode_streamers(raw: Any) -> list[dict[str, Any]]:
@@ -111,9 +112,10 @@ class Roster:
             if new["upload_sheet"] is None:
                 raise RosterError(422, "不是腾讯文档表格的链接（应为 docs.qq.com/sheet/…）")
         if settings.get("drive_folder") is not None:
-            new["drive_folder"] = settings["drive_folder"].replace("\\", "/").strip(" /")
-            if err := drive_folder_error(new["drive_folder"]):
-                raise RosterError(422, err)
+            try:
+                new["drive_folder"] = drive_folder_as_typed(settings["drive_folder"])
+            except ValueError as e:
+                raise RosterError(422, str(e)) from None
         if new.get("upload") and not new.get("upload_sheet"):
             raise RosterError(422, "开启自动上传前先填目标表格")
         entry.update(new)

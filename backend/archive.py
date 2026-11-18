@@ -470,6 +470,19 @@ class Downloads:
         return removed
 
 
+def archive_folders_under(path: Path) -> list[Path]:
+    """`path` when it is an archive folder (it holds an artifact), else the archive folders
+    below it, at any depth, in name order: a folder a person points at, which need not be
+    the downloads root. Dot-folders (such as DRIVE_COPIES_FOLDER) are not looked into."""
+    try:
+        if Archive.from_folder(path).present():
+            return [path]
+        subfolders = sorted(p for p in path.iterdir() if p.is_dir() and not p.name.startswith("."))
+    except OSError:
+        return []
+    return [a for p in subfolders for a in archive_folders_under(p)]
+
+
 # ---- naming a new archive ----
 
 def safe_name(name: str, max_len: int = 150) -> str:

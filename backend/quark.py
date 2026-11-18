@@ -43,9 +43,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
-from backend.archive import Archive, ArtifactDamaged, ArtifactMissing, Artifact, Downloads, DriveLink, creator_folder
+from backend.archive import (Archive, ArtifactDamaged, ArtifactMissing, Artifact, Downloads, DriveLink, archive_folders_under,
+                            creator_folder)
 from backend.downloader import load_settings
-from backend.monitor.roster import default_drive_folder, drive_folder, drive_folder_error, load_roster
+from backend.monitor.roster import default_drive_folder, drive_folder, drive_folder_as_typed, load_roster
 from backend.drive import LOGIN_COMMAND, DriveAuthorizationLapsed, DriveCopy, DriveFailed, DriveProgress
 from backend.drive_copy import drive_copy, drive_copy_name
 
@@ -433,22 +434,9 @@ def login_command(drive: Quark, code: str | None) -> int:
     except DriveFailed as e:
         print(f"授权失败：{e}")
         return 1
-    command = LOGIN_COMMAND.removesuffix(" login")
     print(f"在浏览器打开这个链接，登录夸克网盘并授权：\n{link}\n"
-          f"授权后页面会给出授权码，再运行：\n{command} login --code <授权码>")
+          f"授权后页面会给出授权码，再运行：\n{LOGIN_COMMAND} --code <授权码>")
     return 0
-
-
-def archive_folders(path: Path) -> list[Path]:
-    """`path` when it is an archive folder (it holds an artifact), else the archive folders
-    below it, in name order. Dot-folders (the drive copies being built) are not looked into."""
-    try:
-        if Archive.from_folder(path).present():
-            return [path]
-        subfolders = sorted(p for p in path.iterdir() if p.is_dir() and not p.name.startswith("."))
-    except OSError:
-        return []
-    return [a for p in subfolders for a in archive_folders(p)]
 
 
 def folder_for(creator: str, entries: list[dict[str, Any]]) -> str:
@@ -462,7 +450,7 @@ def folder_for(creator: str, entries: list[dict[str, Any]]) -> str:
 def upload_command(drive: Quark, config: Path, path: Path, folder: str | None) -> int:
     entries = load_roster(config).entries
     failed = False
-    for archive_folder in archive_folders(path):
+    for archive_folder in archive_folders_under(path):
         archive = Archive.from_folder(archive_folder)
         if archive.downloading:
             try:
@@ -471,7 +459,7 @@ def upload_command(drive: Quark, config: Path, path: Path, folder: str | None) -
                 name = str(archive_folder)
             print(f"跳过：{name}（{'没有影片' if archive.video is None else '还在下载'}）")
             continue
-        zip_name = f"{archive.stem}.zip"
+        zip_name = drive_copy_name(archive)
         try:
             done = drive.upload(archive, folder or folder_for(archive.creator, entries), _print_progress)
         except DriveAuthorizationLapsed as e:
@@ -517,11 +505,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "login":
         return login_command(drive, args.code)
     if args.command == "upload":
-        folder = args.folder.replace("\\", "/").strip(" /") if args.folder else None
-        if folder and (err := drive_folder_error(folder)):
-            print(err, file=sys.stderr)
+        try:
+            folder = drive_folder_as_typed(args.folder or "")
+        except ValueError as e:
+            print(e, file=sys.stderr)
             return 2
-        return upload_command(drive, args.config, args.path, folder)
+        return upload_command(drive, args.config, args.path, folder or None)
     return status_command(drive)
 
 

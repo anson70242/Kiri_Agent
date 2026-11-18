@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from backend import quark
-from backend.archive import Archive, Downloads
+from backend.archive import DOWNLOADING_SUFFIX, Archive, Artifact, Downloads, artifact_name
 from backend.drive import DriveAuthorizationLapsed, DriveFailed
 
 from .helpers import sample_archive
@@ -247,6 +247,27 @@ def test_the_command_takes_one_archive_folder_and_the_folder_given(tmp_path, roo
     assert cli.commands()[0][:3] == ["create-folder", "--dir-path", "直播录像/优花"]
 
 
+def test_the_folder_given_with_backslashes_is_taken_as_the_gear_takes_it(tmp_path, root, cli, capsys):
+    cfg = write_config(tmp_path, root)
+    folder = sample_archive(root)
+    uploading(cli)
+
+    code, _ = upload_command(cfg, capsys, folder, "--folder", " \\直播录像\\优花\\ ")
+
+    assert code == 0
+    assert cli.commands()[0][:3] == ["create-folder", "--dir-path", "直播录像/优花"]
+
+
+def test_a_folder_given_that_a_drive_cannot_have_is_refused_before_anything_is_asked(tmp_path, root, cli, capsys):
+    cfg = write_config(tmp_path, root)
+    folder = sample_archive(root)
+
+    code = quark.main(["upload", str(folder), "--folder", "直播录像\\\\优花", "--config", str(cfg)])
+
+    assert code == 2 and "网盘文件夹" in capsys.readouterr().err
+    assert cli.calls == []
+
+
 @pytest.mark.parametrize("streamers, expected", [
     ([{"name": "柊優花", "platform": "youtube", "channel": "@a", "drive": True, "drive_folder": "直播录像/优花"}],
      "直播录像/优花"),
@@ -283,7 +304,7 @@ def test_the_command_stops_when_the_authorization_lapsed(tmp_path, root, cli, ca
 def test_the_command_skips_an_archive_still_being_downloaded(tmp_path, root, cli, capsys):
     cfg = write_config(tmp_path, root)
     folder = sample_archive(root)
-    (folder / f"{STEM}.live_chat.json.part").write_text("{", encoding="utf-8")  # its chat still coming
+    (folder / (artifact_name(STEM, Artifact.RAW_CHAT, "youtube") + DOWNLOADING_SUFFIX)).write_text("{", encoding="utf-8")  # its chat still coming
 
     code, out = upload_command(cfg, capsys, folder)
 

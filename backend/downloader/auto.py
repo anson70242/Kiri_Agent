@@ -290,16 +290,17 @@ class AutoDownloader:
     async def run_due(self, stage: str | None = None) -> None:
         while job := self.next_due(stage):
             if job.stage == "drive":
-                self._mark_uploading(job, True)  # here, not in the thread: one writer of the queue at a time
+                self._mark_uploading(job)  # here, not in the thread: one writer of the queue at a time
             outcome = await asyncio.to_thread(self.attempt, job)
             self.finish(job, outcome)
 
-    def _mark_uploading(self, job: Job, uploading: bool) -> None:
-        """Note in the queue file that the drive job's upload is running (or no longer)."""
+    def _mark_uploading(self, job: Job) -> None:
+        """Note in the queue file that the drive job's upload is running (the attempt's end
+        clears it)."""
         jobs = self.load()
         for j in jobs:
             if j.key == job.key:
-                j.uploading = uploading
+                j.uploading = True
         self.save(jobs)
 
     def next_due(self, stage: str | None = None) -> Job | None:
@@ -468,7 +469,7 @@ class AutoDownloader:
 
     def finish(self, job: Job, outcome: Outcome) -> None:
         """Record an attempt's outcome and send its message. Once nothing is left for the
-        stream (every stage done or given up), report it ready with what it has; the drive
+        live (every stage done or given up), report it ready with what it has; the drive
         stage reports it itself."""
         if job.stage == "drive":
             self._finish_drive(job, outcome)
