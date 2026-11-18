@@ -93,6 +93,23 @@ def test_the_cli_runs_with_node_and_the_marker_and_nothing_else_gets_the_marker(
     assert not cwd.exists()  # a scratch working directory, cleaned up
 
 
+def test_the_cli_gets_only_what_it_needs_to_run_never_the_services_secrets(config, cli, capsys, monkeypatch):
+    given = {"PATH": "/usr/bin", "HOME": "/home/kiri", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "TMPDIR": "/tmp/x",
+             "SystemRoot": r"C:\Windows", "PATHEXT": ".COM;.EXE"}
+    secrets = {"DISCORD_WEBHOOK_URL": "https://discord.example/hook", "TENCENT_DOCS_MCP_TOKEN": "t0ken",
+               "LLM_API_KEY": "k3y"}
+    for name, value in {**given, **secrets}.items():
+        monkeypatch.setenv(name, value)
+    cli.answers["get-user-info"] = [USER_INFO]
+    status(config, capsys)
+
+    (_, _, env), = cli.calls
+    seen = {name.upper(): value for name, value in env.items()}  # Windows names are not case-sensitive
+    assert {name.upper(): value for name, value in given.items()}.items() <= seen.items()
+    assert seen["CLAUDECODE"] == "1"
+    assert not set(secrets) & set(seen)
+
+
 @pytest.mark.parametrize("answer", [LAPSED_103, lapsed_11001("get-user-info"),
                                     result("get-user-info", -106, "浏览器打开失败"),
                                     result("not_authenticated", -1408, "未完成授权认证")],

@@ -97,6 +97,21 @@ def run_cli(argv: list[str], cwd: Path, env: dict[str, str]) -> CliProcess:
     return _Popen(argv, cwd, env)
 
 
+# What the CLI's subprocess gets of the service's environment: what a Node process needs to
+# run, never the rest (the CLI is closed-source and reports to Quark; the service's
+# environment holds its secrets). Names compared in upper case: Windows ignores case.
+CLI_ENVIRONMENT = {"PATH", "HOME", "LANG", "LANGUAGE", "TMPDIR", "TMP", "TEMP",
+                   # what a process needs to start on Windows
+                   "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "PATHEXT", "USERPROFILE"}
+
+
+def _cli_environment() -> dict[str, str]:
+    """The part of the service's environment the CLI gets (see CLI_ENVIRONMENT), with the
+    locale variables (`LC_*`)."""
+    return {name: value for name, value in os.environ.items()
+            if name.upper() in CLI_ENVIRONMENT or name.upper().startswith("LC_")}
+
+
 def _objects(lines: Iterable[str]) -> Iterator[dict[str, Any]]:
     """The output lines that are JSON objects with a `type`; every other line is ignored."""
     for text in lines:
@@ -276,7 +291,7 @@ class Quark:
         # The CLI refuses to run outside an AI agent host it recognises; this marker says it
         # is one. Deliberate and accepted by the owner: see
         # docs/adr/0001-quark-drive-through-the-official-agent-cli.md. Only the subprocess gets it.
-        env = {**os.environ, "CLAUDECODE": "1"}
+        env = {**_cli_environment(), "CLAUDECODE": "1"}
         with tempfile.TemporaryDirectory(prefix="quark-") as scratch:
             process = run_cli([NODE, str(self.cli), *args], cwd or Path(scratch), env)
             last_progress = time.monotonic()
