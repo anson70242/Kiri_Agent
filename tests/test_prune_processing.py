@@ -4,13 +4,12 @@ download with fake stages."""
 
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 
 import pytest
 
-from backend.archive import Downloads
+from backend.archive import Archive, Artifact, Downloads
 from backend.downloader import auto as auto_mod
 from backend.downloader.auto import AutoDownloader
 from backend.downloader.base import DownloadResult, DownloadSettings, VideoInfo
@@ -89,12 +88,10 @@ def ad(tmp_path, monkeypatch):
 
     def fake_download(url, settings, streamers, info=None, progress=None):
         folder = bare_archive(settings.output_dir, "A", next(dates), info.id, stem=info.id, video=b"x")
-        return DownloadResult(info, folder, video=folder / f"{info.id}.mp4")
+        return DownloadResult(info, folder, video=Archive.from_folder(folder).video)
 
     def fake_analyze(video, streamer, title):
-        table = video.with_suffix(".highlights.json")
-        table.write_text(json.dumps({"rows": []}), encoding="utf-8")
-        return table
+        return Archive.from_video(video).save(Artifact.HIGHLIGHTS, {"rows": []})
 
     monkeypatch.setattr(auto_mod, "downloader_for", lambda *a: FakeDL())
     monkeypatch.setattr(auto_mod, "download", fake_download)

@@ -10,12 +10,13 @@ from pathlib import Path
 import pytest
 
 from backend import quark
-from backend.archive import Archive
+from backend.archive import DOWNLOADING_SUFFIX, Archive, Artifact, Downloads, artifact_name
 from backend.drive import DriveAuthorizationLapsed, DriveFailed
 
 from .helpers import sample_archive
-from .quark_fakes import (FOLDER_ID, LAPSED_103, NOISE, RECORD_ID, SHARED, SHARE_URL, UPLOAD_DELETED, FakeCli, FakeProcess, browse,
-                          create_folder, lapsed_11001, line, progress, result, upload_failed, uploaded)
+from .quark_fakes import (AUTH_URL, DEVICE_ID, FOLDER_ID, LAPSED_103, NOISE, RECORD_ID, SHARED, SHARE_URL, UPLOAD_DELETED,
+                          FakeCli, FakeProcess, browse, create_folder, lapsed_11001, line, needs_authorization, progress,
+                          result, upload_failed, uploaded)
 
 STEM = "[20261105][柊優花] 歌枠"
 ZIP = f"{STEM}.zip"
@@ -53,15 +54,13 @@ def uploading(cli, files=(), answer=None):
     return seen
 
 
-def zip_size(root, folder):
-    """The size of the drive copy of the archive in `folder`, as the module builds it."""
-    from backend.drive_copy import drive_copy
-    with drive_copy(Archive.from_folder(folder), root) as z:
-        return z.stat().st_size
-
-
 def no_zip_left(root):
     return not list(root.rglob("*.zip"))
+
+
+def built(root):
+    """Whether a drive copy was ever built under the downloads root (its place made)."""
+    return Downloads(root).drive_copies.exists()
 
 
 # ---- the call ----
@@ -84,34 +83,26 @@ def test_a_drive_copy_is_uploaded_into_the_folder_made_from_the_top_of_the_drive
     assert no_zip_left(root)
 
 
-def test_a_zip_with_the_same_name_and_size_on_the_drive_is_not_uploaded_again(root, cli):
+@pytest.mark.parametrize("size", [10_000, 123], ids=["one size", "another size"])
+def test_a_zip_with_the_same_name_on_the_drive_whatever_its_size_is_neither_built_nor_uploaded(root, cli, size):
     folder = sample_archive(root)
-    uploading(cli, files=[("别的.zip", 5), (ZIP, zip_size(root, folder))])
+    uploading(cli, files=[("别的.zip", 5), (ZIP, size)])
 
     done = drive(root).upload(Archive.from_folder(folder), "录播/柊優花")
 
     assert not done.sent and done.copy.path == f"录播/柊優花/{ZIP}"
     assert [c[0] for c in cli.commands()] == ["create-folder", "browse", "share"]
-    assert no_zip_left(root)
-
-
-def test_a_zip_with_the_same_name_and_another_size_is_uploaded(root, cli):
-    folder = sample_archive(root)
-    seen = uploading(cli, files=[(ZIP, 123)])
-
-    done = drive(root).upload(Archive.from_folder(folder), "录播/柊優花")
-
-    assert done.sent and seen["name"] == ZIP
+    assert not built(root)
 
 
 def test_the_uploads_progress_reaches_the_callback(root, cli):
     folder = sample_archive(root)
-    uploading(cli)
+    seen = uploading(cli)
     reports = []
 
     drive(root).upload(Archive.from_folder(folder), "录播/柊優花", lambda sent, total: reports.append((sent, total)))
 
-    size = zip_size(root, folder)
+    size = seen["size"]
     assert reports[-2:] == [(size // 2, size), (size, size)]
 
 
@@ -143,21 +134,34 @@ def test_a_failed_upload_raises_failed_with_the_cli_message_and_forgets_its_task
     assert no_zip_left(root)
 
 
-@pytest.mark.parametrize("step, answer", [
-    ("create-folder", [LAPSED_103]),
-    ("create-folder", [lapsed_11001("create-folder")]),
-    ("browse", [lapsed_11001("browse")]),
-    ("upload", upload_failed(11001, "长效Access Token过期，需触发刷新", record=False)),
-], ids=["no state", "tokens refused", "while listing", "while uploading"])
-def test_a_lapsed_authorization_raises_lapsed(root, cli, step, answer):
+@pytest.mark.parametrize("step, answer, code", [
+    ("create-folder", [LAPSED_103], -103),
+    ("create-folder", [lapsed_11001("create-folder")], 11001),
+    ("browse", [lapsed_11001("browse")], 11001),
+    ("browse", [needs_authorization("browse")], -106),
+    ("upload", upload_failed(11001, "长效Access Token过期，需触发刷新", record=False), 11001),
+], ids=["no state", "tokens refused", "while listing", "the authorization link", "while uploading"])
+def test_a_lapsed_authorization_raises_lapsed_in_words_of_its_own(root, cli, step, answer, code):
     folder = sample_archive(root)
     uploading(cli)
     cli.answers[step] = answer
     cli.answers["upload list"] = [result("upload-list", data={"totalCount": 0})]
 
-    with pytest.raises(DriveAuthorizationLapsed, match="未登录|Token"):
+    with pytest.raises(DriveAuthorizationLapsed) as lapsed:
         drive(root).upload(Archive.from_folder(folder), "录播/柊優花")
+    assert str(lapsed.value) == f"夸克网盘的授权已失效（{code}）"  # never the CLI's text: it may hold the device id
     assert no_zip_left(root)
+    assert built(root) == (step == "upload")  # found before the zip is built, when it can be
+
+
+def test_no_address_from_a_cli_message_reaches_a_failure(root, cli):
+    folder = sample_archive(root)
+    uploading(cli, answer=upload_failed(-204, f"上传失败，请到 {AUTH_URL} 查看"))
+
+    with pytest.raises(DriveFailed) as failed:
+        drive(root).upload(Archive.from_folder(folder), "录播/柊優花")
+    assert "上传失败" in str(failed.value)
+    assert "http" not in str(failed.value) and DEVICE_ID not in str(failed.value)
 
 
 def test_an_upload_without_progress_for_the_idle_time_is_killed_and_failed(root, cli):
@@ -210,10 +214,10 @@ def upload_command(cfg, capsys, *args):
 def test_the_command_uploads_every_archive_in_a_folder_and_says_what_became_of_each(tmp_path, root, cli, capsys):
     cfg = write_config(tmp_path, root)
     sample_archive(root, date="20261105", title="歌枠")
-    there = sample_archive(root, date="20261106", title="雑談")
+    sample_archive(root, date="20261106", title="雑談")
     sample_archive(root, date="20261107", title="没有影片", video=None)
     sample_archive(root, date="20261108", title="坏了")
-    seen = uploading(cli, files=[("[20261106][柊優花] 雑談.zip", zip_size(root, there))])
+    seen = uploading(cli, files=[("[20261106][柊優花] 雑談.zip", 123)])
     upload = cli.answers["upload"]
     cli.answers["upload"] = lambda argv, cwd: (upload_failed(-204, "网络超时") if "坏了" in argv[3] else upload(argv, cwd))
 
@@ -241,6 +245,27 @@ def test_the_command_takes_one_archive_folder_and_the_folder_given(tmp_path, roo
     assert code == 0
     assert out == [f"已上传：{ZIP} → 直播录像/优花/{ZIP}", f"  网盘链接：{SHARE_URL}?pwd=Ab3d"]
     assert cli.commands()[0][:3] == ["create-folder", "--dir-path", "直播录像/优花"]
+
+
+def test_the_folder_given_with_backslashes_is_taken_as_the_gear_takes_it(tmp_path, root, cli, capsys):
+    cfg = write_config(tmp_path, root)
+    folder = sample_archive(root)
+    uploading(cli)
+
+    code, _ = upload_command(cfg, capsys, folder, "--folder", " \\直播录像\\优花\\ ")
+
+    assert code == 0
+    assert cli.commands()[0][:3] == ["create-folder", "--dir-path", "直播录像/优花"]
+
+
+def test_a_folder_given_that_a_drive_cannot_have_is_refused_before_anything_is_asked(tmp_path, root, cli, capsys):
+    cfg = write_config(tmp_path, root)
+    folder = sample_archive(root)
+
+    code = quark.main(["upload", str(folder), "--folder", "直播录像\\\\优花", "--config", str(cfg)])
+
+    assert code == 2 and "网盘文件夹" in capsys.readouterr().err
+    assert cli.calls == []
 
 
 @pytest.mark.parametrize("streamers, expected", [
@@ -279,7 +304,7 @@ def test_the_command_stops_when_the_authorization_lapsed(tmp_path, root, cli, ca
 def test_the_command_skips_an_archive_still_being_downloaded(tmp_path, root, cli, capsys):
     cfg = write_config(tmp_path, root)
     folder = sample_archive(root)
-    (folder / f"{STEM}.live_chat.json.part").write_text("{", encoding="utf-8")  # its chat still coming
+    (folder / (artifact_name(STEM, Artifact.RAW_CHAT, "youtube") + DOWNLOADING_SUFFIX)).write_text("{", encoding="utf-8")  # its chat still coming
 
     code, out = upload_command(cfg, capsys, folder)
 

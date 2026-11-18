@@ -1,6 +1,7 @@
 """The streamer list: who is monitored, and per-streamer settings (the dashboard's gear):
 auto_download, keep, upload (to Tencent Docs), upload_sheet (the spreadsheet id),
-drive (upload drive copies to Quark) and drive_folder (where on the drive; blank: 录播/<name>).
+drive (upload drive copies to Quark) and drive_folder (where on the drive; blank: 录播/<name>,
+the name as the archives are filed).
 
 config.json is replaced on every deploy, so the list the dashboard edits lives in
 its own file (`monitor.streamers_file`, default `data/streamers.json` next to the
@@ -16,6 +17,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from backend.archive import creator_folder
 from backend.state_file import StateFile, expect_list
 from backend.tencent_docs import parse_file_id
 
@@ -32,29 +34,31 @@ def entry_id(e: dict[str, Any]) -> str:
     return f"{e['platform']}:{e['channel']}"
 
 
-def default_drive_folder(e: dict[str, Any]) -> str:
-    """Where a blank drive folder points: worked out from the streamer's current name."""
-    return f"录播/{e.get('name') or e['channel']}"
+def default_drive_folder(creator: str) -> str:
+    """Where a blank drive folder points: `录播/` and the streamer's current name as their
+    archives are filed (one valid folder, whatever the name holds)."""
+    return f"录播/{creator_folder(creator)}"
 
 
 def drive_folder(e: dict[str, Any]) -> str:
-    return e.get("drive_folder") or default_drive_folder(e)
+    return e.get("drive_folder") or default_drive_folder(e.get("name") or e["channel"])
 
 
-def drive_folder_error(folder: str) -> str | None:
-    """Why a (trimmed, `/`-separated) drive folder is refused, or None; blank is fine.
-    A backslash was turned into `/` already, so it never stays inside a part.
-    Which characters Quark itself refuses is not verified: this is the safe default."""
-    if not folder:
-        return None
-    for part in folder.split("/"):
+def drive_folder_as_typed(text: str) -> str:
+    """A drive folder as the owner typed it (the gear, the upload command's `--folder`), as
+    stored: surrounding spaces and slashes removed, both kinds of slash as `/` (so a
+    backslash never stays inside a part); blank stays blank. Raises ValueError with the
+    reason, in Chinese, for a folder a drive cannot have. Which characters Quark itself
+    refuses is not verified: this is the safe default."""
+    folder = text.replace("\\", "/").strip(" /")
+    for part in folder.split("/") if folder else ():
         if not part:
-            return "网盘文件夹里不能有空的一级（//）"
+            raise ValueError("网盘文件夹里不能有空的一级（//）")
         if part in (".", ".."):
-            return "网盘文件夹里不能有 . 或 .. 这一级"
+            raise ValueError("网盘文件夹里不能有 . 或 .. 这一级")
         if bad := [c for c in ':*?"<>|' if c in part]:
-            return f"网盘文件夹名不能含有 {' '.join(bad)}"
-    return None
+            raise ValueError(f"网盘文件夹名不能含有 {' '.join(bad)}")
+    return folder
 
 
 def decode_streamers(raw: Any) -> list[dict[str, Any]]:
@@ -108,9 +112,10 @@ class Roster:
             if new["upload_sheet"] is None:
                 raise RosterError(422, "不是腾讯文档表格的链接（应为 docs.qq.com/sheet/…）")
         if settings.get("drive_folder") is not None:
-            new["drive_folder"] = settings["drive_folder"].replace("\\", "/").strip(" /")
-            if err := drive_folder_error(new["drive_folder"]):
-                raise RosterError(422, err)
+            try:
+                new["drive_folder"] = drive_folder_as_typed(settings["drive_folder"])
+            except ValueError as e:
+                raise RosterError(422, str(e)) from None
         if new.get("upload") and not new.get("upload_sheet"):
             raise RosterError(422, "开启自动上传前先填目标表格")
         entry.update(new)
@@ -142,7 +147,7 @@ class Roster:
         return [{"id": entry_id(e), **e, "auto_download": bool(e.get("auto_download")),
                  "upload": bool(e.get("upload")), "upload_sheet": e.get("upload_sheet") or "",
                  "drive": bool(e.get("drive")), "drive_folder": e.get("drive_folder") or "",
-                 "drive_folder_default": default_drive_folder(e)} for e in self.entries]
+                 "drive_folder_default": default_drive_folder(e.get("name") or e["channel"])} for e in self.entries]
 
 
 def load_roster(config: Path) -> Roster:

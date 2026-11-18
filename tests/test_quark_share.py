@@ -8,11 +8,10 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from backend.archive import Archive, Artifact, DriveLink
-from backend.drive import DriveAuthorizationLapsed
 
 from .helpers import sample_archive
 from .quark_fakes import FILE_ID, PASSCODE, SHARE_URL, SHARED, lapsed_11001, result
-from .test_quark_upload import ZIP, cli, drive, root, upload_command, uploading, write_config, zip_size  # noqa: F401
+from .test_quark_upload import ZIP, cli, drive, root, upload_command, uploading, write_config  # noqa: F401
 
 PATH = f"录播/柊優花/{ZIP}"
 ADDRESS = f"{SHARE_URL}?pwd={PASSCODE}"
@@ -40,7 +39,7 @@ def test_an_uploaded_drive_copy_is_shared_privately_for_good_and_its_link_saved_
 
 def test_a_zip_found_on_the_drive_for_an_archive_without_a_link_is_shared_with_the_listings_id(root, cli):
     folder = sample_archive(root)
-    uploading(cli, files=[("别的.zip", 5), (ZIP, zip_size(root, folder))])
+    uploading(cli, files=[("别的.zip", 5), (ZIP, 123)])
     cli.answers["share"] = [SHARED]
 
     done = drive(root).upload(Archive.from_folder(folder), "录播/柊優花")
@@ -53,7 +52,7 @@ def test_a_zip_found_on_the_drive_for_an_archive_without_a_link_is_shared_with_t
 def test_an_archive_with_a_link_whose_zip_is_there_is_left_alone(root, cli):
     folder = sample_archive(root)
     Archive.from_folder(folder).save(Artifact.DRIVE_LINK, OLD)
-    uploading(cli, files=[(ZIP, zip_size(root, folder))])
+    uploading(cli, files=[(ZIP, 123)])
     cli.answers["share"] = [SHARED]
 
     done = drive(root).upload(Archive.from_folder(folder), "录播/柊優花")
@@ -91,13 +90,14 @@ def test_a_failed_share_after_an_upload_still_returns_the_path_with_the_reason(r
     assert not [c for c in cli.commands() if c[:2] == ["upload", "delete"]]  # the upload did not fail
 
 
-def test_a_lapsed_authorization_at_the_share_is_lapsed(root, cli):
+def test_a_lapsed_authorization_at_the_share_gives_the_uploaded_drive_copy_without_a_link(root, cli):
     folder = sample_archive(root)
     uploading(cli)
     cli.answers["share"] = [lapsed_11001("share")]
 
-    with pytest.raises(DriveAuthorizationLapsed):
-        drive(root).upload(Archive.from_folder(folder), "录播/柊優花")
+    done = drive(root).upload(Archive.from_folder(folder), "录播/柊優花")
+
+    assert done.sent and done.copy.path == PATH and done.copy.link is None and "授权已失效" in done.copy.reason
     assert not Archive.from_folder(folder).has(Artifact.DRIVE_LINK)
 
 

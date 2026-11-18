@@ -19,7 +19,8 @@ By hand (on the server: `docker compose exec kiri /app/.venv/bin/python -m backe
     python -m backend.quark upload <archive folder or a folder of them> [--folder 录播/某主播]
 
 A drive copy goes into its folder from the top of the drive (made when missing), unless a
-zip of that name and size is there already. The upload has no time limit, but it is killed
+file of the zip's name is there already: the folder is listed before the zip is built, so
+an archive already on the drive costs no disk. The upload has no time limit, but it is killed
 and failed after IDLE_TIMEOUT without a progress line; a failed upload's task record is
 deleted, and `upload resume` is never used (it sends the whole file again).
 """
@@ -42,11 +43,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
-from backend.archive import Archive, ArtifactDamaged, ArtifactMissing, Artifact, Downloads, DriveLink, safe_name
+from backend.archive import (Archive, ArtifactDamaged, ArtifactMissing, Artifact, Downloads, DriveLink, archive_folders_under,
+                            creator_folder)
 from backend.downloader import load_settings
-from backend.monitor.roster import drive_folder, drive_folder_error, load_roster
+from backend.monitor.roster import default_drive_folder, drive_folder, drive_folder_as_typed, load_roster
 from backend.drive import LOGIN_COMMAND, DriveAuthorizationLapsed, DriveCopy, DriveFailed, DriveProgress
-from backend.drive_copy import drive_copy
+from backend.drive_copy import drive_copy, drive_copy_name
 
 log = logging.getLogger(__name__)
 
@@ -96,6 +98,30 @@ def run_cli(argv: list[str], cwd: Path, env: dict[str, str]) -> CliProcess:
     return _Popen(argv, cwd, env)
 
 
+# What the CLI's subprocess gets of the service's environment: what a Node process needs to
+# run, never the rest (the CLI is closed-source and reports to Quark; the service's
+# environment holds its secrets). Names compared in upper case: Windows ignores case.
+CLI_ENVIRONMENT = {"PATH", "HOME", "LANG", "LANGUAGE", "TMPDIR", "TMP", "TEMP",
+                   # what a process needs to start on Windows
+                   "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "PATHEXT", "USERPROFILE"}
+
+
+def _cli_environment() -> dict[str, str]:
+    """The part of the service's environment the CLI gets (see CLI_ENVIRONMENT), with the
+    locale variables (`LC_*`)."""
+    return {name: value for name, value in os.environ.items()
+            if name.upper() in CLI_ENVIRONMENT or name.upper().startswith("LC_")}
+
+
+ADDRESS_RE = re.compile(r"https?://\S+")
+
+
+def _without_addresses(msg: Any) -> str:
+    """A CLI message fit for a log, the queue file or a message: every address in it left out
+    (the authorization link holds the device id)."""
+    return ADDRESS_RE.sub("（链接略）", str(msg or "")).strip()
+
+
 def _objects(lines: Iterable[str]) -> Iterator[dict[str, Any]]:
     """The output lines that are JSON objects with a `type`; every other line is ignored."""
     for text in lines:
@@ -126,7 +152,7 @@ class DriveUpload:
     """What became of one archive's drive copy."""
 
     copy: DriveCopy
-    sent: bool  # False: a zip of that name and size was on the drive already
+    sent: bool  # False: a file of the zip's name was on the drive already
 
 
 class Quark:
@@ -145,47 +171,50 @@ class Quark:
 
     def upload(self, archive: Archive, folder: str, progress: DriveProgress | None = None) -> DriveUpload:
         """Upload the archive's drive copy into `folder` (a path from the top of the drive,
-        made when missing), unless a zip of that name and size is there already, and make its
-        drive link (saved in the archive). An archive whose drive link names that zip, and
+        made when missing), unless a file of the zip's name is there already, and make its
+        drive link (saved in the archive). The folder and its listing come first: the zip is
+        built only when it must be uploaded. An archive whose drive link names that zip, and
         whose zip is there, is left alone. Progress goes to `progress(sent, total)`. Raises
         DriveAuthorizationLapsed, or DriveFailed with the CLI's message (also for an archive
-        without video: nothing is uploaded). A share that fails is not a failed upload: the
-        drive copy comes back without a link, with the reason."""
+        without video, before anything is asked of the CLI). A share that fails is not a
+        failed upload: the drive copy comes back without a link, with the reason."""
+        name = drive_copy_name(archive)
+        if name is None:
+            raise DriveFailed("没有影片，没有可上传的网盘副本")
         try:
             kept = archive.read_drive_link()
         except (ArtifactMissing, ArtifactDamaged, OSError):
             kept = None
+        path = f"{folder}/{name}"
+        # The path from the top of the drive (`--parent-fid 0`); the same folder when it exists.
+        folder_id = str(self._call(["create-folder", "--dir-path", folder, "--parent-fid", "0"]).get("fid") or "")
+        if not folder_id:
+            raise DriveFailed(f"夸克网盘 CLI 没有给出文件夹 {folder} 的 id")
+        # By the name alone: a zip's size differs from one build to the next (its Excel sheet).
+        there = next((f for f in self._children(folder_id) if f.get("filename") == name), None)
+        if there is not None:
+            log.info("drive copy already on the drive: %s", path)
+            if kept is not None and kept.path == path:
+                return DriveUpload(DriveCopy(path, kept.url), sent=False)
+            # A listing's id differs in every listing: good for a share made right now only.
+            return DriveUpload(self._share(archive, str(there.get("fid") or ""), path), sent=False)
         with drive_copy(archive, self.downloads) as zip_path:
-            if zip_path is None:
+            if zip_path is None:  # the video went since the name was known
                 raise DriveFailed("没有影片，没有可上传的网盘副本")
-            path = f"{folder}/{zip_path.name}"
-            size = zip_path.stat().st_size
-            # The path from the top of the drive (`--parent-fid 0`); the same folder when it exists.
-            folder_id = str(self._call(["create-folder", "--dir-path", folder, "--parent-fid", "0"]).get("fid") or "")
-            if not folder_id:
-                raise DriveFailed(f"夸克网盘 CLI 没有给出文件夹 {folder} 的 id")
-            there = next((f for f in self._children(folder_id)
-                          if f.get("filename") == zip_path.name and f.get("size") == size), None)
-            if there is not None:
-                log.info("drive copy already on the drive: %s", path)
-                if kept is not None and kept.path == path:
-                    return DriveUpload(DriveCopy(path, kept.url), sent=False)
-                # A listing's id differs in every listing: good for a share made right now only.
-                return DriveUpload(self._share(archive, str(there.get("fid") or ""), path), sent=False)
             file_id = self._send(zip_path, folder_id, progress)
-            log.info("drive copy uploaded: %s", path)
-            return DriveUpload(self._share(archive, file_id, path), sent=True)
+        log.info("drive copy uploaded: %s", path)
+        return DriveUpload(self._share(archive, file_id, path), sent=True)
 
     def _share(self, archive: Archive, file_id: str, path: str) -> DriveCopy:
         """Share the zip at `path` (drive id `file_id`) as a private link that never expires,
-        and note the drive link in the archive. Raises DriveAuthorizationLapsed only: a share
-        that fails otherwise gives the drive copy without a link, with the reason."""
+        and note the drive link in the archive. The zip is on the drive: a share that fails,
+        also for a lapsed authorization, gives the drive copy without a link, with the reason."""
         if not file_id:
             return DriveCopy(path, None, "夸克网盘 CLI 没有给出文件的 id，没法分享")
         try:
             # --url-type 2: private, Quark makes the extraction code; --expired-type 1: never expires.
             data = self._call(["share", file_id, "--url-type", "2", "--expired-type", "1"])
-        except DriveFailed as e:
+        except (DriveFailed, DriveAuthorizationLapsed) as e:
             log.warning("drive copy uploaded but not shared: %s: %s", path, e)
             return DriveCopy(path, None, str(e))
         url, code = str(data.get("share_url") or ""), str(data.get("passcode") or "")
@@ -272,7 +301,7 @@ class Quark:
         # The CLI refuses to run outside an AI agent host it recognises; this marker says it
         # is one. Deliberate and accepted by the owner: see
         # docs/adr/0001-quark-drive-through-the-official-agent-cli.md. Only the subprocess gets it.
-        env = {**os.environ, "CLAUDECODE": "1"}
+        env = {**_cli_environment(), "CLAUDECODE": "1"}
         with tempfile.TemporaryDirectory(prefix="quark-") as scratch:
             process = run_cli([NODE, str(self.cli), *args], cwd or Path(scratch), env)
             last_progress = time.monotonic()
@@ -312,10 +341,10 @@ class Quark:
         if code == 0:
             data = res.get("data")
             return data if isinstance(data, dict) else {}
-        msg = str(res.get("msg") or f"错误码 {code}")
         if code in LAPSED_CODES or (res.get("action") == "login" and args[0] != "login"):
-            raise DriveAuthorizationLapsed(msg)
-        raise DriveFailed(f"{msg}（{code}）")
+            # Never the CLI's text: -106's holds the authorization link, and the link the device id.
+            raise DriveAuthorizationLapsed(f"夸克网盘的授权已失效（{code}）")
+        raise DriveFailed(f"{_without_addresses(res.get('msg')) or '错误码'}（{code}）")
 
     # ---- authorizing ----
 
@@ -329,15 +358,17 @@ class Quark:
         msg = str(res.get("msg") or "")
         link = re.search(r"https?://[^\s\])]+", msg)
         if link is None:
-            raise DriveFailed(f"夸克网盘 CLI 没有给出授权链接：{msg}（{res.get('code')}）")
+            raise DriveFailed(f"夸克网盘 CLI 没有给出授权链接：{_without_addresses(msg)}（{res.get('code')}）")
         return link.group(0)
 
     def login(self, code: str) -> None:
         """Complete the authorization with the code from the authorization page. Raises
-        DriveFailed with the CLI's message when it is refused."""
+        AlreadyAuthorized, or DriveFailed with the CLI's message when it is refused."""
         res = self._run(["login", "--token", code])
+        if res.get("code") == ALREADY_AUTHORIZED:
+            raise AlreadyAuthorized()  # its message names the account: not shown
         if res.get("code") != 0:
-            raise DriveFailed(f"{res.get('msg') or '授权失败'}（{res.get('code')}）")
+            raise DriveFailed(f"{_without_addresses(res.get('msg')) or '授权失败'}（{res.get('code')}）")
 
     # ---- the account ----
 
@@ -403,36 +434,23 @@ def login_command(drive: Quark, code: str | None) -> int:
     except DriveFailed as e:
         print(f"授权失败：{e}")
         return 1
-    command = LOGIN_COMMAND.removesuffix(" login")
     print(f"在浏览器打开这个链接，登录夸克网盘并授权：\n{link}\n"
-          f"授权后页面会给出授权码，再运行：\n{command} login --code <授权码>")
+          f"授权后页面会给出授权码，再运行：\n{LOGIN_COMMAND} --code <授权码>")
     return 0
 
 
-def archive_folders(path: Path) -> list[Path]:
-    """`path` when it is an archive folder (it holds an artifact), else the archive folders
-    below it, in name order. Dot-folders (the drive copies being built) are not looked into."""
-    try:
-        if Archive.from_folder(path).present():
-            return [path]
-        subfolders = sorted(p for p in path.iterdir() if p.is_dir() and not p.name.startswith("."))
-    except OSError:
-        return []
-    return [a for p in subfolders for a in archive_folders(p)]
-
-
 def folder_for(creator: str, entries: list[dict[str, Any]]) -> str:
-    """The drive folder of the roster entry named like `creator` (one with a folder written
-    in first), else `录播/<creator>`."""
-    named = [e for e in entries if safe_name(e.get("name") or e.get("channel") or "") == creator]
+    """The drive folder of the roster entry whose archives are filed under `creator` (one
+    with a folder written in first), else the default folder for `creator`."""
+    named = [e for e in entries if creator_folder(e.get("name") or e.get("channel") or "") == creator]
     named.sort(key=lambda e: not e.get("drive_folder"))
-    return drive_folder(named[0]) if named else f"录播/{creator}"
+    return drive_folder(named[0]) if named else default_drive_folder(creator)
 
 
 def upload_command(drive: Quark, config: Path, path: Path, folder: str | None) -> int:
     entries = load_roster(config).entries
     failed = False
-    for archive_folder in archive_folders(path):
+    for archive_folder in archive_folders_under(path):
         archive = Archive.from_folder(archive_folder)
         if archive.downloading:
             try:
@@ -441,7 +459,7 @@ def upload_command(drive: Quark, config: Path, path: Path, folder: str | None) -
                 name = str(archive_folder)
             print(f"跳过：{name}（{'没有影片' if archive.video is None else '还在下载'}）")
             continue
-        zip_name = f"{archive.stem}.zip"
+        zip_name = drive_copy_name(archive)
         try:
             done = drive.upload(archive, folder or folder_for(archive.creator, entries), _print_progress)
         except DriveAuthorizationLapsed as e:
@@ -487,11 +505,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "login":
         return login_command(drive, args.code)
     if args.command == "upload":
-        folder = args.folder.replace("\\", "/").strip(" /") if args.folder else None
-        if folder and (err := drive_folder_error(folder)):
-            print(err, file=sys.stderr)
+        try:
+            folder = drive_folder_as_typed(args.folder or "")
+        except ValueError as e:
+            print(e, file=sys.stderr)
             return 2
-        return upload_command(drive, args.config, args.path, folder)
+        return upload_command(drive, args.config, args.path, folder or None)
     return status_command(drive)
 
 

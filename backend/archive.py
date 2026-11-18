@@ -470,6 +470,19 @@ class Downloads:
         return removed
 
 
+def archive_folders_under(path: Path) -> list[Path]:
+    """`path` when it is an archive folder (it holds an artifact), else the archive folders
+    below it, at any depth, in name order: a folder a person points at, which need not be
+    the downloads root. Dot-folders (such as DRIVE_COPIES_FOLDER) are not looked into."""
+    try:
+        if Archive.from_folder(path).present():
+            return [path]
+        subfolders = sorted(p for p in path.iterdir() if p.is_dir() and not p.name.startswith("."))
+    except OSError:
+        return []
+    return [a for p in subfolders for a in archive_folders_under(p)]
+
+
 # ---- naming a new archive ----
 
 def safe_name(name: str, max_len: int = 150) -> str:
@@ -479,11 +492,17 @@ def safe_name(name: str, max_len: int = 150) -> str:
     return name[:max_len].rstrip(" .") or "_"
 
 
+def creator_folder(creator: str) -> str:
+    """The name of the folder a creator's archives are filed under (the archive's `creator`):
+    one folder name, whatever `creator` holds."""
+    return safe_name(creator)
+
+
 def name_archive(creator: str, date: str, title: str) -> tuple[Path, str]:
     """Where a stream about to be downloaded goes: its folder relative to the downloads root
     (`<creator>/<YYYYMMDD>/<title>`) and the stem its files are named after
     (`[YYYYMMDD][creator] title`), both made safe for file names."""
-    return Path(safe_name(creator), date, safe_name(title)), safe_name(f"[{date}][{creator}] {title}")
+    return Path(creator_folder(creator), date, safe_name(title)), safe_name(f"[{date}][{creator}] {title}")
 
 
 def artifact_name(stem: str, artifact: Artifact, platform: str | None = None) -> str:
