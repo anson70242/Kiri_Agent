@@ -16,15 +16,18 @@ The CLI refuses to run outside an AI agent host it recognises (error `-104`). Th
 
 ## Consequences
 
-- The CLI is not in this repository (public) and is not downloaded at build time. The owner copies one pinned version into the data volume by hand, and it never updates itself: `install.sh` is never run. The image only gains Node. With no CLI or no authorization on the server, uploading is skipped with a warning.
+- The CLI is not in this repository (public) and is not downloaded at build time. The owner copies one pinned version into the data volume by hand, and it never updates itself: `install.sh` is never run. The image only gains Node. With no CLI on the server, uploading is skipped with a warning. A CLI that is there but not authorized is treated like a lapsed authorization: the owner is told to authorize.
 - If Quark stops accepting this CLI version or this marker, uploads fail and say so. Nothing is lost quietly, because an archive is not deleted locally until its drive copy is uploaded or given up on.
-- Authorization is a one-time code exchanged by `login --token`. The CLI then keeps and refreshes its own token file, so the credential is a writable file in the data volume, not a value in `.env`.
+- Authorization is a one-time code exchanged by `login --token`. The CLI then keeps and refreshes its own token file, so the credential is a writable file in the data volume, not a value in `.env`. The CLI keeps that state in a folder inside its own folder, together with the device id it worked out from the container's host name when it was first authorized; an authorization therefore survives a rebuilt container. The service has a fixed host name so that authorizing again is the same device to Quark.
+- The CLI is closed-source and reports to Quark, so its subprocess does not get the service's environment (which holds webhooks and keys): only what it needs to run, and the marker.
+- Editors download a drive copy through a Quark share link with an extraction code, made by the same CLI and posted to the groups. Quark reviews shared files; what a refused or blocked share of a recording means for the account is not known.
 
 Measured from the server (Hong Kong) on 2026-11-18, and the reason for several rules in the design:
 
 - A 5 GB file uploads in 58 minutes (1.2 to 2 MB/s). A file over 4 GB is accepted on SVIP. Files over 5 GB were not tried.
 - An interrupted upload does not continue. `upload resume` sends the whole file again under the same task, and needs `--file-path`. It was interrupted twice, at 34% and 47% of a 300 MB file. So an upload in progress holds back a deploy.
-- Uploading a name that already exists adds `name(1).zip` beside it, even with the same content, and the CLI cannot delete. So the folder is listed before every upload, and a zip already there with the same name and size is not sent again. A retry is a new upload after that check, not `upload resume`.
+- Uploading a name that already exists adds `name(1).zip` beside it, even with the same content, and the CLI cannot delete. So the folder is listed before every upload, and a zip of that name already there is not sent again. The name alone decides: an interrupted upload leaves no file, and the zip's size is not the same from one build to the next (the spreadsheet inside differs by a byte). A retry is a new upload after that check, not `upload resume`.
 - The CLI fails an upload when one batch takes over 60 seconds. On a slow route (Japan to the Shenzhen storage node) every file over a few MB failed that way.
-- Without `--parent-fid`, files land under `来自：ClaudeCode/`.
-- How long an authorization lasts was not measured.
+- Without `--parent-fid`, files land under `来自：ClaudeCode/`. With the top of the drive as parent (`--parent-fid 0`), a folder path is made where the owner wants it.
+- The refresh token names an end 180 days after the authorization. Whether refreshing moves that end, and so how long an authorization really lasts, was not measured.
+- A missing authorization answers code `-103`, refused tokens `11001`. A revocation from the Quark app was not tried.
