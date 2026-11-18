@@ -71,6 +71,7 @@ class Artifact(Enum):
 
 DOWNLOADING_SUFFIX = ".part"  # a download in progress (the video, or Twitch raw chat being fetched)
 SAVING_SUFFIX = ".tmp"  # an artifact being saved by a stage: never a download in progress
+DRIVE_COPIES_FOLDER = ".drive_copies"  # under the downloads root: drive copy zips being uploaded
 
 
 @dataclass(frozen=True)
@@ -355,6 +356,13 @@ class Downloads:
 
     def __init__(self, root: Path) -> None:
         self.root = root.resolve()
+
+    @property
+    def drive_copies(self) -> Path:
+        """Where drive copy zips are built while they are uploaded: on the downloads volume,
+        outside every archive. Never a creator folder (`safe_name` strips a leading dot), and
+        never listed as an archive."""
+        return self.root / DRIVE_COPIES_FOLDER
 
     def list(self) -> list[Archive]:
         """Every `<creator>/<date>/<title>/` archive, newest first by date, then by when a file
