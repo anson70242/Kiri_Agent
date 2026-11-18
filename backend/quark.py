@@ -16,6 +16,12 @@ By hand (on the server: `docker compose exec kiri /app/.venv/bin/python -m backe
     python -m backend.quark login                  # prints the authorization link
     python -m backend.quark login --code <授权码>   # completes it
     python -m backend.quark status                 # authorized? membership, space
+    python -m backend.quark upload <archive folder or a folder of them> [--folder 录播/某主播]
+
+A drive copy goes into its folder from the top of the drive (made when missing), unless a
+zip of that name and size is there already. The upload has no time limit, but it is killed
+and failed after IDLE_TIMEOUT without a progress line; a failed upload's task record is
+deleted, and `upload resume` is never used (it sends the whole file again).
 """
 
 from __future__ import annotations
@@ -36,7 +42,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
-from backend.drive import LOGIN_COMMAND, DriveAuthorizationLapsed, DriveFailed
+from backend.archive import Archive, Downloads, safe_name
+from backend.downloader import load_settings
+from backend.monitor.roster import drive_folder, drive_folder_error, load_roster
+from backend.drive import LOGIN_COMMAND, DriveAuthorizationLapsed, DriveCopy, DriveFailed, DriveProgress
+from backend.drive_copy import drive_copy
 
 log = logging.getLogger(__name__)
 
@@ -111,12 +121,110 @@ class AlreadyAuthorized(Exception):
     """`login` found the drive authorized already."""
 
 
-class Quark:
-    """The drive, reached through the CLI script `cli`."""
+@dataclass(frozen=True)
+class DriveUpload:
+    """What became of one archive's drive copy."""
 
-    def __init__(self, cli: Path, idle_timeout: float = IDLE_TIMEOUT) -> None:
+    copy: DriveCopy
+    sent: bool  # False: a zip of that name and size was on the drive already
+
+
+NO_LINK_YET = "网盘链接还不会自动生成"  # until the share is made (ticket 06)
+
+
+class Quark:
+    """The drive, reached through the CLI script `cli`. Drive copies are built under the
+    downloads root `downloads` (see backend.drive_copy). A Quark is the pipeline's `Drive`."""
+
+    def __init__(self, cli: Path, downloads: Path, idle_timeout: float = IDLE_TIMEOUT) -> None:
         self.cli = cli
+        self.downloads = downloads
         self.idle_timeout = idle_timeout
+
+    def __call__(self, archive: Archive, folder: str, progress: DriveProgress) -> DriveCopy:
+        return self.upload(archive, folder, progress).copy
+
+    # ---- drive copies ----
+
+    def upload(self, archive: Archive, folder: str, progress: DriveProgress | None = None) -> DriveUpload:
+        """Upload the archive's drive copy into `folder` (a path from the top of the drive,
+        made when missing), unless a zip of that name and size is there already. Progress
+        goes to `progress(sent, total)`. Raises DriveAuthorizationLapsed, or DriveFailed
+        with the CLI's message (also for an archive without video: nothing is uploaded)."""
+        with drive_copy(archive, self.downloads) as zip_path:
+            if zip_path is None:
+                raise DriveFailed("没有影片，没有可上传的网盘副本")
+            path = f"{folder}/{zip_path.name}"
+            size = zip_path.stat().st_size
+            # The path from the top of the drive (`--parent-fid 0`); the same folder when it exists.
+            folder_id = str(self._call(["create-folder", "--dir-path", folder, "--parent-fid", "0"]).get("fid") or "")
+            if not folder_id:
+                raise DriveFailed(f"夸克网盘 CLI 没有给出文件夹 {folder} 的 id")
+            if any(f.get("filename") == zip_path.name and f.get("size") == size for f in self._children(folder_id)):
+                log.info("drive copy already on the drive: %s", path)
+                return DriveUpload(DriveCopy(path, None, NO_LINK_YET), sent=False)
+            self._send(zip_path, folder_id, progress)
+            log.info("drive copy uploaded: %s", path)
+            return DriveUpload(DriveCopy(path, None, NO_LINK_YET), sent=True)
+
+    def _children(self, folder_id: str) -> list[dict[str, Any]]:
+        """Every file and folder directly in the folder: `browse --all` writes them to a JSONL
+        file in the working directory and names it in its `artifact` line."""
+        with tempfile.TemporaryDirectory(prefix="quark-browse-") as scratch:
+            found: list[str] = []
+
+            def note(obj: dict[str, Any]) -> None:
+                if obj["type"] == "artifact" and isinstance(obj.get("data"), dict):
+                    found.append(str(obj["data"].get("file_path") or ""))
+
+            self._call(["browse", "--parent-fid", folder_id, "--all"], cwd=Path(scratch), on_object=note)
+            if not found or not found[-1]:
+                raise DriveFailed("夸克网盘 CLI 没有给出文件夹的完整列表")
+            listing = Path(scratch) / found[-1]  # absolute as the CLI gives it; else in its working directory
+            children = []
+            for text in listing.read_text(encoding="utf-8").splitlines():
+                try:
+                    entry = json.loads(text)
+                except ValueError:
+                    continue
+                if isinstance(entry, dict):
+                    children.append(entry)
+            return children
+
+    def _send(self, zip_path: Path, folder_id: str, progress: DriveProgress | None) -> None:
+        """`upload`; after a failed one, its task record is deleted (`upload resume` is never
+        used: it sends the whole file again)."""
+        records: list[str] = []
+
+        def note(obj: dict[str, Any]) -> None:
+            data = obj.get("data") if isinstance(obj.get("data"), dict) else {}
+            if obj["type"] == "progress" and progress:
+                total = data.get("total")
+                progress(int(data.get("current") or 0), int(total) if isinstance(total, int | float) else None)
+            elif obj["type"] == "list" and data.get("recordId"):
+                records.append(str(data["recordId"]))
+
+        try:
+            self._call(["upload", str(zip_path), "--parent-fid", folder_id], on_object=note)
+        except (DriveFailed, DriveAuthorizationLapsed):
+            self._forget_upload(zip_path.name, records)
+            raise
+
+    def _forget_upload(self, name: str, records: list[str]) -> None:
+        """Delete the task records of a failed upload of `name`: the ones it named, else (it
+        was killed before naming one) every record of that name not finished."""
+        try:
+            if not records:
+                def note(obj: dict[str, Any]) -> None:
+                    data = obj.get("data") if isinstance(obj.get("data"), dict) else {}
+                    if obj["type"] == "list" and data.get("fileName") == name and data.get("state") != "success":
+                        records.append(str(data.get("recordId") or ""))
+
+                self._call(["upload", "list"], on_object=note)
+            for record in filter(None, records):
+                self._call(["upload", "delete", "--record-id", record])
+        except (DriveFailed, DriveAuthorizationLapsed) as e:
+            log.warning("could not delete the task record of a failed upload of %s: %s", name, e)
 
     def _run(self, args: list[str], cwd: Path | None = None,
              on_object: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
@@ -217,7 +325,7 @@ def load_quark(config: Path) -> Quark | None:
     if not cli.is_file():
         log.warning("drive not available: no Quark CLI at %s", cli)
         return None
-    return Quark(cli)
+    return Quark(cli, load_settings(config)[0].output_dir)
 
 
 # ---- by hand ----
@@ -262,6 +370,61 @@ def login_command(drive: Quark, code: str | None) -> int:
     return 0
 
 
+def archive_folders(path: Path) -> list[Path]:
+    """`path` when it is an archive folder (it holds an artifact), else the archive folders
+    below it, in name order. Dot-folders (the drive copies being built) are not looked into."""
+    try:
+        if Archive.from_folder(path).present():
+            return [path]
+        subfolders = sorted(p for p in path.iterdir() if p.is_dir() and not p.name.startswith("."))
+    except OSError:
+        return []
+    return [a for p in subfolders for a in archive_folders(p)]
+
+
+def folder_for(creator: str, entries: list[dict[str, Any]]) -> str:
+    """The drive folder of the roster entry named like `creator` (one with a folder written
+    in first), else `录播/<creator>`."""
+    named = [e for e in entries if safe_name(e.get("name") or e.get("channel") or "") == creator]
+    named.sort(key=lambda e: not e.get("drive_folder"))
+    return drive_folder(named[0]) if named else f"录播/{creator}"
+
+
+def upload_command(drive: Quark, config: Path, path: Path, folder: str | None) -> int:
+    entries = load_roster(config).entries
+    failed = False
+    for archive_folder in archive_folders(path):
+        archive = Archive.from_folder(archive_folder)
+        if archive.downloading:
+            try:
+                name = Downloads(drive.downloads).ref(archive_folder)
+            except ValueError:
+                name = str(archive_folder)
+            print(f"跳过：{name}（{'没有影片' if archive.video is None else '还在下载'}）")
+            continue
+        zip_name = f"{archive.stem}.zip"
+        try:
+            done = drive.upload(archive, folder or folder_for(archive.creator, entries), _print_progress)
+        except DriveAuthorizationLapsed as e:
+            print(f"失败：{zip_name}：{e}")
+            print(f"网盘授权失效，先重新授权：{LOGIN_COMMAND}")
+            return 1
+        except DriveFailed as e:
+            print(f"失败：{zip_name}：{e}")
+            failed = True
+            continue
+        print(f"{'已上传' if done.sent else '已在网盘'}：{zip_name} → {done.copy.path}")
+    return 1 if failed else 0
+
+
+def _print_progress(sent: int, total: int | None) -> None:
+    """The upload's progress on stderr, on one line (stdout keeps one line per archive)."""
+    if total:
+        print(f"\r  {sent * 100 // total}%  {size(sent)} / {size(total)}", end="", file=sys.stderr, flush=True)
+        if sent >= total:
+            print(file=sys.stderr)
+
+
 def main(argv: list[str] | None = None) -> int:
     for stream in (sys.stdout, sys.stderr):  # Chinese on a Windows console
         stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
@@ -272,6 +435,9 @@ def main(argv: list[str] | None = None) -> int:
     login = sub.add_parser("login", parents=[common], help="print the authorization link; with --code, complete it")
     login.add_argument("--code", help="the authorization code (授权码) the authorization page shows")
     sub.add_parser("status", parents=[common], help="whether the drive is authorized, the membership and the space")
+    upload = sub.add_parser("upload", parents=[common], help="upload the drive copy of an archive, or of every archive in a folder")
+    upload.add_argument("path", type=Path, help="an archive folder, or a folder of them")
+    upload.add_argument("--folder", help="the drive folder (default: the streamer's, from the roster; else 录播/<creator>)")
     args = p.parse_args(argv)
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")
     drive = load_quark(args.config)
@@ -280,6 +446,12 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if args.command == "login":
         return login_command(drive, args.code)
+    if args.command == "upload":
+        folder = args.folder.replace("\\", "/").strip(" /") if args.folder else None
+        if folder and (err := drive_folder_error(folder)):
+            print(err, file=sys.stderr)
+            return 2
+        return upload_command(drive, args.config, args.path, folder)
     return status_command(drive)
 
 
