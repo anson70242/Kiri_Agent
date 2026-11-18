@@ -67,6 +67,7 @@ PIPELINE = {
     EventKind.UPLOADED: ("📤", "路灯表已上传腾讯文档", FOOTER_HIGHLIGHTS),
     EventKind.UPLOAD_FAILED: ("❗", "路灯表上传腾讯文档失败", FOOTER_HIGHLIGHTS),
     EventKind.READY: ("✅", "全部处理完成", FOOTER_DOWNLOAD),
+    EventKind.DRIVE_UPLOADED: ("☁️", "网盘上传完成", FOOTER_DOWNLOAD),
 }
 # The messages that show the live's cover. The other pipeline messages stay text: a cover
 # on every message of one live would flood the group.
@@ -75,7 +76,7 @@ KIND_LABELS = {"upcoming": "直播预告", "live": "开播", "offline": "下播"
                "prune_failed": "旧录播没能删除", "uploaded": "上传完成",
                "analyzed": "路灯表已生成", "download_failed": "下载失败", "transcribe_failed": "转写失败",
                "translate_failed": "翻译失败", "analyze_failed": "分析失败", "upload_failed": "上传失败",
-               "ready": "全部处理完成"}
+               "ready": "全部处理完成", "drive_uploaded": "网盘上传完成"}
 
 
 class QQError(Exception):
