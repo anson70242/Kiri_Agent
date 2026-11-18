@@ -23,6 +23,7 @@ import logging
 import os
 import re
 import shutil
+from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -387,15 +388,19 @@ class Downloads:
         folder outside the root."""
         return folder.resolve().relative_to(self.root).as_posix()
 
-    def prune(self, protect: Path, keep: int) -> list[Path]:
+    def prune(self, protect: Path, keep: int, processing: Iterable[Path] = ()) -> list[Path]:
         """Delete the oldest archives of `protect`'s creator beyond `keep`, oldest first by date,
         then by the archive folder's modification time; never `protect` itself (the one just
-        downloaded). A date folder left empty goes too. Does nothing unless the creator folder
-        is directly under the downloads root. Returns the archive folders deleted."""
+        downloaded), nor an archive folder in `processing` (still being processed). Such an
+        archive is spared, not deleted in place of a newer one: the creator keeps more than
+        `keep` for a while, and a later prune catches up. A date folder left empty goes too.
+        Does nothing unless the creator folder is directly under the downloads root. Returns
+        the archive folders deleted."""
         creator = protect.parent.parent
         if creator.resolve().parent != self.root:  # never delete outside the downloads root
             log.error("not pruning %s: not directly under %s", creator, self.root)
             return []
+        busy = {p.resolve() for p in processing}
         folders = [t for d in creator.iterdir() if d.is_dir() for t in d.iterdir() if t.is_dir()]
         folders.sort(key=lambda p: (p.parent.name, p.stat().st_mtime))
         excess = len(folders) - keep
@@ -404,6 +409,9 @@ class Downloads:
             if excess <= 0:
                 break
             if folder == protect:
+                continue
+            if folder.resolve() in busy:
+                excess -= 1
                 continue
             shutil.rmtree(folder)
             removed.append(folder)

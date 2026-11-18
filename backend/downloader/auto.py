@@ -25,7 +25,8 @@ Rules:
   without a message. A longer one (or one whose length is not known) gets one notice,
   then is retried like "not ready yet" and dropped at `give_up_hours` without a message.
 - Any other failure: retried until `max_errors`, then a failure message on Discord.
-- Success: a Discord message, then the streamer folder is trimmed to `keep` archives.
+- Success: a Discord message, then the streamer folder is trimmed to `keep` archives; an
+  archive that still has a job in the queue, at any stage, is spared until a later prune.
 - Jobs live in `state_file`, so a restart resumes them (yt-dlp resumes partial files).
 """
 
@@ -531,8 +532,10 @@ class AutoDownloader:
 
     def prune(self, protect: Path, keep: int) -> list[Path]:
         """Delete the creator's oldest archives beyond `keep`, never `protect` (the one just
-        downloaded), and forget their queued chats. Returns what was deleted."""
-        removed = Downloads(self.settings.output_dir).prune(protect, keep)
+        downloaded) nor one that still has a job in the queue, at any stage, and forget their
+        queued chats. Returns what was deleted."""
+        processing = [Path(j.video).parent for j in self.load() if j.video]
+        removed = Downloads(self.settings.output_dir).prune(protect, keep, processing)
         if removed and (queue := PendingChats.from_settings(self.settings)):
             for folder in removed:
                 queue.drop_under(folder)
