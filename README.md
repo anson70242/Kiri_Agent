@@ -330,11 +330,12 @@ and its authorization lives there as a file, not in `.env`. Without the CLI, tic
 For the setup, authorizing again, uploading older archives by hand and replacing the CLI, see 「夸克网盘（网盘副本）」 (Quark drive) in [docs/deploy.md](docs/deploy.md) (in Chinese).
 
 ```sh
+docker compose exec kiri /app/.venv/bin/python -m backend.quark login [--code 授权码]       # 授权（先印出授权链接）
 docker compose exec kiri /app/.venv/bin/python -m backend.quark status                    # 是否已授权、剩余空间
 docker compose exec kiri /app/.venv/bin/python -m backend.quark upload <录播文件夹> [--folder 网盘文件夹]
 ```
 
-(The first comment means: whether it is authorized, and the space left. 录播文件夹 = an archive folder or a folder of them, 网盘文件夹 = the drive folder.)
+(The comments mean: authorize (it first prints the authorization link; 授权码 = the authorization code that page gives), and whether it is authorized and the space left. 录播文件夹 = an archive folder or a folder of them, 网盘文件夹 = the drive folder.)
 
 ## Local preview
 
