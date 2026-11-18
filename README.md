@@ -312,7 +312,7 @@ sub-sheet in the whole spreadsheet does the new one get ` (2)` appended. Uploadi
 The server keeps only the newest `keep` archives of each streamer. For the streamers whose gear ⚙ has 「自动上传到夸克网盘」 (auto-upload to the Quark drive) ticked,
 each live is also kept for good on the owner's Quark cloud drive: once it is fully processed, its drive copy, one zip named like the archive
 (`[YYYYMMDD][主播] 标题.zip`) holding the video, the chat, the Chinese and Japanese subtitles as SRT and the highlight table as Excel,
-is uploaded into the streamer's drive folder (written in the gear, counted from the top of the drive; blank means `录播/<主播>`; a missing folder is created).
+is uploaded into the streamer's drive folder (written in the gear, counted from the top of the drive; blank means `录播/<主播>`, the streamer's name as their archives' folder has it; a missing folder is created).
 Then a drive link is made: a Quark share address with its extraction code inside, which does not expire.
 
 - For such a streamer, 「全部处理完成」 (all processing done) is sent when the upload ends, and its 「全部下载」 (download everything) link is the drive link.

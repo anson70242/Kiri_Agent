@@ -3,6 +3,8 @@
 map "streamer id -> drive folder" handed to the running pipeline.
 """
 
+from backend.archive import name_archive
+
 from .test_monitor_page import browser, expect_text, page, roster, server  # noqa: F401 (fixtures)
 from .test_streamers_api import app_for, write_config
 
@@ -21,6 +23,19 @@ def test_ticking_the_drive_box_needs_no_folder(tmp_path):
     a = streamer(app_for(cfg), "youtube:@a")  # kept across a restart
     assert (a["drive"], a["drive_folder"], a["drive_folder_default"]) == (True, "", "录播/A")
     assert client.app.state.auto.drive_folders == {"youtube:@a": "录播/A"}
+
+
+def test_the_default_folder_names_the_streamer_as_their_archives_are_filed(tmp_path):
+    name = "AC/DC: 本人?"  # a slash and characters a folder cannot have
+    cfg = write_config(tmp_path, streamers=[{"name": name, "platform": "youtube", "channel": "@ac"}])
+    client = app_for(cfg)
+
+    assert client.patch("/api/streamers", params={"id": "youtube:@ac"}, json={"drive": True}).status_code == 200
+
+    expected = "录播/AC_DC_ 本人_"  # one folder, named like the archives' creator folder
+    assert expected == f"录播/{name_archive(name, '20261105', '歌枠')[0].parts[0]}"
+    assert streamer(client, "youtube:@ac")["drive_folder_default"] == expected
+    assert client.app.state.auto.drive_folders == {"youtube:@ac": expected}
 
 
 def test_the_folder_is_trimmed_and_its_slashes_stored_as_forward_ones(tmp_path):

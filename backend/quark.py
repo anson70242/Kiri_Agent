@@ -43,9 +43,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
-from backend.archive import Archive, ArtifactDamaged, ArtifactMissing, Artifact, Downloads, DriveLink, safe_name
+from backend.archive import Archive, ArtifactDamaged, ArtifactMissing, Artifact, Downloads, DriveLink, creator_folder
 from backend.downloader import load_settings
-from backend.monitor.roster import drive_folder, drive_folder_error, load_roster
+from backend.monitor.roster import default_drive_folder, drive_folder, drive_folder_error, load_roster
 from backend.drive import LOGIN_COMMAND, DriveAuthorizationLapsed, DriveCopy, DriveFailed, DriveProgress
 from backend.drive_copy import drive_copy, drive_copy_name
 
@@ -452,11 +452,11 @@ def archive_folders(path: Path) -> list[Path]:
 
 
 def folder_for(creator: str, entries: list[dict[str, Any]]) -> str:
-    """The drive folder of the roster entry named like `creator` (one with a folder written
-    in first), else `录播/<creator>`."""
-    named = [e for e in entries if safe_name(e.get("name") or e.get("channel") or "") == creator]
+    """The drive folder of the roster entry whose archives are filed under `creator` (one
+    with a folder written in first), else the default folder for `creator`."""
+    named = [e for e in entries if creator_folder(e.get("name") or e.get("channel") or "") == creator]
     named.sort(key=lambda e: not e.get("drive_folder"))
-    return drive_folder(named[0]) if named else f"录播/{creator}"
+    return drive_folder(named[0]) if named else default_drive_folder(creator)
 
 
 def upload_command(drive: Quark, config: Path, path: Path, folder: str | None) -> int:

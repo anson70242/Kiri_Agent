@@ -1,6 +1,7 @@
 """The streamer list: who is monitored, and per-streamer settings (the dashboard's gear):
 auto_download, keep, upload (to Tencent Docs), upload_sheet (the spreadsheet id),
-drive (upload drive copies to Quark) and drive_folder (where on the drive; blank: 录播/<name>).
+drive (upload drive copies to Quark) and drive_folder (where on the drive; blank: 录播/<name>,
+the name as the archives are filed).
 
 config.json is replaced on every deploy, so the list the dashboard edits lives in
 its own file (`monitor.streamers_file`, default `data/streamers.json` next to the
@@ -16,6 +17,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from backend.archive import creator_folder
 from backend.state_file import StateFile, expect_list
 from backend.tencent_docs import parse_file_id
 
@@ -32,13 +34,14 @@ def entry_id(e: dict[str, Any]) -> str:
     return f"{e['platform']}:{e['channel']}"
 
 
-def default_drive_folder(e: dict[str, Any]) -> str:
-    """Where a blank drive folder points: worked out from the streamer's current name."""
-    return f"录播/{e.get('name') or e['channel']}"
+def default_drive_folder(creator: str) -> str:
+    """Where a blank drive folder points: `录播/` and the streamer's current name as their
+    archives are filed (one valid folder, whatever the name holds)."""
+    return f"录播/{creator_folder(creator)}"
 
 
 def drive_folder(e: dict[str, Any]) -> str:
-    return e.get("drive_folder") or default_drive_folder(e)
+    return e.get("drive_folder") or default_drive_folder(e.get("name") or e["channel"])
 
 
 def drive_folder_error(folder: str) -> str | None:
@@ -142,7 +145,7 @@ class Roster:
         return [{"id": entry_id(e), **e, "auto_download": bool(e.get("auto_download")),
                  "upload": bool(e.get("upload")), "upload_sheet": e.get("upload_sheet") or "",
                  "drive": bool(e.get("drive")), "drive_folder": e.get("drive_folder") or "",
-                 "drive_folder_default": default_drive_folder(e)} for e in self.entries]
+                 "drive_folder_default": default_drive_folder(e.get("name") or e["channel"])} for e in self.entries]
 
 
 def load_roster(config: Path) -> Roster:

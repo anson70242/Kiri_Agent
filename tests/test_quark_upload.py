@@ -214,7 +214,7 @@ def upload_command(cfg, capsys, *args):
 def test_the_command_uploads_every_archive_in_a_folder_and_says_what_became_of_each(tmp_path, root, cli, capsys):
     cfg = write_config(tmp_path, root)
     sample_archive(root, date="20261105", title="歌枠")
-    there = sample_archive(root, date="20261106", title="雑談")
+    sample_archive(root, date="20261106", title="雑談")
     sample_archive(root, date="20261107", title="没有影片", video=None)
     sample_archive(root, date="20261108", title="坏了")
     seen = uploading(cli, files=[("[20261106][柊優花] 雑談.zip", 123)])
