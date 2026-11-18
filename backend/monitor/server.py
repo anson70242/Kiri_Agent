@@ -56,6 +56,8 @@ class StreamerSettings(BaseModel):
     keep: int | None = Field(None, ge=1, le=100)  # archives kept; oldest deleted first
     upload: bool | None = None  # upload the 路灯表 to Tencent Docs once it is ready
     upload_sheet: str | None = None  # docs.qq.com/sheet/... link or id; "" clears it
+    drive: bool | None = None  # upload each live's drive copy to Quark once it is processed
+    drive_folder: str | None = None  # folder on the drive; "" means the default 录播/<name>
 
 
 def create_app(config: Path, interval: float | None = None, dev: bool = False,
@@ -193,6 +195,7 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
             auto.streamers = roster.streamers()
             auto.keep = roster.keep_map(auto.default_keep)
             auto.uploads = roster.upload_map()
+            auto.drive_folders = roster.drive_map()
 
     @app.get("/api/streamers")
     async def list_streamers(request: Request) -> dict:

@@ -1,5 +1,6 @@
 """The streamer list: who is monitored, and per-streamer settings (the dashboard's gear):
-auto_download, keep, upload (to Tencent Docs) and upload_sheet (the spreadsheet id).
+auto_download, keep, upload (to Tencent Docs), upload_sheet (the spreadsheet id),
+drive (upload drive copies to Quark) and drive_folder (where on the drive; blank: 录播/<name>).
 
 config.json is replaced on every deploy, so the list the dashboard edits lives in
 its own file (`monitor.streamers_file`, default `data/streamers.json` next to the
@@ -29,6 +30,31 @@ class RosterError(Exception):
 
 def entry_id(e: dict[str, Any]) -> str:
     return f"{e['platform']}:{e['channel']}"
+
+
+def default_drive_folder(e: dict[str, Any]) -> str:
+    """Where a blank drive folder points: worked out from the streamer's current name."""
+    return f"录播/{e.get('name') or e['channel']}"
+
+
+def drive_folder(e: dict[str, Any]) -> str:
+    return e.get("drive_folder") or default_drive_folder(e)
+
+
+def drive_folder_error(folder: str) -> str | None:
+    """Why a (trimmed, `/`-separated) drive folder is refused, or None; blank is fine.
+    A backslash was turned into `/` already, so it never stays inside a part.
+    Which characters Quark itself refuses is not verified: this is the safe default."""
+    if not folder:
+        return None
+    for part in folder.split("/"):
+        if not part:
+            return "网盘文件夹里不能有空的一级（//）"
+        if part in (".", ".."):
+            return "网盘文件夹里不能有 . 或 .. 这一级"
+        if bad := [c for c in ':*?"<>|' if c in part]:
+            return f"网盘文件夹名不能含有 {' '.join(bad)}"
+    return None
 
 
 def decode_streamers(raw: Any) -> list[dict[str, Any]]:
@@ -81,6 +107,10 @@ class Roster:
             new["upload_sheet"] = parse_file_id(text) if text else ""
             if new["upload_sheet"] is None:
                 raise RosterError(422, "不是腾讯文档表格的链接（应为 docs.qq.com/sheet/…）")
+        if settings.get("drive_folder") is not None:
+            new["drive_folder"] = settings["drive_folder"].replace("\\", "/").strip(" /")
+            if err := drive_folder_error(new["drive_folder"]):
+                raise RosterError(422, err)
         if new.get("upload") and not new.get("upload_sheet"):
             raise RosterError(422, "开启自动上传前先填目标表格")
         entry.update(new)
@@ -101,12 +131,18 @@ class Roster:
         """Streamer id -> Tencent Docs spreadsheet id, for the streamers that auto-upload."""
         return {entry_id(e): e["upload_sheet"] for e in self.entries if e.get("upload") and e.get("upload_sheet")}
 
+    def drive_map(self) -> dict[str, str]:
+        """Streamer id -> folder on the Quark drive, for the streamers whose drive box is ticked."""
+        return {entry_id(e): drive_folder(e) for e in self.entries if e.get("drive")}
+
     def streamers(self) -> list[Streamer]:
         return [Streamer(e.get("name") or e["channel"], e["platform"], e["channel"]) for e in self.entries]
 
     def to_dicts(self) -> list[dict[str, Any]]:
         return [{"id": entry_id(e), **e, "auto_download": bool(e.get("auto_download")),
-                 "upload": bool(e.get("upload")), "upload_sheet": e.get("upload_sheet") or ""} for e in self.entries]
+                 "upload": bool(e.get("upload")), "upload_sheet": e.get("upload_sheet") or "",
+                 "drive": bool(e.get("drive")), "drive_folder": e.get("drive_folder") or "",
+                 "drive_folder_default": default_drive_folder(e)} for e in self.entries]
 
 
 def load_roster(config: Path) -> Roster:

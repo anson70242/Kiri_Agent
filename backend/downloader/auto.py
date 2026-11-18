@@ -169,6 +169,7 @@ class AutoDownloader:
         self.max_errors = max_errors
         self.default_keep = default_keep
         self.uploads: dict[str, str] = {}  # streamer id -> Tencent Docs spreadsheet id (the gear)
+        self.drive_folders: dict[str, str] = {}  # streamer id -> folder on the Quark drive (the gear)
         self.site_url = ""  # the dashboard's address (SITE_URL in .env): links in messages
         self.notify = notify
         self.clock = clock
@@ -655,6 +656,7 @@ def load_auto(config: Path) -> AutoDownloader | None:
         upload=load_uploader(config) if analyzer else None,  # uploads the analysis
     )
     ad.uploads = roster.upload_map()
+    ad.drive_folders = roster.drive_map()
     ad.site_url = os.getenv("SITE_URL", "").strip().rstrip("/")
     return ad
 

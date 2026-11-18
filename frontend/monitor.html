@@ -195,6 +195,9 @@
     <label class="row"><input type="checkbox" name="upload"> 自动上传到腾讯文档</label>
     <label>腾讯文档表格 <input name="upload_sheet" placeholder="https://docs.qq.com/sheet/…"></label>
     <span class="hint">路灯表做好后上传成这份表格里的一个子表；同一场再传会覆盖</span>
+    <label class="row"><input type="checkbox" name="drive"> 自动上传到夸克网盘</label>
+    <label>网盘文件夹 <input name="drive_folder"></label>
+    <span class="hint">每场处理完打包成 zip 永久存到网盘；从根目录算起，留空用默认，没有会自动建</span>
     <div class="msg" role="alert"></div>
     <div class="actions">
       <button type="button" class="danger left" name="delete">删除主播</button>
@@ -246,8 +249,9 @@ function card(s) {
       <span class="chip state"><span class="dot"></span>${LABEL[s.state] || s.state}</span>
       <span class="platform ${esc(s.platform)}">${esc(s.platform)}</span>
     </div>
-    ${settings[key(s)]?.auto_download || settings[key(s)]?.upload ? `<div class="badges">
+    ${settings[key(s)]?.auto_download || settings[key(s)]?.upload || settings[key(s)]?.drive ? `<div class="badges">
       ${settings[key(s)]?.auto_download ? `<span class="badge">⬇ 自动下载</span>` : ""}
+      ${settings[key(s)]?.drive ? `<span class="badge">☁ 网盘</span>` : ""}
       ${settings[key(s)]?.upload ? `<span class="badge up">⬆ 自动上传</span>` : ""}
     </div>` : ""}
     ${title ? `<div class="title">${title}</div>` : ""}
@@ -480,7 +484,8 @@ let gearId = null;
 const idUrl = () => `/api/streamers?id=${encodeURIComponent(gearId)}`;
 const gear = wire(gearDlg, f => send("PATCH", idUrl(),
   { auto_download: f.auto_download.checked, keep: f.keep.value ? +f.keep.value : null,
-    upload: f.upload.checked, upload_sheet: f.upload_sheet.value }));
+    upload: f.upload.checked, upload_sheet: f.upload_sheet.value,
+    drive: f.drive.checked, drive_folder: f.drive_folder.value }));
 document.getElementById("grid").addEventListener("click", e => {
   const b = e.target.closest(".gear");
   if (!b || !kiri.isAdmin()) return;  // members never get the settings dialog
@@ -493,6 +498,9 @@ document.getElementById("grid").addEventListener("click", e => {
   gear.form.keep.placeholder = "默认 6";
   gear.form.upload.checked = !!s.upload;
   gear.form.upload_sheet.value = s.upload_sheet ? `https://docs.qq.com/sheet/${s.upload_sheet}` : "";
+  gear.form.drive.checked = !!s.drive;
+  gear.form.drive_folder.value = s.drive_folder || "";
+  gear.form.drive_folder.placeholder = s.drive_folder_default || "";
   gear.msg.textContent = "";
   gearDlg.showModal();
 });
