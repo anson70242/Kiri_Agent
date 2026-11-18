@@ -108,7 +108,7 @@ def test_a_cancelled_worker_still_stops(tc, monkeypatch):
 
 
 def break_prune(monkeypatch) -> None:
-    def broken_prune(self, protect, keep):
+    def broken_prune(self, protect, keep, processing=()):
         raise PermissionError("old archive is open in another program")
 
     monkeypatch.setattr(Downloads, "prune", broken_prune)
