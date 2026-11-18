@@ -51,6 +51,10 @@ class EventKind(StrEnum):
     # a drive copy was uploaded, when "全部处理完成" did not carry its drive link (detail: the
     # zip's path on the drive, and why there is no link when there is none)
     DRIVE_UPLOADED = "drive_uploaded"
+    # a drive copy was not uploaded: the first try failed (retried) or the upload was given up
+    DRIVE_FAILED = "drive_failed"
+    # the drive's authorization lapsed: drive copies wait for the owner (detail: the command)
+    DRIVE_AUTHORIZATION_LAPSED = "drive_authorization_lapsed"
 
 
 @dataclass(frozen=True)

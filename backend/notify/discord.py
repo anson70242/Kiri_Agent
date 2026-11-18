@@ -40,6 +40,8 @@ PIPELINE_TEXT = {
     EventKind.UPLOAD_FAILED: ("❗", "路灯表上传腾讯文档失败"),
     EventKind.READY: ("✅", "全部处理完成"),
     EventKind.DRIVE_UPLOADED: ("☁️", "网盘上传完成"),
+    EventKind.DRIVE_FAILED: ("❗", "网盘上传失败"),
+    EventKind.DRIVE_AUTHORIZATION_LAPSED: ("⚠️", "网盘授权失效"),
 }
 
 
@@ -120,6 +122,7 @@ class DiscordNotifier(Notifier):
                             EventKind.DRIVE_UPLOADED)
         color = {EventKind.REPLAY_UNPUBLISHED: WAITING_COLOR,  # neither done nor failed
                  EventKind.PRUNE_FAILED: WARNING_COLOR,  # the new archive is fine
+                 EventKind.DRIVE_AUTHORIZATION_LAPSED: WARNING_COLOR,  # nothing lost: uploads wait
                  }.get(event.kind, DOWNLOADED_COLOR if ok else FAILED_COLOR)
         embed: dict[str, Any] = {
             "title": (status.title or "直播回放")[:256],

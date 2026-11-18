@@ -35,5 +35,8 @@ class DriveFailed(Exception):
     """The upload failed; the message says why (the drive's own words when it gave any)."""
 
 
+# What the owner runs on the server to authorize the drive again (told when it lapsed).
+LOGIN_COMMAND = "docker compose exec kiri /app/.venv/bin/python -m backend.quark login"
+
 DriveProgress = Callable[[int, int | None], None]  # (bytes sent, zip size or None)
 Drive = Callable[[Archive, str, DriveProgress], DriveCopy]
