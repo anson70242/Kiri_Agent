@@ -195,8 +195,9 @@ class AutoDownloader:
         self.uploads: dict[str, str] = {}  # streamer id -> Tencent Docs spreadsheet id (the gear)
         self.drive_folders: dict[str, str] = {}  # streamer id -> folder on the Quark drive (the gear)
         self.site_url = ""  # the dashboard's address (SITE_URL in .env): links in messages
-        # The owner was told the drive's authorization lapsed; any upload that succeeds ends
-        # the lapse. Not saved: after a restart a lapse is told once more.
+        # The owner was told the drive's authorization lapsed; any try that is not lapsed (a
+        # failure as well as a success) ends the lapse. Not saved: after a restart a lapse is
+        # told once more.
         self._lapse_alerted = False
         self.notify = notify
         self.clock = clock
@@ -639,6 +640,7 @@ class AutoDownloader:
             events.append((EventKind.DRIVE_FAILED, "网盘不可用（服务器上没有夸克网盘的命令行工具），"
                            "这场录播的网盘上传已取消；录播之后会按保留数量照常清理。", ()))
         elif outcome.kind == "error":
+            self._lapse_alerted = False  # a try that is not lapsed ends the lapse: a later one is new
             current.errors += 1
             log.warning("drive copy not uploaded (%d/%d): %s: %s", current.errors, self.max_errors, name, outcome.message)
             keep = current.errors < self.max_errors
@@ -649,7 +651,7 @@ class AutoDownloader:
                 events.append((EventKind.DRIVE_FAILED, f"网盘上传失败，之后会自动重试：\n```{outcome.message[:1500]}```", ()))
         elif copy:
             log.info("drive copy uploaded: %s %s", name, copy.path)
-            self._lapse_alerted = False  # the drive is authorized: a later lapse is a new one
+            self._lapse_alerted = False  # a try that is not lapsed ends the lapse: a later one is new
             if not first or not copy.link:  # READY did not carry the drive link
                 detail = f"网盘路径：`{copy.path}`"
                 if not copy.link:

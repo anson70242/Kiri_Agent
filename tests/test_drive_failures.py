@@ -179,6 +179,16 @@ def test_an_upload_that_gets_through_ends_the_lapse_and_the_next_lapse_is_told_a
     assert len(by_kind(sent, EventKind.DRIVE_AUTHORIZATION_LAPSED)) == 2
 
 
+def test_an_upload_that_fails_otherwise_ends_the_lapse_too_and_the_next_lapse_is_told_again(tmp_path):
+    ad, clock, sent = two_lives(tmp_path, ScriptedDrive(LAPSED, DriveFailed("网络超时"), LAPSED))
+    step(ad, "drive")  # A: lapsed, told
+    clock.t += 900
+    step(ad, "drive")  # B: authorized again, but the upload fails
+    step(ad, "drive")  # A: lapsed again, a new lapse
+
+    assert len(by_kind(sent, EventKind.DRIVE_AUTHORIZATION_LAPSED)) == 2
+
+
 def test_a_lapsed_job_goes_through_once_authorized_again_with_drive_copy_uploaded(tmp_path):
     ad, clock, sent, _ = processed(tmp_path, ScriptedDrive(LAPSED, LAPSED, COPY))
     step(ad, "drive")
