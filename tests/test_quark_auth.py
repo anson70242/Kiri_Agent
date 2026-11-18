@@ -123,7 +123,10 @@ def test_a_run_without_a_result_line_fails(config, cli, capsys):
 
 # ---- login ----
 
-AUTH_URL = "https://auth.example/oauth/authorize?client_id=c0ffee&device_id=d00d&agent_id=claudecode"
+AUTH_URL = ("https://pan.quark.cn/open/v1/oauth/agent?device_id=0123456789abcdef0123456789abcdef"  # as ticket 01 saw it
+            "&device_name=Some+Board&agent_id=claudecode&page_code=00000000-0000-0000-0000-000000000000"
+            "&client_id=third_party_agent&scope=clouddrive.base+clouddrive.netdisk&redirect_uri="
+            "&client_device_id=0000#/agent-oauth")
 NEEDS_CODE = result("login", -106, "你好像还没完成授权？如果已经扫码确认了，发任意消息，或是复制授权码给我，"
                     f"我来检测一下；还没完成的话，点下方链接重新操作就好。🔗 [前往授权]{AUTH_URL}\n\n"
                     "绑定夸克网盘后，对话文件随时归档。")
@@ -153,12 +156,13 @@ def test_login_when_already_authorized_says_so_without_the_nickname(config, cli,
 
 
 def test_login_with_the_code_completes_the_authorization(config, cli, capsys):
-    cli.answers["login"] = [result("login", data={"userId": "u-123", "status": "confirmed",
-                                                  "msg": "授权登录成功，继续未完成的任务"})]
+    cli.answers["login"] = [result("login", data={
+        "userId": "u-123", "status": "confirmed", "msg": "授权登录成功，继续未完成的任务",
+        "skill_vip_url": "https://pan.quark.cn/open/v1/oauth/agent?uptoken=XXXX#/vip-benefit"})]
     code, out = login(config, capsys, "--code", "c0de-from-the-page")
 
     assert code == 0
-    assert "授权成功" in out and "u-123" not in out
+    assert "授权成功" in out and "u-123" not in out and "uptoken" not in out
     assert cli.commands() == [["login", "--token", "c0de-from-the-page"]]
 
 
