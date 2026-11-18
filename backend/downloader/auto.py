@@ -97,6 +97,7 @@ class Job:
     unpublished_notice_sent: bool = False  # the owner was told the replay is not published
     ready_sent: bool = False  # drive stage: "全部处理完成" went out for this live
     lapsed_since: float | None = None  # drive stage: its first try of the current lapse
+    uploading: bool = False  # drive stage: its upload is running (a deploy waits for it)
 
     @property
     def stream_key(self) -> str:
@@ -129,6 +130,7 @@ class Job:
             "unpublished_notice_sent": self.unpublished_notice_sent,
             "ready_sent": self.ready_sent,
             "lapsed_since": self.lapsed_since,
+            "uploading": self.uploading,
         }
 
     @classmethod
@@ -143,7 +145,8 @@ def decode_jobs(raw: Any) -> list[Job]:
 
 @dataclass
 class Outcome:
-    kind: Literal["done", "wait", "unpublished", "error", "lapsed"]  # lapsed: the drive's authorization
+    # lapsed: the drive's authorization; unavailable: no drive any more for a drive job
+    kind: Literal["done", "wait", "unpublished", "error", "lapsed", "unavailable"]
     message: str = ""
     result: DownloadResult | None = None
     pruned: list[Path] = field(default_factory=list)
@@ -249,6 +252,11 @@ class AutoDownloader:
     async def run(self) -> None:
         """Process due jobs forever: one download and one transcription at a time,
         side by side. The download worker also retries late chats."""
+        jobs = self.load()
+        if any(j.uploading for j in jobs):  # left by a kill: that upload is gone, and done again
+            for j in jobs:
+                j.uploading = False
+            self.save(jobs)
         await asyncio.gather(*(self.run_stage(stage) for stage in STAGES))
 
     async def run_stage(self, stage: str) -> None:
@@ -277,8 +285,18 @@ class AutoDownloader:
 
     async def run_due(self, stage: str | None = None) -> None:
         while job := self.next_due(stage):
+            if job.stage == "drive":
+                self._mark_uploading(job, True)  # here, not in the thread: one writer of the queue at a time
             outcome = await asyncio.to_thread(self.attempt, job)
             self.finish(job, outcome)
+
+    def _mark_uploading(self, job: Job, uploading: bool) -> None:
+        """Note in the queue file that the drive job's upload is running (or no longer)."""
+        jobs = self.load()
+        for j in jobs:
+            if j.key == job.key:
+                j.uploading = uploading
+        self.save(jobs)
 
     def next_due(self, stage: str | None = None) -> Job | None:
         now = self.clock()
@@ -401,9 +419,9 @@ class AutoDownloader:
         folder = self.drive_folders.get(s.streamer.id)
         if folder is None:
             return Outcome("done")  # unticked in the gear meanwhile: nothing to upload
-        if not self.drive:
-            log.warning("drive copies are on for %s, but the drive is not available: skipped", s.streamer.name)
-            return Outcome("done")
+        if not self.drive:  # gone since the job was queued (the CLI was removed, then a restart)
+            log.warning("drive copies are on for %s, but the drive is not available: dropped", s.streamer.name)
+            return Outcome("unavailable")
         if (chats := PendingChats.from_settings(self.settings)) and chats.holds(Path(job.video).parent):
             return Outcome("wait", "等待弹幕补抓")  # the zip gets the chat: wait until it is in or given up
         self._active["drive"] = {
@@ -579,6 +597,7 @@ class AutoDownloader:
         rest = [j for j in jobs if j.key != job.key]
         name = job.status.streamer.name
         now = self.clock()
+        current.uploading = False  # the attempt is over, whatever its outcome
         if outcome.kind == "wait":  # the chat is still awaited: neither an attempt nor an error
             current.next_try = now + self.retry_interval
             self.save(rest + [current])
@@ -613,6 +632,9 @@ class AutoDownloader:
                 self._lapse_alerted = True
                 events.append((EventKind.DRIVE_AUTHORIZATION_LAPSED,
                                f"夸克网盘的授权失效了，网盘上传都在等待。在服务器上重新授权：\n`{DRIVE_LOGIN_COMMAND}`", ()))
+        elif outcome.kind == "unavailable":
+            events.append((EventKind.DRIVE_FAILED, "网盘不可用（服务器上没有夸克网盘的命令行工具），"
+                           "这场录播的网盘上传已取消；录播之后会按保留数量照常清理。", ()))
         elif outcome.kind == "error":
             current.errors += 1
             log.warning("drive copy not uploaded (%d/%d): %s: %s", current.errors, self.max_errors, name, outcome.message)

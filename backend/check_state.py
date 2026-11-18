@@ -9,7 +9,9 @@ changes: no backup, no seeded roster, no alert. The deploy workflow runs it in t
 image against the server's data before anything restarts.
 
 Exit code: 0 fine, 1 a state file is damaged, 2 the download queue still holds jobs
-(only with --require-idle).
+(only with --require-idle). Drive jobs (uploads to the cloud drive) do not count, except
+the one whose upload is running: a waiting upload is done again after the restart, a
+running one would start over from zero.
 """
 
 from __future__ import annotations
@@ -20,7 +22,7 @@ from pathlib import Path
 
 from backend.auth import load_auth
 from backend.downloader import load_settings
-from backend.downloader.auto import load_auto
+from backend.downloader.auto import Job, load_auto
 from backend.downloader.pending import PendingChats
 from backend.monitor.roster import load_roster
 from backend.notify import load_notifier
@@ -32,9 +34,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 OUTCOME = {"strict": "新版本会拒绝启动", "recover": "新版本会把它备份后清空"}
 
 
-def check(config: Path) -> tuple[list[Damage], int]:
+def check(config: Path) -> tuple[list[Damage], list[Job]]:
     """The damaged state files among those the service would load with this config, and
-    how many jobs wait in the download queue."""
+    the jobs in the download queue."""
     with dry_run() as damaged:
         load_roster(config)  # the roster
         load_auth(config)  # users, sessions
@@ -45,7 +47,7 @@ def check(config: Path) -> tuple[list[Damage], int]:
         if pending := PendingChats.from_settings(settings):
             pending.load()  # the chat retry queue
     unique = {d.path: d for d in damaged}  # the roster is loaded twice (load_auto reads it too)
-    return list(unique.values()), len(jobs)
+    return list(unique.values()), jobs
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -55,18 +57,25 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--require-idle", action="store_true", help="also fail while the download queue holds jobs")
     args = p.parse_args(argv)
 
-    damaged, jobs = check(args.config)
+    damaged, queue = check(args.config)
     for d in damaged:
         print(f"✗ {d.path} 已损坏（{d.reason}）：{OUTCOME[d.policy]}")
     if damaged:
         print("状态文件有问题，先修复或从备份恢复，再部署。")
         return 1
     print("状态文件正常。")
-    print(f"下载队列：{jobs} 个任务。")
-    if jobs and args.require_idle:
+    jobs = [j for j in queue if j.stage != "drive"]
+    drive = [j for j in queue if j.stage == "drive"]
+    uploading = [j for j in drive if j.uploading]
+    print(f"下载队列：{len(jobs)} 个任务。")
+    print(f"网盘上传：{len(drive)} 个任务，{len(uploading)} 个正在上传（只有正在上传的会挡住部署）。")
+    if not args.require_idle or not (jobs or uploading):
+        return 0
+    if jobs:
         print("下载队列还有任务，等处理完再部署。")
-        return 2
-    return 0
+    for j in uploading:
+        print(f"正在上传到网盘：{j.status.streamer.name} {j.status.title or j.status.url}，等它传完再部署。")
+    return 2
 
 
 if __name__ == "__main__":
