@@ -29,7 +29,7 @@ One live's folder on disk and everything in it (录播).
 _Avoid_: VOD folder, download, recording
 
 **Artifact**:
-One file of an archive: the video, raw chat, chat, transcript, Chinese transcript or highlight table.
+One file of an archive: the video, raw chat, chat, transcript, Chinese transcript, highlight table or drive link.
 _Avoid_: output, sidecar
 
 **Creator**:
@@ -51,6 +51,14 @@ _Avoid_: analysis, score sheet
 **Song entry**:
 One song sung in a singing live, as the highlight table shows it: when it was sung, its name and its original artist. A song nobody could name is still an entry, marked 未识别.
 _Avoid_: setlist item, track
+
+**Drive copy**:
+What is kept of one archive on the cloud drive (网盘副本): one zip of its video, its chat, both transcripts as subtitles and its highlight table as a spreadsheet. It outlives the archive, which is deleted once its streamer has newer ones.
+_Avoid_: final result, cloud backup
+
+**Drive link**:
+The address editors download a drive copy from (网盘链接), with its extraction code. It is noted in the archive, so the archive's page can show it.
+_Avoid_: share link, pan link
 
 ### State files
 
