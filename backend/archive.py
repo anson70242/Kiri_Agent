@@ -25,6 +25,7 @@ import re
 import shutil
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -44,6 +45,7 @@ class Artifact(Enum):
     TRANSCRIPT = (".transcript.json",)  # Japanese subtitles (backend.asr)
     CHINESE_TRANSCRIPT = (".zh.transcript.json",)  # Chinese subtitles (backend.translate)
     HIGHLIGHTS = (".highlights.json",)  # 路灯表 (backend.analysis)
+    DRIVE_LINK = (".drive_link.json",)  # where editors download the drive copy (a DriveLink)
 
     @property
     def suffixes(self) -> tuple[str, ...]:
@@ -69,8 +71,33 @@ class Artifact(Enum):
         return Artifact.CHINESE_TRANSCRIPT if lang == "zh" else Artifact.TRANSCRIPT
 
 
+@dataclass(frozen=True)
+class DriveLink:
+    """An archive's drive link: the address editors download its drive copy from."""
+
+    url: str  # the address, extraction code inside (`https://pan.quark.cn/s/…?pwd=…`)
+    code: str  # the extraction code
+    path: str  # the zip's path on the drive: `录播/某主播/[20261118][某主播] 标题.zip`
+    made: datetime  # when the link was made
+
+    def to_dict(self) -> dict[str, str]:
+        """As saved, and as the archives API returns it (`made` in ISO 8601)."""
+        return {"url": self.url, "code": self.code, "path": self.path, "made": self.made.isoformat()}
+
+    @classmethod
+    def from_dict(cls, data: Any) -> DriveLink:
+        """Raises ValueError for anything `to_dict` does not make."""
+        if not isinstance(data, dict):
+            raise ValueError(f"expected an object, got {type(data).__name__}")
+        fields = {k: data.get(k) for k in ("url", "code", "path", "made")}
+        if not all(isinstance(v, str) and v for v in fields.values()):
+            raise ValueError("url, code, path and made must be non-empty strings")
+        return cls(fields["url"], fields["code"], fields["path"], datetime.fromisoformat(fields["made"]))
+
+
 DOWNLOADING_SUFFIX = ".part"  # a download in progress (the video, or Twitch raw chat being fetched)
 SAVING_SUFFIX = ".tmp"  # an artifact being saved by a stage: never a download in progress
+DRIVE_COPIES_FOLDER = ".drive_copies"  # under the downloads root: drive copy zips being uploaded
 
 
 @dataclass(frozen=True)
@@ -277,6 +304,16 @@ class Archive:
         """The highlight table's rows, one per segment (none when it lists none)."""
         return self.read_highlights().get("rows") or []
 
+    def read_drive_link(self) -> DriveLink:
+        """The drive link. Raises ArtifactMissing when the archive has none, ArtifactDamaged
+        when its file is not one `save` wrote."""
+        path = self.require(Artifact.DRIVE_LINK)
+        data = read_file(path, Artifact.DRIVE_LINK)
+        try:
+            return DriveLink.from_dict(data)
+        except ValueError as e:
+            raise ArtifactDamaged(Artifact.DRIVE_LINK, path, str(e)) from None
+
     def chat_count(self) -> int:
         """How many chat messages the archive has; 0 when it has no readable chat. Cached
         until the chat file changes."""
@@ -323,8 +360,12 @@ class Archive:
 
     @staticmethod
     def _serialize(artifact: Artifact, content: Any) -> str:
-        """An artifact's bytes on disk: the highlight table indented by one space; the lists
-        (chat, transcripts) one compact item per line."""
+        """An artifact's bytes on disk: the highlight table and the drive link (a DriveLink)
+        indented by one space; the lists (chat, transcripts) one compact item per line."""
+        if artifact is Artifact.DRIVE_LINK:
+            if not isinstance(content, DriveLink):
+                raise TypeError(f"a drive link is saved as a DriveLink, got {type(content).__name__}")
+            return json.dumps(content.to_dict(), ensure_ascii=False, indent=1)
         if artifact is Artifact.HIGHLIGHTS:
             return json.dumps(content, ensure_ascii=False, indent=1)
         body = ",\n".join("  " + json.dumps(x, ensure_ascii=False) for x in content)
@@ -355,6 +396,13 @@ class Downloads:
 
     def __init__(self, root: Path) -> None:
         self.root = root.resolve()
+
+    @property
+    def drive_copies(self) -> Path:
+        """Where drive copy zips are built while they are uploaded: on the downloads volume,
+        outside every archive. Never a creator folder (`safe_name` strips a leading dot), and
+        never listed as an archive."""
+        return self.root / DRIVE_COPIES_FOLDER
 
     def list(self) -> list[Archive]:
         """Every `<creator>/<date>/<title>/` archive, newest first by date, then by when a file

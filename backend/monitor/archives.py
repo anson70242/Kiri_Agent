@@ -61,9 +61,18 @@ def summary(a: Archive) -> dict:
         "transcript_file": name(Artifact.TRANSCRIPT),
         "zh_transcript_file": name(Artifact.CHINESE_TRANSCRIPT),
         "highlights_file": name(Artifact.HIGHLIGHTS),
+        "drive_link": drive_link(a),
         "size": a.size,
         "mtime": a.mtime,
     }
+
+
+def drive_link(a: Archive) -> dict | None:
+    """The archive's drive link as the API returns it; None when it has none or it is damaged."""
+    try:
+        return a.read_drive_link().to_dict()
+    except (ArtifactMissing, ArtifactDamaged, OSError):
+        return None
 
 
 def srt(segments: list[dict]) -> str:
@@ -121,6 +130,27 @@ def stream_zip(files: list[Path], extra: dict[str, bytes]) -> Iterator[bytes]:
         for name, data in extra.items():
             zf.writestr(name, data)
     yield sink.drain()  # central directory
+
+
+def zip_contents(archive: Archive) -> tuple[list[Path], dict[str, bytes]]:
+    """What the "全部下载" zip holds, as `stream_zip` takes it: the video and the cleaned chat
+    files, and the Chinese and Japanese transcripts as SRT (each left out when missing or
+    damaged)."""
+    files = sorted(archive.files(Artifact.VIDEO) + archive.files(Artifact.CHAT))
+    extra: dict[str, bytes] = {}
+    for lang in ("zh", "ja"):
+        artifact = Artifact.transcript(lang)
+        if t := archive.file(artifact):
+            try:
+                extra[f"{artifact.stem_of(t.name)}.{lang}.srt"] = srt(archive.read_transcript(lang)).encode()
+            except (ArtifactMissing, ArtifactDamaged):
+                pass
+    return files, extra
+
+
+def highlights_xlsx_name(archive: Archive) -> str:
+    """The Excel download's file name: the highlight table's own stem + `.highlights.xlsx`."""
+    return Artifact.HIGHLIGHTS.stem_of(archive.require(Artifact.HIGHLIGHTS).name) + ".highlights.xlsx"
 
 
 def read_or_answer(read: Callable[[], T], missing: str, damaged: str) -> T:
@@ -225,24 +255,15 @@ def create_router(output_dir: Path,
         """The 路灯表 as a formatted Excel sheet."""
         archive = open_archive(folder, request)
         table = load_highlights(archive)
-        name = Artifact.HIGHLIGHTS.stem_of(archive.require(Artifact.HIGHLIGHTS).name) + ".highlights.xlsx"
         return Response(highlights_xlsx(table), media_type=XLSX_TYPE,
-                        headers={"Content-Disposition": attachment(name)})
+                        headers={"Content-Disposition": attachment(highlights_xlsx_name(archive))})
 
     @router.get("/api/archives/zip")
     def zip_download(folder: str, request: Request) -> StreamingResponse:
         """What editors use, zipped on the fly (no temp file): the video, the cleaned chat,
         and the Chinese and Japanese subtitles as SRT (made from the transcripts)."""
         archive = open_archive(folder, request)
-        files = sorted(archive.files(Artifact.VIDEO) + archive.files(Artifact.CHAT))
-        extra: dict[str, bytes] = {}
-        for lang in ("zh", "ja"):
-            artifact = Artifact.transcript(lang)
-            if t := archive.file(artifact):
-                try:
-                    extra[f"{artifact.stem_of(t.name)}.{lang}.srt"] = srt(archive.read_transcript(lang)).encode()
-                except (ArtifactMissing, ArtifactDamaged):
-                    pass
+        files, extra = zip_contents(archive)
         return StreamingResponse(stream_zip(files, extra), media_type="application/zip",
                                  headers={"Content-Disposition": attachment(archive.title + ".zip")})
 

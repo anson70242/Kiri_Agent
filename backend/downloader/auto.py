@@ -59,6 +59,7 @@ from backend.archive import Archive, Artifact, ArtifactDamaged, ArtifactMissing,
 from backend.asr import ASRSettings, transcribe
 from backend.drive import LOGIN_COMMAND as DRIVE_LOGIN_COMMAND
 from backend.drive import Drive, DriveAuthorizationLapsed, DriveCopy, DriveFailed
+from backend.drive_copy import remove_leftover_drive_copies
 from backend.llm import LLMError, chat, load_llm
 from backend.tencent_docs import (
     TencentDocsError, load_credentials, sheet_title, upload_table)
@@ -257,6 +258,7 @@ class AutoDownloader:
             for j in jobs:
                 j.uploading = False
             self.save(jobs)
+        remove_leftover_drive_copies(self.settings.output_dir)
         await asyncio.gather(*(self.run_stage(stage) for stage in STAGES))
 
     async def run_stage(self, stage: str) -> None:
