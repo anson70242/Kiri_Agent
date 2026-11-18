@@ -27,6 +27,11 @@ Rules:
 - Any other failure: retried until `max_errors`, then a failure message on Discord.
 - Success: a Discord message, then the streamer folder is trimmed to `keep` archives; an
   archive that still has a job in the queue, at any stage, is spared until a later prune.
+- Every stage over: "全部处理完成" (READY), with what the live has. For a streamer whose gear
+  ticks 自动上传到夸克网盘, when the drive is available and the archive has a video, a drive
+  job is queued instead, in the same save: it waits while the live's chat is still in the
+  chat retry queue, uploads the drive copy, and sends READY once, with the drive link in
+  place of the site's zip when there is one (backend/drive.py is the drive's side).
 - Jobs live in `state_file`, so a restart resumes them (yt-dlp resumes partial files).
 """
 
@@ -48,6 +53,7 @@ from urllib.parse import quote
 from backend.analysis import AnalysisSettings, analyze, is_singing_live, song_naming
 from backend.archive import Archive, Artifact, ArtifactDamaged, ArtifactMissing, Downloads, file_date, read_file
 from backend.asr import ASRSettings, transcribe
+from backend.drive import Drive, DriveAuthorizationLapsed, DriveCopy, DriveFailed
 from backend.llm import LLMError, chat, load_llm
 from backend.tencent_docs import (
     TencentDocsError, load_credentials, sheet_title, upload_table)
@@ -65,7 +71,7 @@ from .pending import PendingChats
 log = logging.getLogger(__name__)
 
 NOT_READY = ("is_live", "is_upcoming", "post_live")
-STAGES = ("download", "transcribe", "analyze", "translate", "upload")
+STAGES = ("download", "transcribe", "analyze", "translate", "upload", "drive")
 AUTH_HINTS = ("member", "sign in", "cookie", "login", "subscriber", "private")
 # A live shorter than this whose replay is not published is dropped without a word: test
 # lives and the fragments a dropped connection leaves.
@@ -80,10 +86,11 @@ class Job:
     attempts: int = 0
     errors: int = 0  # failures other than "not ready yet"
     last_error: str = ""
-    stage: Literal["download", "transcribe", "analyze", "translate", "upload"] = "download"
+    stage: Literal["download", "transcribe", "analyze", "translate", "upload", "drive"] = "download"
     video: str | None = None  # set once downloaded
     live_ended_at: float | None = None  # when the live ended (epoch seconds); None: not known
     unpublished_notice_sent: bool = False  # the owner was told the replay is not published
+    ready_sent: bool = False  # drive stage: "全部处理完成" went out for this live
 
     @property
     def stream_key(self) -> str:
@@ -114,6 +121,7 @@ class Job:
             "video": self.video,
             "live_ended_at": self.live_ended_at,
             "unpublished_notice_sent": self.unpublished_notice_sent,
+            "ready_sent": self.ready_sent,
         }
 
     @classmethod
@@ -128,11 +136,12 @@ def decode_jobs(raw: Any) -> list[Job]:
 
 @dataclass
 class Outcome:
-    kind: Literal["done", "wait", "unpublished", "error"]
+    kind: Literal["done", "wait", "unpublished", "error", "lapsed"]  # lapsed: the drive's authorization
     message: str = ""
     result: DownloadResult | None = None
     pruned: list[Path] = field(default_factory=list)
     prune_error: str = ""  # done, but deleting old archives raised this (type: message)
+    drive: DriveCopy | None = None  # drive stage, done: what the drive answered
 
 
 class AutoDownloader:
@@ -154,8 +163,10 @@ class AutoDownloader:
         translate: Callable[[Path], Any] | None = None,  # video -> Chinese subtitles; None: skip
         # (路灯表, spreadsheet id, streamer, title) -> sheet link; None: no credentials, skip
         upload: Callable[[Path, str, str, str], str] | None = None,
+        drive: Drive | None = None,  # uploads drive copies; None: the drive is not available
     ):
         self.upload = upload
+        self.drive = drive
         self.transcribe = transcribe
         self.analyze = analyze
         self.translate = translate
@@ -274,6 +285,8 @@ class AutoDownloader:
             return self.attempt_translate(job)
         if job.stage == "upload":
             return self.attempt_upload(job)
+        if job.stage == "drive":
+            return self.attempt_drive(job)
         s = job.status
         try:
             dl = downloader_for(s.url or "", self.settings, self.streamers)
@@ -372,6 +385,40 @@ class AutoDownloader:
             self._active["upload"] = None
         return Outcome("done", link)
 
+    def attempt_drive(self, job: Job) -> Outcome:
+        s = job.status
+        assert job.video  # a drive job is only queued for a live with a video
+        folder = self.drive_folders.get(s.streamer.id)
+        if folder is None:
+            return Outcome("done")  # unticked in the gear meanwhile: nothing to upload
+        if not self.drive:
+            log.warning("drive copies are on for %s, but the drive is not available: skipped", s.streamer.name)
+            return Outcome("done")
+        if (chats := PendingChats.from_settings(self.settings)) and chats.holds(Path(job.video).parent):
+            return Outcome("wait", "等待弹幕补抓")  # the zip gets the chat: wait until it is in or given up
+        self._active["drive"] = {
+            "name": s.streamer.name, "platform": s.streamer.platform, "title": s.title, "url": s.url,
+            "started": self.clock(), "stage": "drive",
+            "percent": None, "downloaded": 0, "total": None, "speed": None, "eta": None}
+        try:
+            copy = self.drive(Archive.from_video(Path(job.video)), folder, self._on_drive_progress)
+        except DriveAuthorizationLapsed as e:
+            return Outcome("lapsed", str(e))
+        except DriveFailed as e:
+            return Outcome("error", str(e))
+        except Exception as e:  # noqa: BLE001 - a bug or a surprise: a failed attempt, not a stuck job
+            log.exception("drive attempt raised: %s %s", s.streamer.name, s.url)
+            return Outcome("error", f"{type(e).__name__}: {e}")
+        finally:
+            self._active["drive"] = None
+        return Outcome("done", drive=copy)
+
+    def _on_drive_progress(self, sent: int, total: int | None) -> None:
+        """The drive's progress (runs in the drive thread)."""
+        if active := self._active["drive"]:
+            active.update(downloaded=sent, total=total,
+                          percent=round(sent / total * 100, 1) if total else None)
+
     def _on_progress(self, d: dict[str, Any]) -> None:
         """yt-dlp progress hook (runs in the download thread)."""
         active = self._active["download"]
@@ -389,7 +436,11 @@ class AutoDownloader:
 
     def finish(self, job: Job, outcome: Outcome) -> None:
         """Record an attempt's outcome and send its message. Once nothing is left for the
-        stream (every stage done or given up), report it ready with what it has."""
+        stream (every stage done or given up), report it ready with what it has; the drive
+        stage reports it itself."""
+        if job.stage == "drive":
+            self._finish_drive(job, outcome)
+            return
         self._finish(job, outcome)
         video = job.video or (str(outcome.result.video) if outcome.result and outcome.result.video else None)
         if video and not any(j.stream_key == job.stream_key for j in self.load()):
@@ -410,22 +461,22 @@ class AutoDownloader:
             assert job.video  # analysis only runs on a downloaded video
             self._send(EventKind.ANALYZED, job, top_segments_detail(Archive.from_video(Path(job.video))))
             if job.status.streamer.id not in self.uploads:
-                self.save(rest)
+                self._settle(current, rest)
             elif not self.upload:
                 log.warning("upload to Tencent Docs is on for %s, but no credentials in .env: skipped", name)
-                self.save(rest)
+                self._settle(current, rest)
             else:
                 self.advance(current, rest, "upload", now)
             return
         if outcome.kind == "done" and current.stage == "upload":
-            self.save(rest)
+            self._settle(current, rest)
             if outcome.message:
                 log.info("uploaded: %s %s", name, outcome.message)
                 self._send(EventKind.UPLOADED, job, "", (Link(SHEET_LABEL, outcome.message),))
             return
         if outcome.kind == "done" and current.stage == "translate":
             log.info("translated: %s %s", name, current.video)
-            self.save(rest)
+            self._settle(current, rest)
             return
         if outcome.kind == "done" and current.stage == "transcribe":
             log.info("transcribed: %s %s", name, current.video)
@@ -437,7 +488,7 @@ class AutoDownloader:
                 j.stage = stage  # type: ignore[assignment]
                 j.attempts, j.errors, j.last_error, j.next_try = 0, 0, "", now
                 jobs.append(j)
-            self.save(rest + jobs)
+            self._settle(current, rest + jobs)
             for stage in follow:
                 self._wake[stage].set()
             return
@@ -452,20 +503,21 @@ class AutoDownloader:
                 self._send(EventKind.PRUNE_FAILED, job, "删除这位主播超出保留数量的旧录播时出错，旧录播没有删掉；"
                            f"这场新录播不受影响。\n```{outcome.prune_error[:1500]}```")
             video = outcome.result.video if outcome.result else None
-            if self.transcribe and video:
+            if video:
                 current.video = str(video)
+            if self.transcribe and video:
                 self.advance(current, rest, "transcribe", now)
             else:
-                self.save(rest)
+                self._settle(current, rest)
             return
         if outcome.kind == "unpublished":
             if current.short_live:
                 log.info("auto-download dropped, replay of a short live not published: %s", name)
-                self.save(rest)
+                self._settle(current, rest)
                 return
             if now - current.queued_at >= self.give_up:
                 log.info("auto-download given up, replay never published: %s", name)
-                self.save(rest)
+                self._settle(current, rest)
                 return
             if not current.unpublished_notice_sent:
                 self._send(EventKind.REPLAY_UNPUBLISHED, job,
@@ -474,7 +526,7 @@ class AutoDownloader:
             log.info("auto-download waiting for the replay to be published: %s", name)
         elif outcome.kind == "wait":
             if now - current.queued_at >= self.give_up:
-                self.save(rest)
+                self._settle(current, rest)
                 hours = self.give_up / 3600
                 self._send(EventKind.DOWNLOAD_FAILED, job,
                            f"下播 {hours:g} 小时后回放仍未就绪，放弃。\n最后状态：{outcome.message}")
@@ -485,7 +537,7 @@ class AutoDownloader:
             log.warning("auto-download failed (%d/%d): %s: %s",
                         current.errors, self.max_errors, name, outcome.message)
             if current.errors >= self.max_errors:
-                self.save(rest)
+                self._settle(current, rest)
                 if current.stage == "transcribe":
                     self._send(EventKind.TRANSCRIBE_FAILED, job,
                                f"影片已下载，但试了 {current.attempts} 次字幕转写仍失败：\n"
@@ -507,6 +559,69 @@ class AutoDownloader:
                 return
         current.next_try = now + self.retry_interval
         self.save(rest + [current])
+
+    def _finish_drive(self, job: Job, outcome: Outcome) -> None:
+        """READY goes out once per live, when the drive job's first attempt ends: with the
+        drive link in place of the site's zip when the drive copy got one. Until failed
+        uploads are retried, every attempt ends the job; a failure is only logged."""
+        jobs = self.load()
+        current = next((j for j in jobs if j.key == job.key), job)
+        rest = [j for j in jobs if j.key != job.key]
+        name = job.status.streamer.name
+        if outcome.kind == "wait":  # the chat is still awaited: neither an attempt nor an error
+            current.next_try = self.clock() + self.retry_interval
+            self.save(rest + [current])
+            return
+        current.attempts += 1
+        current.last_error = outcome.message
+        copy = outcome.drive
+        if outcome.kind == "lapsed":
+            log.error("drive copy not uploaded, the drive's authorization lapsed: %s: %s", name, outcome.message)
+        elif outcome.kind == "error":
+            log.error("drive copy not uploaded: %s: %s", name, outcome.message)
+        elif copy:
+            log.info("drive copy uploaded: %s %s", name, copy.path)
+        assert current.video  # a drive job is only queued for a live with a video
+        video = Path(current.video)
+        events: list[tuple[EventKind, str, tuple[Link, ...]]] = []
+        if not current.ready_sent:
+            links = ready_links(video, self.site_url, self.settings.output_dir)
+            if copy and copy.link:
+                links = (Link(DRIVE_LABEL, copy.link), *links[1:])
+            events.append((EventKind.READY, ready_detail(video), links))
+        if copy and (current.ready_sent or not copy.link):  # READY did not carry the drive link
+            detail = f"网盘路径：`{copy.path}`"
+            if not copy.link:
+                detail += f"\n没有网盘链接：{copy.reason}"
+            events.append((EventKind.DRIVE_UPLOADED, detail,
+                           (Link(DRIVE_LINK_LABEL, copy.link),) if copy.link else ()))
+        current.ready_sent = True
+        self.save(rest)
+        for kind, detail, links in events:
+            self._send(kind, job, detail, links)
+
+    def _settle(self, job: Job, jobs: list[Job]) -> None:
+        """Save `jobs`, the queue without `job`. When that leaves nothing for its live and the
+        live goes to the drive, its drive job is queued in the same save, in place of READY
+        (so a prune never sees the archive without a job)."""
+        if not any(j.stream_key == job.stream_key for j in jobs) and self._goes_to_drive(job):
+            drive = Job.from_dict(job.to_dict())
+            drive.stage = "drive"
+            drive.attempts, drive.errors, drive.last_error, drive.next_try = 0, 0, "", self.clock()
+            self.save(jobs + [drive])
+            self._wake["drive"].set()
+            return
+        self.save(jobs)
+
+    def _goes_to_drive(self, job: Job) -> bool:
+        """A ticked streamer's live with a video, when the drive is available."""
+        if job.status.streamer.id not in self.drive_folders or not job.video:
+            return False
+        if not self.drive:
+            log.warning("drive copies are on for %s, but the drive is not available: skipped",
+                        job.status.streamer.name)
+            return False
+        return Archive.from_video(Path(job.video)).has(Artifact.VIDEO)
 
     def advance(self, job: Job, rest: list[Job], stage: str, now: float) -> None:
         """Move a job to its next stage with fresh retry counters, and wake that worker."""
@@ -560,6 +675,8 @@ def ready_links(video: Path, site_url: str, output_dir: Path) -> tuple[Link, ...
 READY_ARTIFACTS = [("影片", Artifact.VIDEO), ("弹幕", Artifact.CHAT), ("日文字幕", Artifact.TRANSCRIPT),
                    ("中文字幕", Artifact.CHINESE_TRANSCRIPT), ("路灯表", Artifact.HIGHLIGHTS)]  # in the message's order
 PAGE_LABEL = "录播页面"
+DRIVE_LABEL = "全部下载（夸克网盘：影片、弹幕、中日字幕 SRT、路灯表）"  # READY's first link, for a drive copy
+DRIVE_LINK_LABEL = "网盘链接"
 SHEET_LABEL = "腾讯文档路灯表"
 
 

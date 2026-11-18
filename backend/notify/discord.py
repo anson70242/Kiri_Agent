@@ -39,6 +39,7 @@ PIPELINE_TEXT = {
     EventKind.UPLOADED: ("📤", "路灯表已上传腾讯文档"),
     EventKind.UPLOAD_FAILED: ("❗", "路灯表上传腾讯文档失败"),
     EventKind.READY: ("✅", "全部处理完成"),
+    EventKind.DRIVE_UPLOADED: ("☁️", "网盘上传完成"),
 }
 
 
@@ -115,7 +116,8 @@ class DiscordNotifier(Notifier):
     def download_payload(self, event: StreamEvent) -> dict[str, Any]:
         status = event.status
         s = status.streamer
-        ok = event.kind in (EventKind.DOWNLOADED, EventKind.ANALYZED, EventKind.UPLOADED, EventKind.READY)
+        ok = event.kind in (EventKind.DOWNLOADED, EventKind.ANALYZED, EventKind.UPLOADED, EventKind.READY,
+                            EventKind.DRIVE_UPLOADED)
         color = {EventKind.REPLAY_UNPUBLISHED: WAITING_COLOR,  # neither done nor failed
                  EventKind.PRUNE_FAILED: WARNING_COLOR,  # the new archive is fine
                  }.get(event.kind, DOWNLOADED_COLOR if ok else FAILED_COLOR)

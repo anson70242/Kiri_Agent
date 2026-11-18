@@ -106,6 +106,10 @@ class PendingChats:
         if len(keep) != len(entries):
             self.save(keep)
 
+    def holds(self, folder: Path) -> bool:
+        """A chat for the video in `folder` is still queued (neither downloaded nor given up)."""
+        return any(e.output_dir == folder for e in self.load())
+
     def next_due(self) -> float | None:
         """Time of the next scheduled retry, None when the queue is empty."""
         return min((e.next_try for e in self.load()), default=None)
