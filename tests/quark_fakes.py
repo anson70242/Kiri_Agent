@@ -31,6 +31,20 @@ def lapsed_11001(action: str) -> str:
 
 LAPSED_103 = result("login", -103, "未登录，请先执行 login 命令完成登录授权")
 
+AUTH_URL = ("https://pan.quark.cn/open/v1/oauth/agent?device_id=0123456789abcdef0123456789abcdef"  # as ticket 01 saw it
+            "&device_name=Some+Board&agent_id=claudecode&page_code=00000000-0000-0000-0000-000000000000"
+            "&client_id=third_party_agent&scope=clouddrive.base+clouddrive.netdisk&redirect_uri="
+            "&client_device_id=0000#/agent-oauth")
+DEVICE_ID = "0123456789abcdef0123456789abcdef"
+
+
+def needs_authorization(action: str) -> str:
+    """-106 with the authorization link (holding the device id) in its message: `login`'s
+    normal answer without a browser."""
+    return result(action, -106, "你好像还没完成授权？如果已经扫码确认了，发任意消息，或是复制授权码给我，"
+                  f"我来检测一下；还没完成的话，点下方链接重新操作就好。🔗 [前往授权]{AUTH_URL}\n\n"
+                  "绑定夸克网盘后，对话文件随时归档。")
+
 USER_INFO = result("get-user-info", data={
     "vipInfo": {"vipType": "SVIP", "expiresIn": 1800000000000, "used": 250000000000, "capacity": 6597069766656},
     "userInfo": {"nickname": "某个昵称"}})

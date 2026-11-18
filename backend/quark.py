@@ -112,6 +112,15 @@ def _cli_environment() -> dict[str, str]:
             if name.upper() in CLI_ENVIRONMENT or name.upper().startswith("LC_")}
 
 
+ADDRESS_RE = re.compile(r"https?://\S+")
+
+
+def _without_addresses(msg: Any) -> str:
+    """A CLI message fit for a log, the queue file or a message: every address in it left out
+    (the authorization link holds the device id)."""
+    return ADDRESS_RE.sub("（链接略）", str(msg or "")).strip()
+
+
 def _objects(lines: Iterable[str]) -> Iterator[dict[str, Any]]:
     """The output lines that are JSON objects with a `type`; every other line is ignored."""
     for text in lines:
@@ -331,10 +340,10 @@ class Quark:
         if code == 0:
             data = res.get("data")
             return data if isinstance(data, dict) else {}
-        msg = str(res.get("msg") or f"错误码 {code}")
         if code in LAPSED_CODES or (res.get("action") == "login" and args[0] != "login"):
-            raise DriveAuthorizationLapsed(msg)
-        raise DriveFailed(f"{msg}（{code}）")
+            # Never the CLI's text: -106's holds the authorization link, and the link the device id.
+            raise DriveAuthorizationLapsed(f"夸克网盘的授权已失效（{code}）")
+        raise DriveFailed(f"{_without_addresses(res.get('msg')) or '错误码'}（{code}）")
 
     # ---- authorizing ----
 
@@ -348,15 +357,17 @@ class Quark:
         msg = str(res.get("msg") or "")
         link = re.search(r"https?://[^\s\])]+", msg)
         if link is None:
-            raise DriveFailed(f"夸克网盘 CLI 没有给出授权链接：{msg}（{res.get('code')}）")
+            raise DriveFailed(f"夸克网盘 CLI 没有给出授权链接：{_without_addresses(msg)}（{res.get('code')}）")
         return link.group(0)
 
     def login(self, code: str) -> None:
         """Complete the authorization with the code from the authorization page. Raises
-        DriveFailed with the CLI's message when it is refused."""
+        AlreadyAuthorized, or DriveFailed with the CLI's message when it is refused."""
         res = self._run(["login", "--token", code])
+        if res.get("code") == ALREADY_AUTHORIZED:
+            raise AlreadyAuthorized()  # its message names the account: not shown
         if res.get("code") != 0:
-            raise DriveFailed(f"{res.get('msg') or '授权失败'}（{res.get('code')}）")
+            raise DriveFailed(f"{_without_addresses(res.get('msg')) or '授权失败'}（{res.get('code')}）")
 
     # ---- the account ----
 

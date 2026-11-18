@@ -14,8 +14,9 @@ from backend.archive import Archive, Downloads
 from backend.drive import DriveAuthorizationLapsed, DriveFailed
 
 from .helpers import sample_archive
-from .quark_fakes import (FOLDER_ID, LAPSED_103, NOISE, RECORD_ID, SHARED, SHARE_URL, UPLOAD_DELETED, FakeCli, FakeProcess, browse,
-                          create_folder, lapsed_11001, line, progress, result, upload_failed, uploaded)
+from .quark_fakes import (AUTH_URL, DEVICE_ID, FOLDER_ID, LAPSED_103, NOISE, RECORD_ID, SHARED, SHARE_URL, UPLOAD_DELETED,
+                          FakeCli, FakeProcess, browse, create_folder, lapsed_11001, line, needs_authorization, progress,
+                          result, upload_failed, uploaded)
 
 STEM = "[20261105][柊優花] 歌枠"
 ZIP = f"{STEM}.zip"
@@ -133,22 +134,34 @@ def test_a_failed_upload_raises_failed_with_the_cli_message_and_forgets_its_task
     assert no_zip_left(root)
 
 
-@pytest.mark.parametrize("step, answer", [
-    ("create-folder", [LAPSED_103]),
-    ("create-folder", [lapsed_11001("create-folder")]),
-    ("browse", [lapsed_11001("browse")]),
-    ("upload", upload_failed(11001, "长效Access Token过期，需触发刷新", record=False)),
-], ids=["no state", "tokens refused", "while listing", "while uploading"])
-def test_a_lapsed_authorization_raises_lapsed(root, cli, step, answer):
+@pytest.mark.parametrize("step, answer, code", [
+    ("create-folder", [LAPSED_103], -103),
+    ("create-folder", [lapsed_11001("create-folder")], 11001),
+    ("browse", [lapsed_11001("browse")], 11001),
+    ("browse", [needs_authorization("browse")], -106),
+    ("upload", upload_failed(11001, "长效Access Token过期，需触发刷新", record=False), 11001),
+], ids=["no state", "tokens refused", "while listing", "the authorization link", "while uploading"])
+def test_a_lapsed_authorization_raises_lapsed_in_words_of_its_own(root, cli, step, answer, code):
     folder = sample_archive(root)
     uploading(cli)
     cli.answers[step] = answer
     cli.answers["upload list"] = [result("upload-list", data={"totalCount": 0})]
 
-    with pytest.raises(DriveAuthorizationLapsed):
+    with pytest.raises(DriveAuthorizationLapsed) as lapsed:
         drive(root).upload(Archive.from_folder(folder), "录播/柊優花")
+    assert str(lapsed.value) == f"夸克网盘的授权已失效（{code}）"  # never the CLI's text: it may hold the device id
     assert no_zip_left(root)
     assert built(root) == (step == "upload")  # found before the zip is built, when it can be
+
+
+def test_no_address_from_a_cli_message_reaches_a_failure(root, cli):
+    folder = sample_archive(root)
+    uploading(cli, answer=upload_failed(-204, f"上传失败，请到 {AUTH_URL} 查看"))
+
+    with pytest.raises(DriveFailed) as failed:
+        drive(root).upload(Archive.from_folder(folder), "录播/柊優花")
+    assert "上传失败" in str(failed.value)
+    assert "http" not in str(failed.value) and DEVICE_ID not in str(failed.value)
 
 
 def test_an_upload_without_progress_for_the_idle_time_is_killed_and_failed(root, cli):

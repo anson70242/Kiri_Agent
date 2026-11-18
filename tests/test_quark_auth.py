@@ -13,7 +13,7 @@ import pytest
 
 from backend import quark
 
-from .quark_fakes import LAPSED_103, NOISE, USER_INFO, FakeCli, lapsed_11001, result
+from .quark_fakes import AUTH_URL, DEVICE_ID, LAPSED_103, NOISE, USER_INFO, FakeCli, lapsed_11001, needs_authorization, result
 
 
 @pytest.fixture
@@ -140,13 +140,7 @@ def test_a_run_without_a_result_line_fails(config, cli, capsys):
 
 # ---- login ----
 
-AUTH_URL = ("https://pan.quark.cn/open/v1/oauth/agent?device_id=0123456789abcdef0123456789abcdef"  # as ticket 01 saw it
-            "&device_name=Some+Board&agent_id=claudecode&page_code=00000000-0000-0000-0000-000000000000"
-            "&client_id=third_party_agent&scope=clouddrive.base+clouddrive.netdisk&redirect_uri="
-            "&client_device_id=0000#/agent-oauth")
-NEEDS_CODE = result("login", -106, "你好像还没完成授权？如果已经扫码确认了，发任意消息，或是复制授权码给我，"
-                    f"我来检测一下；还没完成的话，点下方链接重新操作就好。🔗 [前往授权]{AUTH_URL}\n\n"
-                    "绑定夸克网盘后，对话文件随时归档。")
+NEEDS_CODE = needs_authorization("login")
 
 
 def login(config, capsys, *args):
@@ -183,12 +177,28 @@ def test_login_with_the_code_completes_the_authorization(config, cli, capsys):
     assert cli.commands() == [["login", "--token", "c0de-from-the-page"]]
 
 
+def test_login_with_the_code_when_already_authorized_says_so_without_the_nickname(config, cli, capsys):
+    cli.answers["login"] = [result("login", -118, "当前账号已授权，若想切换账号，请先解除授权（某个昵称）")]
+    code, out = login(config, capsys, "--code", "c0de-from-the-page")
+
+    assert code == 0
+    assert out.strip() == "已授权，不用再授权"
+
+
 def test_login_with_a_refused_code_says_why(config, cli, capsys):
     cli.answers["login"] = [result("login", -102, "授权码无效或已过期")]
     code, out = login(config, capsys, "--code", "stale")
 
     assert code == 1
     assert "授权码无效或已过期" in out
+
+
+def test_login_with_a_refused_code_never_prints_an_address_from_the_cli(config, cli, capsys):
+    cli.answers["login"] = [needs_authorization("login")]
+    code, out = login(config, capsys, "--code", "stale")
+
+    assert code == 1
+    assert "http" not in out and DEVICE_ID not in out
 
 
 def test_no_command_passes_the_session_arguments(config, cli, capsys):
