@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import pytest
 
+from backend.archive import Archive
 from backend.downloader import auto as auto_mod
 from backend.downloader.base import DownloadResult
 from backend.notify import StreamEvent
@@ -207,7 +208,7 @@ def test_an_archive_whose_upload_is_retried_stays_and_goes_by_the_usual_rule_onc
 
     def fake_download(url, settings, streamers, info=None, progress=None):
         folder = bare_archive(settings.output_dir, "A", next(dates), info.id, stem=info.id, video=b"x")
-        return DownloadResult(info, folder, video=folder / f"{info.id}.mp4")
+        return DownloadResult(info, folder, video=Archive.from_folder(folder).video)
 
     monkeypatch.setattr(auto_mod, "downloader_for", lambda *a: ReplaySource())
     monkeypatch.setattr(auto_mod, "download", fake_download)

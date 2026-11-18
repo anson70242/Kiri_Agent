@@ -79,8 +79,9 @@ def downloaded(ad, s=A, video=b"x"):
     folder = bare_archive(ad.settings.output_dir, s.name, "20261110", "歌枠", stem="v", video=video, chat=[])
     info = VideoInfo("youtube", "v1", "u", "title v1", s.channel, s.name, "20261110")
     job = ad.next_due("download")
-    ad.finish(job, Outcome("done", result=DownloadResult(info, folder, video=folder / "v.mp4",
-                                                         chat=Archive.from_folder(folder).file(Artifact.CHAT))))
+    archive = Archive.from_folder(folder)
+    ad.finish(job, Outcome("done", result=DownloadResult(info, folder, video=archive.video,
+                                                         chat=archive.file(Artifact.CHAT))))
     return folder
 
 
@@ -198,9 +199,7 @@ class ChatSource:
     def download_chat(self, info, out_dir):
         if not self.ready:
             raise ChatNotReady("chat replay not available yet")
-        path = out_dir / "v.chat_parsed.json"
-        path.write_text("[]", encoding="utf-8")
-        return path
+        return Archive.from_folder(out_dir).save(Artifact.CHAT, [])
 
 
 @pytest.mark.parametrize("chat_ready, give_up", [(True, 48 * 3600), (False, 0)],
@@ -213,7 +212,8 @@ def test_the_drive_job_and_ready_wait_for_a_late_chat(tmp_path, monkeypatch, cha
     info = VideoInfo("youtube", "v1", "https://x/v1", "title v1", "@a", "A", "20261110")
     PendingChats.from_settings(ad.settings).add(info, folder, "chat replay not available yet")
     ad.finish(ad.next_due("download"),
-              Outcome("done", result=DownloadResult(info, folder, video=folder / "v.mp4", chat_queued=True)))
+              Outcome("done", result=DownloadResult(info, folder, video=Archive.from_folder(folder).video,
+                                                    chat_queued=True)))
     step(ad, "transcribe")
 
     for _ in range(3):  # the chat is still awaited: nothing is uploaded, nothing counted
@@ -327,7 +327,7 @@ def test_the_archive_stays_while_its_drive_job_is_queued_and_goes_by_the_usual_r
 
     def fake_download(url, settings, streamers, info=None, progress=None):
         folder = bare_archive(settings.output_dir, "A", next(dates), info.id, stem=info.id, video=b"x")
-        return DownloadResult(info, folder, video=folder / f"{info.id}.mp4")
+        return DownloadResult(info, folder, video=Archive.from_folder(folder).video)
 
     monkeypatch.setattr(auto_mod, "downloader_for", lambda *a: ReplaySource())
     monkeypatch.setattr(auto_mod, "download", fake_download)
