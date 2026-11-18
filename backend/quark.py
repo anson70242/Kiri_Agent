@@ -206,14 +206,14 @@ class Quark:
 
     def _share(self, archive: Archive, file_id: str, path: str) -> DriveCopy:
         """Share the zip at `path` (drive id `file_id`) as a private link that never expires,
-        and note the drive link in the archive. Raises DriveAuthorizationLapsed only: a share
-        that fails otherwise gives the drive copy without a link, with the reason."""
+        and note the drive link in the archive. The zip is on the drive: a share that fails,
+        also for a lapsed authorization, gives the drive copy without a link, with the reason."""
         if not file_id:
             return DriveCopy(path, None, "夸克网盘 CLI 没有给出文件的 id，没法分享")
         try:
             # --url-type 2: private, Quark makes the extraction code; --expired-type 1: never expires.
             data = self._call(["share", file_id, "--url-type", "2", "--expired-type", "1"])
-        except DriveFailed as e:
+        except (DriveFailed, DriveAuthorizationLapsed) as e:
             log.warning("drive copy uploaded but not shared: %s: %s", path, e)
             return DriveCopy(path, None, str(e))
         url, code = str(data.get("share_url") or ""), str(data.get("passcode") or "")

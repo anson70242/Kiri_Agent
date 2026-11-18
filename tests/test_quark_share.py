@@ -8,7 +8,6 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from backend.archive import Archive, Artifact, DriveLink
-from backend.drive import DriveAuthorizationLapsed
 
 from .helpers import sample_archive
 from .quark_fakes import FILE_ID, PASSCODE, SHARE_URL, SHARED, lapsed_11001, result
@@ -91,13 +90,14 @@ def test_a_failed_share_after_an_upload_still_returns_the_path_with_the_reason(r
     assert not [c for c in cli.commands() if c[:2] == ["upload", "delete"]]  # the upload did not fail
 
 
-def test_a_lapsed_authorization_at_the_share_is_lapsed(root, cli):
+def test_a_lapsed_authorization_at_the_share_gives_the_uploaded_drive_copy_without_a_link(root, cli):
     folder = sample_archive(root)
     uploading(cli)
     cli.answers["share"] = [lapsed_11001("share")]
 
-    with pytest.raises(DriveAuthorizationLapsed):
-        drive(root).upload(Archive.from_folder(folder), "录播/柊優花")
+    done = drive(root).upload(Archive.from_folder(folder), "录播/柊優花")
+
+    assert done.sent and done.copy.path == PATH and done.copy.link is None and "授权已失效" in done.copy.reason
     assert not Archive.from_folder(folder).has(Artifact.DRIVE_LINK)
 
 
