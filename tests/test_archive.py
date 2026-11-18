@@ -206,7 +206,7 @@ def test_a_file_that_vanishes_while_its_folder_is_scanned_is_skipped(tmp_path, m
             yield [_Vanished(e.name) if e.name == saving else e for e in it]
 
     monkeypatch.setattr(os, "scandir", racing_scandir)
-    everything = set(Artifact) - {Artifact.RAW_CHAT}
+    everything = set(Artifact) - {Artifact.RAW_CHAT, Artifact.DRIVE_LINK}  # what sample_archive makes
     assert Downloads(root).open("柊優花/20261105/歌枠").present() == everything  # not "archive not found"
     assert Archive.from_video(folder / f"{STEM}.mp4").present() == everything  # not an empty folder
     assert [a.present() for a in Downloads(root).list()] == [everything]

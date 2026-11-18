@@ -61,9 +61,18 @@ def summary(a: Archive) -> dict:
         "transcript_file": name(Artifact.TRANSCRIPT),
         "zh_transcript_file": name(Artifact.CHINESE_TRANSCRIPT),
         "highlights_file": name(Artifact.HIGHLIGHTS),
+        "drive_link": drive_link(a),
         "size": a.size,
         "mtime": a.mtime,
     }
+
+
+def drive_link(a: Archive) -> dict | None:
+    """The archive's drive link as the API returns it; None when it has none or it is damaged."""
+    try:
+        return a.read_drive_link().to_dict()
+    except (ArtifactMissing, ArtifactDamaged, OSError):
+        return None
 
 
 def srt(segments: list[dict]) -> str:

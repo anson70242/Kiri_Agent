@@ -301,6 +301,7 @@ async function drawDetail(folder) {
           : `<div class="novideo">${a.downloading ? "下载中，完成后可播放" : "没有视频文件"}</div>`}
         <div class="links">${links.map(([href, label]) => `<a href="${href}" download>⬇ ${label}</a>`).join("")}
           ${a.downloading ? "" : `<a class="all" href="/api/archives/zip?folder=${q}" download>⬇ 全部下载 (zip)</a>`}
+          ${a.drive_link ? `<a href="${esc(a.drive_link.url)}" target="_blank" rel="noopener" title="提取码 ${esc(a.drive_link.code)}">☁ 网盘链接</a>` : ""}
           ${a.highlights_file ? `<a href="/highlights#${q}">🚦 看路灯表</a>` : ""}</div>
       </div>
       <div class="panel subs"><h3>字幕 <span class="meta" id="submeta"></span>
