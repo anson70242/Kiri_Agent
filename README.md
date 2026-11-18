@@ -5,6 +5,7 @@ downloads the replay automatically when a live ends, transcribes it, translates 
 and then builds a highlight table (路灯表): a topic log and a score for every 5-minute segment, plus the chat density,
 so the people who edit clips know where to look.
 The highlight table can be uploaded automatically to a shared online spreadsheet (Tencent Docs; Google Sheets is planned) so the team can split up the work.
+The lives of chosen streamers can also be kept for good on a Quark cloud drive, where editors download them through a drive link.
 A person still decides what to cut in the end.
 
 ## Pipeline
@@ -21,9 +22,10 @@ A person still decides what to cut in the end.
 | [Chinese transcript](#chinese-transcript) | Transcript (Japanese) → `<stem>.zh.transcript.json`, shown on the video, downloadable as SRT | Done |
 | [Web pages](#web-pages) | Five pages: live status / archives / highlight tables / notifications / users; a highlight table downloads as a formatted Excel file | Done |
 | [Upload to Tencent Docs](#upload-to-tencent-docs) | Highlight table → one sub-sheet (formatted) in a Tencent Docs spreadsheet, set per streamer, uploaded automatically | Done |
+| [Drive copies on Quark](#drive-copies-on-quark) | Processed live → one zip (video, chat, SRT, highlight table) kept for good on a Quark cloud drive, with a drive link for the editors; set per streamer | Done |
 | Google Sheets | The same upload, to Google Sheets instead | Planned |
 
-Each live goes through the steps in order: download → transcribe → analysis and translation side by side → upload. Every step retries on failure and reports on Discord.
+Each live goes through the steps in order: download → transcribe → analysis and translation side by side → upload → drive copy. Every step retries on failure and reports on Discord.
 
 ## Installation
 
@@ -256,10 +258,12 @@ A 5-hour live takes about 120,000 tokens. By hand: `uv run -m backend.translate 
 
 - **直播状态** (live status, [monitor.html](frontend/monitor.html)): who is live / in a waiting room / not live, with covers and tag search.
   「＋ 新增主播」 (add streamer) adds a streamer. The gear ⚙ on each card sets auto-download, how many archives to keep, auto-upload to Tencent Docs and the target spreadsheet,
-  and can delete the streamer. Settings that are on show on the card as ⬇ 自动下载 (auto-download) / ⬆ 自动上传 (auto-upload).
+  auto-upload of drive copies to Quark (自动上传到夸克网盘) and the drive folder, and can delete the streamer.
+  Settings that are on show on the card as ⬇ 自动下载 (auto-download) / ⬆ 自动上传 (auto-upload) / ☁ 网盘 (drive).
 - **录播** ([archives.html](frontend/archives.html)): downloaded archives and their processing progress. Each one can be played,
   with Chinese (default) / Japanese subtitles, a 中 / 日 / 双语 subtitle panel, chat replay and a chat density chart. Downloads: video, chat,
-  SRT (Chinese / Japanese), highlight table (Excel), or everything as one zip (without the raw chat).
+  SRT (Chinese / Japanese), highlight table (Excel), or everything as one zip (without the raw chat); once the live's drive copy is on the drive,
+  「☁ 网盘链接」 (drive link) opens it there.
 - **路灯表** ([highlights.html](frontend/highlights.html)): the highlight table of each archive, filterable by score, chat activity and
   「只看有切片」 (only rows with clips); topic logs can be expanded.
 - **通知** ([notify.html](frontend/notify.html)): the status of the QQ bot and Discord, with test buttons; each QQ group's name,
@@ -303,6 +307,35 @@ Details: the sub-sheet name is `<YYYYMMDD> <主播> <标题>` (date, creator, ti
 sub-sheet in the whole spreadsheet does the new one get ` (2)` appended. Uploading one archive takes about 10 seconds and about 10 API calls, plus one per run of consecutive rows with the same colour
 (about 50 calls for a 5-hour live). A free account gets 2000 calls a day (according to the official MCP page), enough for dozens of archives a day.
 
+## Drive copies on Quark
+
+The server keeps only the newest `keep` archives of each streamer. For the streamers whose gear ⚙ has 「自动上传到夸克网盘」 (auto-upload to the Quark drive) ticked,
+each live is also kept for good on the owner's Quark cloud drive: once it is fully processed, its drive copy, one zip named like the archive
+(`[YYYYMMDD][主播] 标题.zip`) holding the video, the chat, the Chinese and Japanese subtitles as SRT and the highlight table as Excel,
+is uploaded into the streamer's drive folder (written in the gear, counted from the top of the drive; blank means `录播/<主播>`; a missing folder is created).
+Then a drive link is made: a Quark share address with its extraction code inside, which does not expire.
+
+- For such a streamer, 「全部处理完成」 (all processing done) is sent when the upload ends, and its 「全部下载」 (download everything) link is the drive link.
+  The archive's page shows 「☁ 网盘链接」 (drive link).
+- Only the first attempt is waited for. If it fails, 「全部处理完成」 goes out at once with the site's own links, together with ❗ 「网盘上传失败」 (drive upload failed);
+  the upload is retried in the background, and ☁️ 「网盘上传完成」 (drive upload done) brings the drive link when it gets through.
+- An archive is not deleted from the server until its drive copy is uploaded or given up on.
+- The program never deletes or replaces anything on the drive. A zip that is already there with the same name and size is not uploaded again.
+- When the drive's authorization lapses, the owner gets ⚠️ 「网盘授权失效」 (drive authorization lapsed) with the command to run; uploads wait up to 72 hours for it.
+- Uploads run one at a time (about 1.5–2.5 hours for a 10 GB live from the server), and a deploy waits for the one that is running.
+
+The drive is reached through Quark's official CLI (a Node program), run by `backend.quark`; why, and the risk it carries, is in
+[ADR 0001](docs/adr/0001-quark-drive-through-the-official-agent-cli.md). The CLI is in neither this repository nor the image: the owner copies it into the data volume and authorizes it once,
+and its authorization lives there as a file, not in `.env`. Without the CLI, ticked streamers are skipped with a warning in the log and everything else works as before.
+For the setup, authorizing again, uploading older archives by hand and replacing the CLI, see 「夸克网盘（网盘副本）」 (Quark drive) in [docs/deploy.md](docs/deploy.md) (in Chinese).
+
+```sh
+docker compose exec kiri /app/.venv/bin/python -m backend.quark status                    # 是否已授权、剩余空间
+docker compose exec kiri /app/.venv/bin/python -m backend.quark upload <录播文件夹> [--folder 网盘文件夹]
+```
+
+(The first comment means: whether it is authorized, and the space left. 录播文件夹 = an archive folder or a folder of them, 网盘文件夹 = the drive folder.)
+
 ## Local preview
 
 You can check changes to the pages without deploying:
@@ -338,7 +371,7 @@ The browser tests of the web pages ([test_monitor_page.py](tests/test_monitor_pa
 CI ([ci.yml](.github/workflows/ci.yml)) runs the tests and builds the Docker image on every pull request and on main.
 After CI passes on main, [deploy.yml](.github/workflows/deploy.yml) copies the code to the server over SSH
 and runs `docker compose up -d --build`. Before that restart, the new code reads the server's state files without changing them; the deploy stops there,
-with the old version still running, if a state file would be refused or set aside, or while the download queue still holds jobs (see 「部署」 (deployment) in [docs/deploy.md](docs/deploy.md), in Chinese). The web pages listen only on the server's localhost and are reached over Tailscale.
+with the old version still running, if a state file would be refused or set aside, or while the download queue still holds jobs or a drive copy is uploading (see 「部署」 (deployment) in [docs/deploy.md](docs/deploy.md), in Chinese). The web pages listen only on the server's localhost and are reached over Tailscale.
 
 ```sh
 docker compose up -d --build     # 在本地跑容器（需要 .env）
@@ -380,9 +413,9 @@ and the router must forward TCP 80 / 443 to the server. For the steps, see 「�
 ## Configuration
 
 `config.json` holds every setting that can be committed: `monitor`, `notify`, `llm`, `analysis`, `translate`, `asr`,
-`upload`, `download`. Secrets go in `.env` (see [.env.example](.env.example)): the LLM key, `DISCORD_WEBHOOK_URL`,
+`upload`, `download`, `drive`. Secrets go in `.env` (see [.env.example](.env.example)): the LLM key, `DISCORD_WEBHOOK_URL`,
 `TWITCH_OAUTH`, `LLM_PROXY` / `LLM_PROXY_TOKEN`, `TENCENT_DOCS_MCP_TOKEN`, `QQ_BOT_APP_ID` / `QQ_BOT_SECRET`. Everything changed on the web pages is stored in `data/`
-(the roster, the queues, the notification state), which a deploy never touches.
+(the roster, the queues, the notification state), which a deploy never touches; so are the Quark CLI and its authorization (`data/quark/`).
 
 ## License
 

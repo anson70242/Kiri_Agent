@@ -9,7 +9,10 @@ ENV UV_COMPILE_BYTECODE=1 \
     PYTHONUNBUFFERED=1
 
 # ffmpeg: the downloader merges / remuxes video with it.
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg     && rm -rf /var/lib/apt/lists/*
+# nodejs: runs Quark's CLI for drive copies (it needs Node 16+). The CLI itself is not in the
+# image and is not downloaded here: the owner copies it into the data volume by hand
+# (docs/deploy.md, docs/adr/0001-quark-drive-through-the-official-agent-cli.md).
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg nodejs     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
