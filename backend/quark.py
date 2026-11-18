@@ -363,6 +363,7 @@ def load_quark(config: Path) -> Quark | None:
     if not cli.is_file():
         log.warning("drive not available: no Quark CLI at %s", cli)
         return None
+    log.info("drive available: Quark CLI at %s", cli)
     return Quark(cli, load_settings(config)[0].output_dir)
 
 
