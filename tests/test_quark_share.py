@@ -12,7 +12,7 @@ from backend.drive import DriveAuthorizationLapsed
 
 from .helpers import sample_archive
 from .quark_fakes import FILE_ID, PASSCODE, SHARE_URL, SHARED, lapsed_11001, result
-from .test_quark_upload import ZIP, cli, drive, root, upload_command, uploading, write_config, zip_size  # noqa: F401
+from .test_quark_upload import ZIP, cli, drive, root, upload_command, uploading, write_config  # noqa: F401
 
 PATH = f"录播/柊優花/{ZIP}"
 ADDRESS = f"{SHARE_URL}?pwd={PASSCODE}"
@@ -40,7 +40,7 @@ def test_an_uploaded_drive_copy_is_shared_privately_for_good_and_its_link_saved_
 
 def test_a_zip_found_on_the_drive_for_an_archive_without_a_link_is_shared_with_the_listings_id(root, cli):
     folder = sample_archive(root)
-    uploading(cli, files=[("别的.zip", 5), (ZIP, zip_size(root, folder))])
+    uploading(cli, files=[("别的.zip", 5), (ZIP, 123)])
     cli.answers["share"] = [SHARED]
 
     done = drive(root).upload(Archive.from_folder(folder), "录播/柊優花")
@@ -53,7 +53,7 @@ def test_a_zip_found_on_the_drive_for_an_archive_without_a_link_is_shared_with_t
 def test_an_archive_with_a_link_whose_zip_is_there_is_left_alone(root, cli):
     folder = sample_archive(root)
     Archive.from_folder(folder).save(Artifact.DRIVE_LINK, OLD)
-    uploading(cli, files=[(ZIP, zip_size(root, folder))])
+    uploading(cli, files=[(ZIP, 123)])
     cli.answers["share"] = [SHARED]
 
     done = drive(root).upload(Archive.from_folder(folder), "录播/柊優花")

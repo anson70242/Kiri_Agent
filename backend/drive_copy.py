@@ -25,12 +25,21 @@ from backend.sheet import highlights_xlsx
 log = logging.getLogger(__name__)
 
 
+def drive_copy_name(archive: Archive) -> str | None:
+    """The file name of the archive's drive copy, known without building it; None when the
+    archive has no video (and so no drive copy)."""
+    if archive.video is None or archive.stem is None:
+        return None
+    return f"{archive.stem}.zip"
+
+
 @contextmanager
 def drive_copy(archive: Archive, root: Path) -> Iterator[Path | None]:
     """The archive's drive copy, built under the downloads `root`: the zip's path, or None
     when the archive has no video. The zip is removed when the block ends, whatever the
     outcome."""
-    if archive.video is None or archive.stem is None:
+    name = drive_copy_name(archive)
+    if name is None:
         yield None
         return
     place = Downloads(root).drive_copies
@@ -42,7 +51,7 @@ def drive_copy(archive: Archive, root: Path) -> Iterator[Path | None]:
             extra[highlights_xlsx_name(archive)] = highlights_xlsx(archive.read_highlights())
         except (ArtifactMissing, ArtifactDamaged):
             pass
-        zip_path = work / f"{archive.stem}.zip"
+        zip_path = work / name
         with zip_path.open("wb") as out:
             for chunk in stream_zip(files, extra):
                 out.write(chunk)

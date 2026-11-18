@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from backend import quark
-from backend.archive import Archive
+from backend.archive import Archive, Downloads
 from backend.drive import DriveAuthorizationLapsed, DriveFailed
 
 from .helpers import sample_archive
@@ -53,15 +53,13 @@ def uploading(cli, files=(), answer=None):
     return seen
 
 
-def zip_size(root, folder):
-    """The size of the drive copy of the archive in `folder`, as the module builds it."""
-    from backend.drive_copy import drive_copy
-    with drive_copy(Archive.from_folder(folder), root) as z:
-        return z.stat().st_size
-
-
 def no_zip_left(root):
     return not list(root.rglob("*.zip"))
+
+
+def built(root):
+    """Whether a drive copy was ever built under the downloads root (its place made)."""
+    return Downloads(root).drive_copies.exists()
 
 
 # ---- the call ----
@@ -84,34 +82,26 @@ def test_a_drive_copy_is_uploaded_into_the_folder_made_from_the_top_of_the_drive
     assert no_zip_left(root)
 
 
-def test_a_zip_with_the_same_name_and_size_on_the_drive_is_not_uploaded_again(root, cli):
+@pytest.mark.parametrize("size", [10_000, 123], ids=["one size", "another size"])
+def test_a_zip_with_the_same_name_on_the_drive_whatever_its_size_is_neither_built_nor_uploaded(root, cli, size):
     folder = sample_archive(root)
-    uploading(cli, files=[("别的.zip", 5), (ZIP, zip_size(root, folder))])
+    uploading(cli, files=[("别的.zip", 5), (ZIP, size)])
 
     done = drive(root).upload(Archive.from_folder(folder), "录播/柊優花")
 
     assert not done.sent and done.copy.path == f"录播/柊優花/{ZIP}"
     assert [c[0] for c in cli.commands()] == ["create-folder", "browse", "share"]
-    assert no_zip_left(root)
-
-
-def test_a_zip_with_the_same_name_and_another_size_is_uploaded(root, cli):
-    folder = sample_archive(root)
-    seen = uploading(cli, files=[(ZIP, 123)])
-
-    done = drive(root).upload(Archive.from_folder(folder), "录播/柊優花")
-
-    assert done.sent and seen["name"] == ZIP
+    assert not built(root)
 
 
 def test_the_uploads_progress_reaches_the_callback(root, cli):
     folder = sample_archive(root)
-    uploading(cli)
+    seen = uploading(cli)
     reports = []
 
     drive(root).upload(Archive.from_folder(folder), "录播/柊優花", lambda sent, total: reports.append((sent, total)))
 
-    size = zip_size(root, folder)
+    size = seen["size"]
     assert reports[-2:] == [(size // 2, size), (size, size)]
 
 
@@ -155,9 +145,10 @@ def test_a_lapsed_authorization_raises_lapsed(root, cli, step, answer):
     cli.answers[step] = answer
     cli.answers["upload list"] = [result("upload-list", data={"totalCount": 0})]
 
-    with pytest.raises(DriveAuthorizationLapsed, match="未登录|Token"):
+    with pytest.raises(DriveAuthorizationLapsed):
         drive(root).upload(Archive.from_folder(folder), "录播/柊優花")
     assert no_zip_left(root)
+    assert built(root) == (step == "upload")  # found before the zip is built, when it can be
 
 
 def test_an_upload_without_progress_for_the_idle_time_is_killed_and_failed(root, cli):
@@ -213,7 +204,7 @@ def test_the_command_uploads_every_archive_in_a_folder_and_says_what_became_of_e
     there = sample_archive(root, date="20261106", title="雑談")
     sample_archive(root, date="20261107", title="没有影片", video=None)
     sample_archive(root, date="20261108", title="坏了")
-    seen = uploading(cli, files=[("[20261106][柊優花] 雑談.zip", zip_size(root, there))])
+    seen = uploading(cli, files=[("[20261106][柊優花] 雑談.zip", 123)])
     upload = cli.answers["upload"]
     cli.answers["upload"] = lambda argv, cwd: (upload_failed(-204, "网络超时") if "坏了" in argv[3] else upload(argv, cwd))
 

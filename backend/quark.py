@@ -19,7 +19,8 @@ By hand (on the server: `docker compose exec kiri /app/.venv/bin/python -m backe
     python -m backend.quark upload <archive folder or a folder of them> [--folder 录播/某主播]
 
 A drive copy goes into its folder from the top of the drive (made when missing), unless a
-zip of that name and size is there already. The upload has no time limit, but it is killed
+file of the zip's name is there already: the folder is listed before the zip is built, so
+an archive already on the drive costs no disk. The upload has no time limit, but it is killed
 and failed after IDLE_TIMEOUT without a progress line; a failed upload's task record is
 deleted, and `upload resume` is never used (it sends the whole file again).
 """
@@ -46,7 +47,7 @@ from backend.archive import Archive, ArtifactDamaged, ArtifactMissing, Artifact,
 from backend.downloader import load_settings
 from backend.monitor.roster import drive_folder, drive_folder_error, load_roster
 from backend.drive import LOGIN_COMMAND, DriveAuthorizationLapsed, DriveCopy, DriveFailed, DriveProgress
-from backend.drive_copy import drive_copy
+from backend.drive_copy import drive_copy, drive_copy_name
 
 log = logging.getLogger(__name__)
 
@@ -126,7 +127,7 @@ class DriveUpload:
     """What became of one archive's drive copy."""
 
     copy: DriveCopy
-    sent: bool  # False: a zip of that name and size was on the drive already
+    sent: bool  # False: a file of the zip's name was on the drive already
 
 
 class Quark:
@@ -145,36 +146,39 @@ class Quark:
 
     def upload(self, archive: Archive, folder: str, progress: DriveProgress | None = None) -> DriveUpload:
         """Upload the archive's drive copy into `folder` (a path from the top of the drive,
-        made when missing), unless a zip of that name and size is there already, and make its
-        drive link (saved in the archive). An archive whose drive link names that zip, and
+        made when missing), unless a file of the zip's name is there already, and make its
+        drive link (saved in the archive). The folder and its listing come first: the zip is
+        built only when it must be uploaded. An archive whose drive link names that zip, and
         whose zip is there, is left alone. Progress goes to `progress(sent, total)`. Raises
         DriveAuthorizationLapsed, or DriveFailed with the CLI's message (also for an archive
-        without video: nothing is uploaded). A share that fails is not a failed upload: the
-        drive copy comes back without a link, with the reason."""
+        without video, before anything is asked of the CLI). A share that fails is not a
+        failed upload: the drive copy comes back without a link, with the reason."""
+        name = drive_copy_name(archive)
+        if name is None:
+            raise DriveFailed("没有影片，没有可上传的网盘副本")
         try:
             kept = archive.read_drive_link()
         except (ArtifactMissing, ArtifactDamaged, OSError):
             kept = None
+        path = f"{folder}/{name}"
+        # The path from the top of the drive (`--parent-fid 0`); the same folder when it exists.
+        folder_id = str(self._call(["create-folder", "--dir-path", folder, "--parent-fid", "0"]).get("fid") or "")
+        if not folder_id:
+            raise DriveFailed(f"夸克网盘 CLI 没有给出文件夹 {folder} 的 id")
+        # By the name alone: a zip's size differs from one build to the next (its Excel sheet).
+        there = next((f for f in self._children(folder_id) if f.get("filename") == name), None)
+        if there is not None:
+            log.info("drive copy already on the drive: %s", path)
+            if kept is not None and kept.path == path:
+                return DriveUpload(DriveCopy(path, kept.url), sent=False)
+            # A listing's id differs in every listing: good for a share made right now only.
+            return DriveUpload(self._share(archive, str(there.get("fid") or ""), path), sent=False)
         with drive_copy(archive, self.downloads) as zip_path:
-            if zip_path is None:
+            if zip_path is None:  # the video went since the name was known
                 raise DriveFailed("没有影片，没有可上传的网盘副本")
-            path = f"{folder}/{zip_path.name}"
-            size = zip_path.stat().st_size
-            # The path from the top of the drive (`--parent-fid 0`); the same folder when it exists.
-            folder_id = str(self._call(["create-folder", "--dir-path", folder, "--parent-fid", "0"]).get("fid") or "")
-            if not folder_id:
-                raise DriveFailed(f"夸克网盘 CLI 没有给出文件夹 {folder} 的 id")
-            there = next((f for f in self._children(folder_id)
-                          if f.get("filename") == zip_path.name and f.get("size") == size), None)
-            if there is not None:
-                log.info("drive copy already on the drive: %s", path)
-                if kept is not None and kept.path == path:
-                    return DriveUpload(DriveCopy(path, kept.url), sent=False)
-                # A listing's id differs in every listing: good for a share made right now only.
-                return DriveUpload(self._share(archive, str(there.get("fid") or ""), path), sent=False)
             file_id = self._send(zip_path, folder_id, progress)
-            log.info("drive copy uploaded: %s", path)
-            return DriveUpload(self._share(archive, file_id, path), sent=True)
+        log.info("drive copy uploaded: %s", path)
+        return DriveUpload(self._share(archive, file_id, path), sent=True)
 
     def _share(self, archive: Archive, file_id: str, path: str) -> DriveCopy:
         """Share the zip at `path` (drive id `file_id`) as a private link that never expires,

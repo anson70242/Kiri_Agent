@@ -320,7 +320,7 @@ Then a drive link is made: a Quark share address with its extraction code inside
 - Only the first attempt is waited for. If it fails, 「全部处理完成」 goes out at once with the site's own links, together with ❗ 「网盘上传失败」 (drive upload failed);
   the upload is retried in the background, and ☁️ 「网盘上传完成」 (drive upload done) brings the drive link when it gets through.
 - An archive is not deleted from the server until its drive copy is uploaded or given up on.
-- The program never deletes or replaces anything on the drive. A zip that is already there with the same name and size is not uploaded again.
+- The program never deletes or replaces anything on the drive. A zip whose name is already in the folder is neither built nor uploaded again.
 - When the drive's authorization lapses, the owner gets ⚠️ 「网盘授权失效」 (drive authorization lapsed) with the command to run; uploads wait up to 72 hours for it.
 - Uploads run one at a time (about 1.5–2.5 hours for a 10 GB live from the server), and a deploy waits for the one that is running.
 
