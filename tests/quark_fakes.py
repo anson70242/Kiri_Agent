@@ -129,3 +129,10 @@ class FakeCli:
     def commands(self) -> list[list[str]]:
         """The CLI's own arguments of each call."""
         return [argv[2:] for argv, _, _ in self.calls]
+
+
+SHARE_ID = "0a1b2c3d4e5f"
+SHARE_URL = f"https://pan.quark.cn/s/{SHARE_ID}"
+PASSCODE = "Ab3d"
+SHARED = result("share", data={"pwd_id": SHARE_ID, "share_url": SHARE_URL, "passcode": PASSCODE,
+                               "url_type": 2, "expired_type": 1})

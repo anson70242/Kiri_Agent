@@ -60,6 +60,7 @@ from backend.asr import ASRSettings, transcribe
 from backend.drive import LOGIN_COMMAND as DRIVE_LOGIN_COMMAND
 from backend.drive import Drive, DriveAuthorizationLapsed, DriveCopy, DriveFailed
 from backend.drive_copy import remove_leftover_drive_copies
+from backend.quark import load_quark
 from backend.llm import LLMError, chat, load_llm
 from backend.tencent_docs import (
     TencentDocsError, load_credentials, sheet_title, upload_table)
@@ -836,6 +837,7 @@ def load_auto(config: Path) -> AutoDownloader | None:
         analyze=analyzer,
         translate=load_translator(config, cfg) if transcriber else None,
         upload=load_uploader(config) if analyzer else None,  # uploads the analysis
+        drive=load_quark(config),  # None without the CLI: ticked streamers get READY as today
     )
     ad.uploads = roster.upload_map()
     ad.drive_folders = roster.drive_map()

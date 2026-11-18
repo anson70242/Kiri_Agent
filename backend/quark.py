@@ -42,7 +42,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
-from backend.archive import Archive, Downloads, safe_name
+from backend.archive import Archive, ArtifactDamaged, ArtifactMissing, Artifact, Downloads, DriveLink, safe_name
 from backend.downloader import load_settings
 from backend.monitor.roster import drive_folder, drive_folder_error, load_roster
 from backend.drive import LOGIN_COMMAND, DriveAuthorizationLapsed, DriveCopy, DriveFailed, DriveProgress
@@ -129,9 +129,6 @@ class DriveUpload:
     sent: bool  # False: a zip of that name and size was on the drive already
 
 
-NO_LINK_YET = "网盘链接还不会自动生成"  # until the share is made (ticket 06)
-
-
 class Quark:
     """The drive, reached through the CLI script `cli`. Drive copies are built under the
     downloads root `downloads` (see backend.drive_copy). A Quark is the pipeline's `Drive`."""
@@ -148,9 +145,16 @@ class Quark:
 
     def upload(self, archive: Archive, folder: str, progress: DriveProgress | None = None) -> DriveUpload:
         """Upload the archive's drive copy into `folder` (a path from the top of the drive,
-        made when missing), unless a zip of that name and size is there already. Progress
-        goes to `progress(sent, total)`. Raises DriveAuthorizationLapsed, or DriveFailed
-        with the CLI's message (also for an archive without video: nothing is uploaded)."""
+        made when missing), unless a zip of that name and size is there already, and make its
+        drive link (saved in the archive). An archive whose drive link names that zip, and
+        whose zip is there, is left alone. Progress goes to `progress(sent, total)`. Raises
+        DriveAuthorizationLapsed, or DriveFailed with the CLI's message (also for an archive
+        without video: nothing is uploaded). A share that fails is not a failed upload: the
+        drive copy comes back without a link, with the reason."""
+        try:
+            kept = archive.read_drive_link()
+        except (ArtifactMissing, ArtifactDamaged, OSError):
+            kept = None
         with drive_copy(archive, self.downloads) as zip_path:
             if zip_path is None:
                 raise DriveFailed("没有影片，没有可上传的网盘副本")
@@ -160,12 +164,40 @@ class Quark:
             folder_id = str(self._call(["create-folder", "--dir-path", folder, "--parent-fid", "0"]).get("fid") or "")
             if not folder_id:
                 raise DriveFailed(f"夸克网盘 CLI 没有给出文件夹 {folder} 的 id")
-            if any(f.get("filename") == zip_path.name and f.get("size") == size for f in self._children(folder_id)):
+            there = next((f for f in self._children(folder_id)
+                          if f.get("filename") == zip_path.name and f.get("size") == size), None)
+            if there is not None:
                 log.info("drive copy already on the drive: %s", path)
-                return DriveUpload(DriveCopy(path, None, NO_LINK_YET), sent=False)
-            self._send(zip_path, folder_id, progress)
+                if kept is not None and kept.path == path:
+                    return DriveUpload(DriveCopy(path, kept.url), sent=False)
+                # A listing's id differs in every listing: good for a share made right now only.
+                return DriveUpload(self._share(archive, str(there.get("fid") or ""), path), sent=False)
+            file_id = self._send(zip_path, folder_id, progress)
             log.info("drive copy uploaded: %s", path)
-            return DriveUpload(DriveCopy(path, None, NO_LINK_YET), sent=True)
+            return DriveUpload(self._share(archive, file_id, path), sent=True)
+
+    def _share(self, archive: Archive, file_id: str, path: str) -> DriveCopy:
+        """Share the zip at `path` (drive id `file_id`) as a private link that never expires,
+        and note the drive link in the archive. Raises DriveAuthorizationLapsed only: a share
+        that fails otherwise gives the drive copy without a link, with the reason."""
+        if not file_id:
+            return DriveCopy(path, None, "夸克网盘 CLI 没有给出文件的 id，没法分享")
+        try:
+            # --url-type 2: private, Quark makes the extraction code; --expired-type 1: never expires.
+            data = self._call(["share", file_id, "--url-type", "2", "--expired-type", "1"])
+        except DriveFailed as e:
+            log.warning("drive copy uploaded but not shared: %s: %s", path, e)
+            return DriveCopy(path, None, str(e))
+        url, code = str(data.get("share_url") or ""), str(data.get("passcode") or "")
+        if not url or not code:
+            return DriveCopy(path, None, "夸克网盘 CLI 没有给出分享地址或提取码")
+        link = DriveLink(f"{url}{'&' if '?' in url else '?'}pwd={code}", code, path, datetime.now(timezone.utc))
+        try:
+            archive.save(Artifact.DRIVE_LINK, link)
+        except (OSError, ValueError) as e:
+            log.warning("drive link of %s not noted in the archive: %s", path, e)
+        log.info("drive link made: %s", path)
+        return DriveCopy(path, link.url)
 
     def _children(self, folder_id: str) -> list[dict[str, Any]]:
         """Every file and folder directly in the folder: `browse --all` writes them to a JSONL
@@ -191,10 +223,12 @@ class Quark:
                     children.append(entry)
             return children
 
-    def _send(self, zip_path: Path, folder_id: str, progress: DriveProgress | None) -> None:
-        """`upload`; after a failed one, its task record is deleted (`upload resume` is never
-        used: it sends the whole file again)."""
+    def _send(self, zip_path: Path, folder_id: str, progress: DriveProgress | None) -> str:
+        """`upload`, and the uploaded file's id ("" when the CLI gave none). After a failed
+        upload its task record is deleted (`upload resume` is never used: it sends the whole
+        file again)."""
         records: list[str] = []
+        file_ids: list[str] = []
 
         def note(obj: dict[str, Any]) -> None:
             data = obj.get("data") if isinstance(obj.get("data"), dict) else {}
@@ -203,12 +237,16 @@ class Quark:
                 progress(int(data.get("current") or 0), int(total) if isinstance(total, int | float) else None)
             elif obj["type"] == "list" and data.get("recordId"):
                 records.append(str(data["recordId"]))
+                if data.get("fileId"):
+                    file_ids.append(str(data["fileId"]))
 
         try:
-            self._call(["upload", str(zip_path), "--parent-fid", folder_id], on_object=note)
+            data = self._call(["upload", str(zip_path), "--parent-fid", folder_id], on_object=note)
         except (DriveFailed, DriveAuthorizationLapsed):
             self._forget_upload(zip_path.name, records)
             raise
+        fids = data.get("fids")
+        return file_ids[-1] if file_ids else str(fids[0]) if isinstance(fids, list) and fids else ""
 
     def _forget_upload(self, name: str, records: list[str]) -> None:
         """Delete the task records of a failed upload of `name`: the ones it named, else (it
@@ -325,6 +363,7 @@ def load_quark(config: Path) -> Quark | None:
     if not cli.is_file():
         log.warning("drive not available: no Quark CLI at %s", cli)
         return None
+    log.info("drive available: Quark CLI at %s", cli)
     return Quark(cli, load_settings(config)[0].output_dir)
 
 
@@ -414,6 +453,7 @@ def upload_command(drive: Quark, config: Path, path: Path, folder: str | None) -
             failed = True
             continue
         print(f"{'已上传' if done.sent else '已在网盘'}：{zip_name} → {done.copy.path}")
+        print(f"  网盘链接：{done.copy.link}" if done.copy.link else f"  没有网盘链接：{done.copy.reason}")
     return 1 if failed else 0
 
 
