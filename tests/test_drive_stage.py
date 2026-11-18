@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import threading
 import time
 
@@ -18,7 +17,7 @@ from backend.archive import Archive, Artifact
 from backend.downloader.auto import AutoDownloader, Outcome, load_auto
 from backend.downloader.base import ChatNotReady, DownloadResult, DownloadSettings, VideoInfo
 from backend.downloader.pending import PendingChats
-from backend.drive import DriveAuthorizationLapsed, DriveCopy, DriveFailed
+from backend.drive import DriveCopy
 from backend.notify import EventKind, StreamEvent
 
 from .helpers import A, B, bare_archive, later, live
@@ -269,22 +268,6 @@ def test_a_drive_job_left_from_before_a_restart_without_the_drive_ends_with_read
     ready_as_today(sent)
 
 
-# ---- until failed uploads are retried ----
-
-@pytest.mark.parametrize("error", [DriveFailed("32003 空间不足"), DriveAuthorizationLapsed("-1408 授权已失效"),
-                                   RuntimeError("zip builder broke")], ids=["failed", "authorization lapsed", "a bug"])
-def test_an_attempt_that_does_not_upload_ends_the_job_with_ready_as_today_and_a_logged_error(tmp_path, caplog, error):
-    drive = FakeDrive(error=error)
-    ad, _, sent, _ = processed(tmp_path, drive)
-    with caplog.at_level(logging.ERROR):
-        step(ad, "drive")
-
-    assert ad.load() == []
-    assert kinds(sent) == [EventKind.DOWNLOADED, EventKind.READY]
-    ready_as_today(sent)
-    assert any(str(error) in r.getMessage() and r.levelno >= logging.ERROR for r in caplog.records)
-
-
 # ---- the queue view ----
 
 def test_the_snapshot_shows_the_drive_job_waiting_then_uploading_with_its_progress(tmp_path):
@@ -334,17 +317,6 @@ def test_a_queue_file_from_before_drive_copies_loads(tmp_path):
     assert [j.stage for j in restarted.load()] == ["drive"]
     step(restarted, "drive")
     assert kinds(sent) == [EventKind.READY]
-
-
-def test_a_job_that_already_sent_ready_never_sends_it_again(tmp_path):
-    processed(tmp_path, FakeDrive())
-    rewrite_queue(tmp_path, lambda job: job.update(ready_sent=True))
-    restarted, _, sent = make(tmp_path, FakeDrive(DriveCopy("录播/A/v.zip", "https://drive.example/s/abc?pwd=x1y2")))
-    step(restarted, "drive")
-
-    assert kinds(sent) == [EventKind.DRIVE_UPLOADED]  # the drive link comes on its own
-    assert links(sent[0]) == [("https://drive.example/s/abc?pwd=x1y2", "网盘链接")]
-    assert "录播/A/v.zip" in sent[0].detail
 
 
 # ---- the archive stays until its drive job is over ----

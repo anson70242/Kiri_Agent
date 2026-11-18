@@ -31,7 +31,11 @@ Rules:
   ticks 自动上传到夸克网盘, when the drive is available and the archive has a video, a drive
   job is queued instead, in the same save: it waits while the live's chat is still in the
   chat retry queue, uploads the drive copy, and sends READY once, with the drive link in
-  place of the site's zip when there is one (backend/drive.py is the drive's side).
+  place of the site's zip when there is one (backend/drive.py is the drive's side). When
+  its first try does not upload, READY goes out at once with the site's links, with
+  网盘上传失败; it is retried like any stage and only its give-up is told again. A lapsed
+  authorization is neither an attempt nor an error: 网盘授权失效 once per lapse, and each
+  job waits up to DRIVE_LAPSE_GIVE_UP for the owner to authorize again.
 - Jobs live in `state_file`, so a restart resumes them (yt-dlp resumes partial files).
 """
 
@@ -53,6 +57,7 @@ from urllib.parse import quote
 from backend.analysis import AnalysisSettings, analyze, is_singing_live, song_naming
 from backend.archive import Archive, Artifact, ArtifactDamaged, ArtifactMissing, Downloads, file_date, read_file
 from backend.asr import ASRSettings, transcribe
+from backend.drive import LOGIN_COMMAND as DRIVE_LOGIN_COMMAND
 from backend.drive import Drive, DriveAuthorizationLapsed, DriveCopy, DriveFailed
 from backend.llm import LLMError, chat, load_llm
 from backend.tencent_docs import (
@@ -91,6 +96,7 @@ class Job:
     live_ended_at: float | None = None  # when the live ended (epoch seconds); None: not known
     unpublished_notice_sent: bool = False  # the owner was told the replay is not published
     ready_sent: bool = False  # drive stage: "全部处理完成" went out for this live
+    lapsed_since: float | None = None  # drive stage: its first try of the current lapse
 
     @property
     def stream_key(self) -> str:
@@ -122,6 +128,7 @@ class Job:
             "live_ended_at": self.live_ended_at,
             "unpublished_notice_sent": self.unpublished_notice_sent,
             "ready_sent": self.ready_sent,
+            "lapsed_since": self.lapsed_since,
         }
 
     @classmethod
@@ -183,6 +190,9 @@ class AutoDownloader:
         self.uploads: dict[str, str] = {}  # streamer id -> Tencent Docs spreadsheet id (the gear)
         self.drive_folders: dict[str, str] = {}  # streamer id -> folder on the Quark drive (the gear)
         self.site_url = ""  # the dashboard's address (SITE_URL in .env): links in messages
+        # The owner was told the drive's authorization lapsed; any upload that succeeds ends
+        # the lapse. Not saved: after a restart a lapse is told once more.
+        self._lapse_alerted = False
         self.notify = notify
         self.clock = clock
         # One worker per stage, so a long transcription never holds up downloads.
@@ -562,41 +572,68 @@ class AutoDownloader:
 
     def _finish_drive(self, job: Job, outcome: Outcome) -> None:
         """READY goes out once per live, when the drive job's first attempt ends: with the
-        drive link in place of the site's zip when the drive copy got one. Until failed
-        uploads are retried, every attempt ends the job; a failure is only logged."""
+        drive link in place of the site's zip when the drive copy got one, else with the
+        site's own links. A failed upload is retried; only its first failure is told."""
         jobs = self.load()
         current = next((j for j in jobs if j.key == job.key), job)
         rest = [j for j in jobs if j.key != job.key]
         name = job.status.streamer.name
+        now = self.clock()
         if outcome.kind == "wait":  # the chat is still awaited: neither an attempt nor an error
-            current.next_try = self.clock() + self.retry_interval
+            current.next_try = now + self.retry_interval
             self.save(rest + [current])
             return
-        current.attempts += 1
+        if outcome.kind != "lapsed":  # a lapsed try is neither an attempt nor an error
+            current.attempts += 1
+            current.lapsed_since = None
         current.last_error = outcome.message
         copy = outcome.drive
-        if outcome.kind == "lapsed":
-            log.error("drive copy not uploaded, the drive's authorization lapsed: %s: %s", name, outcome.message)
-        elif outcome.kind == "error":
-            log.error("drive copy not uploaded: %s: %s", name, outcome.message)
-        elif copy:
-            log.info("drive copy uploaded: %s %s", name, copy.path)
+        first = not current.ready_sent
+        keep = False
         assert current.video  # a drive job is only queued for a live with a video
         video = Path(current.video)
         events: list[tuple[EventKind, str, tuple[Link, ...]]] = []
-        if not current.ready_sent:
+        if first:
             links = ready_links(video, self.site_url, self.settings.output_dir)
             if copy and copy.link:
                 links = (Link(DRIVE_LABEL, copy.link), *links[1:])
             events.append((EventKind.READY, ready_detail(video), links))
-        if copy and (current.ready_sent or not copy.link):  # READY did not carry the drive link
-            detail = f"网盘路径：`{copy.path}`"
-            if not copy.link:
-                detail += f"\n没有网盘链接：{copy.reason}"
-            events.append((EventKind.DRIVE_UPLOADED, detail,
-                           (Link(DRIVE_LINK_LABEL, copy.link),) if copy.link else ()))
+        if outcome.kind == "lapsed":
+            log.warning("drive copy not uploaded, the drive's authorization lapsed: %s: %s", name, outcome.message)
+            if current.lapsed_since is None:
+                current.lapsed_since = now
+            keep = now - current.lapsed_since < DRIVE_LAPSE_GIVE_UP
+            if not keep:
+                events.append((EventKind.DRIVE_FAILED, f"网盘授权失效后等了 {DRIVE_LAPSE_GIVE_UP / 3600:g} 小时"
+                               "仍没有重新授权，放弃上传这场录播。", ()))
+            elif first:
+                events.append((EventKind.DRIVE_FAILED, "网盘授权已失效，这场录播没能上传；重新授权后会自动继续上传"
+                               f"（最多等 {DRIVE_LAPSE_GIVE_UP / 3600:g} 小时）。", ()))
+            if not self._lapse_alerted:  # once per lapse, whichever job finds it
+                self._lapse_alerted = True
+                events.append((EventKind.DRIVE_AUTHORIZATION_LAPSED,
+                               f"夸克网盘的授权失效了，网盘上传都在等待。在服务器上重新授权：\n`{DRIVE_LOGIN_COMMAND}`", ()))
+        elif outcome.kind == "error":
+            current.errors += 1
+            log.warning("drive copy not uploaded (%d/%d): %s: %s", current.errors, self.max_errors, name, outcome.message)
+            keep = current.errors < self.max_errors
+            if not keep:
+                events.append((EventKind.DRIVE_FAILED, f"试了 {current.attempts} 次网盘上传仍失败，放弃上传这场录播：\n"
+                               f"```{outcome.message[:1500]}```", ()))
+            elif first:
+                events.append((EventKind.DRIVE_FAILED, f"网盘上传失败，之后会自动重试：\n```{outcome.message[:1500]}```", ()))
+        elif copy:
+            log.info("drive copy uploaded: %s %s", name, copy.path)
+            self._lapse_alerted = False  # the drive is authorized: a later lapse is a new one
+            if not first or not copy.link:  # READY did not carry the drive link
+                detail = f"网盘路径：`{copy.path}`"
+                if not copy.link:
+                    detail += f"\n没有网盘链接：{copy.reason}"
+                events.append((EventKind.DRIVE_UPLOADED, detail,
+                               (Link(DRIVE_LINK_LABEL, copy.link),) if copy.link else ()))
         current.ready_sent = True
-        self.save(rest)
+        current.next_try = now + self.retry_interval
+        self.save(rest + [current] if keep else rest)
         for kind, detail, links in events:
             self._send(kind, job, detail, links)
 
@@ -677,6 +714,7 @@ READY_ARTIFACTS = [("影片", Artifact.VIDEO), ("弹幕", Artifact.CHAT), ("日�
 PAGE_LABEL = "录播页面"
 DRIVE_LABEL = "全部下载（夸克网盘：影片、弹幕、中日字幕 SRT、路灯表）"  # READY's first link, for a drive copy
 DRIVE_LINK_LABEL = "网盘链接"
+DRIVE_LAPSE_GIVE_UP = 72 * 3600  # a drive job waits this long for the owner to authorize again
 SHEET_LABEL = "腾讯文档路灯表"
 
 
