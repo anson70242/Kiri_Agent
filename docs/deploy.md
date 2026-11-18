@@ -209,6 +209,115 @@ docker compose exec kiri /app/.venv/bin/python -m backend.downloader --info <回
 **失效了怎么办**：自动下载放弃时，失败通知会写「可能是 TwitCasting 的登录 cookies 过期：更新服务器上的 `data/twitcasting_cookies.txt`」。
 照上面重新导出一份，覆盖旧文件即可，不用重启服务；在修好之前 TwitCasting 回放都下载不了。
 
+## 夸克网盘（网盘副本）
+
+主播的齿轮里勾了「自动上传到夸克网盘」，每场录播处理完，程序就把它的网盘副本（一个 zip：影片、弹幕、中日字幕 SRT、路灯表 Excel）
+传到夸克网盘，并做一个网盘链接（带提取码、永久有效），放进「全部处理完成」和录播页的「☁ 网盘链接」。
+上传靠夸克官方的命令行工具（CLI，`quarkclouddrive` 1.0.25，一个 Node 程序）；为什么用它、要承担什么风险，见
+[ADR 0001](adr/0001-quark-drive-through-the-official-agent-cli.md)（英文）。
+
+- **CLI 不在仓库里，也不在镜像里**（仓库是公开的）。镜像只带 Node；CLI 要你手动放进数据卷 `kiri_kiri-data`，
+  容器内的位置是 `/app/data/quark/quarkclouddrive-1.0.25/`（`config.json` 的 `drive` 段里的 CLI 路径，默认就是这里）。
+- **授权存在 CLI 自己的文件夹里**：`quarkclouddrive-1.0.25/claudecode/`（token、设备 ID、上传记录）。
+  所以授权跟着数据卷走，部署、重建容器都不会丢。这个文件夹等于网盘账号的登录态：不要提交到 git，也不要发给别人。
+- **容器的主机名固定是 `kiri`**（`docker-compose.yml` 的 `hostname`，不要改）。第一次授权时，夸克认的设备 ID 是从主机名算出来的，
+  之后就存在 `claudecode/` 里；主机名不变，以后重新授权也还是同一台设备。
+- **还没放 CLI** 时一切照旧：勾了网盘的主播只在日志里留一条警告，「全部处理完成」照常发、用网站自己的下载链接。
+  **放了 CLI 但还没授权**时，第一场要上传的录播会发「网盘授权失效」，照下面第 2 步授权即可。
+- **永远不要跑 CLI 自带的 `install.sh` 和 `uninstall.sh`**：`install.sh` 会联网下载别的版本覆盖它（还会自己装 Node），
+  `uninstall.sh` 会撤销授权、删掉 `claudecode/`。所以第 1 步放进去时就把这两个文件删掉。程序也从不更新 CLI。
+
+下面的命令都在服务器的 `~/kiri` 里跑。
+
+**1. 把 CLI 放进数据卷**
+
+CLI 来自夸克官方的 skill 包，文件夹名是 `quarkclouddrive-1.0.25`（里面有 `SKILL.md`、`scripts/quark-drive.cjs`）。
+固定用这个版本：程序是照 1.0.25 的输出写和测试的。在仓库外面留一份（例如本机 `reference/`，它被 git 忽略）。
+
+```sh
+scp -r quarkclouddrive-1.0.25 HK-Server:~/        # 本机 PowerShell，在放这个文件夹的目录里跑
+```
+
+```sh
+cd ~/kiri                                         # 以下在服务器上
+docker compose exec kiri mkdir -p /app/data/quark
+docker compose cp ~/quarkclouddrive-1.0.25 kiri:/app/data/quark/
+docker compose exec -u root kiri sh -c 'rm -f /app/data/quark/quarkclouddrive-1.0.25/scripts/install.sh /app/data/quark/quarkclouddrive-1.0.25/scripts/uninstall.sh && chown -R app:app /app/data/quark'
+rm -r ~/quarkclouddrive-1.0.25
+docker compose exec kiri node --version           # 要 v16 以上
+```
+
+`chown` 不能省：`docker compose cp` 放进去的文件归 root，而 CLI 要在自己的文件夹里建 `claudecode/` 写授权，得归容器里的 `app` 用户才写得进去。
+
+**2. 授权**
+
+```sh
+docker compose exec kiri /app/.venv/bin/python -m backend.quark login
+```
+
+它会印出一个授权链接。在手机或电脑的浏览器里打开，用要存录播的那个夸克账号登录并同意授权，页面会给你一个授权码。马上贴回来：
+
+```sh
+docker compose exec kiri /app/.venv/bin/python -m backend.quark login --code <授权码>
+```
+
+授权码等于一次登录：不要把它贴到聊天、issue 或任何文件里。
+
+已经有一份授权好的 `claudecode/`（例如之前在另一个主机名也是 `kiri` 的容器里授权过）时，可以不重新授权：
+把那个 `claudecode` 文件夹照第 1 步的方式 `docker compose cp` 到 `/app/data/quark/quarkclouddrive-1.0.25/` 里，
+再跑一次第 1 步的 `chown`，然后用第 3 步检查。之后就别再用原来那份了。
+
+**3. 检查**
+
+```sh
+docker compose exec kiri /app/.venv/bin/python -m backend.quark status
+```
+
+印出已授权、会员类型、已用 / 总空间和会员到期日就是成功（不会印出账号昵称）。
+没授权或授权失效时它会这么说，照第 2 步重新授权。之后就可以在齿轮里给主播勾「自动上传到夸克网盘」了；
+网盘文件夹从网盘根目录算起，留空就是 `录播/<主播名>`，不存在会自动建。
+
+**4. 手动上传以前的录播**
+
+勾选之前就处理完的录播不会自动上传。还在服务器上的，可以手动传：
+
+```sh
+docker compose exec kiri /app/.venv/bin/python -m backend.quark upload "/app/downloads/<主播>/<YYYYMMDD>/<标题>"
+docker compose exec kiri /app/.venv/bin/python -m backend.quark upload "/app/downloads/<主播>/<YYYYMMDD>" --folder 直播录像/某主播
+```
+
+第一行传一场录播，第二行传一个文件夹里的每一场（`--folder` 指定网盘文件夹）。不写 `--folder` 时，用名单里同名主播齿轮里的文件夹，
+没有就是 `录播/<主播>`。每传完一场就印出它的网盘链接，并记进那场录播（录播页会出现「☁ 网盘链接」）。
+网盘上已经有同名、同大小的 zip 就跳过，所以跑两次也没关系。
+
+- 很慢：实测约 1.2–2 MB/s，10 GB 的录播要一个半到两个半小时。传大的录播时在 `tmux` 里跑，免得 SSH 断线把它中断。
+- 部署检查看不到手动上传：这时部署（或 `docker compose restart`）会把它打断，打断的那场在网盘上不会留下文件。部署完再跑一次同一条命令就行。
+- 已经被保留数量删掉的录播传不了。
+
+**5. 收到「网盘授权失效」时**
+
+夸克不再接受这份授权了（过期、在夸克 App 里被撤销，或还没授权过）。这时网盘上传都在等待，什么都不会丢：
+
+1. 照第 2 步重新授权（`login`，打开链接拿授权码，`login --code`），再用第 3 步的 `status` 确认。
+2. 不用重启。等待中的上传会在下一次重试时（每 15 分钟，`download.auto.retry_minutes`）自己继续，传完照常发「网盘上传完成」和网盘链接。
+3. 失效后 72 小时内没重新授权，那几场会以「网盘上传失败」放弃；放弃的录播之后会按保留数量照常清理，
+   所以要在它被删掉之前用第 4 步手动传。
+
+一份授权能用多久没有确定：实测授权里的长期 token 写着授权后 180 天到期，但 CLI 自动刷新 token 时这个日期会不会往后推，还不知道（还在观察）。
+不要指望它；失效时会收到「网盘授权失效」。
+
+**6. 手动换成新版本的 CLI**
+
+程序不会自己更新 CLI，只有确实需要（例如夸克不再接受 1.0.25）时才手动换。新版本的命令或输出可能变了，换完一定要检查。
+
+1. 等到没有正在上传的录播（录播页没有「网盘上传 xx%」）。
+2. 照第 1 步把新版本的文件夹（例如 `quarkclouddrive-1.0.26`）放进 `/app/data/quark/`，同样删掉 `install.sh` / `uninstall.sh`。
+3. 把旧版本的授权（`claudecode` 文件夹）复制过去，旧文件夹先留着：
+   `docker compose exec kiri cp -a /app/data/quark/quarkclouddrive-1.0.25/claudecode /app/data/quark/quarkclouddrive-1.0.26/`
+4. 在本地把 `config.json` 的 `drive` 段里的 CLI 路径改成新文件夹，push 到 main，等自动部署。
+5. 用第 3 步的 `status` 检查，再用第 4 步手动传一场小的录播试试。都正常后，删掉旧文件夹（直接 `rm -r`，**不要**跑它的 `uninstall.sh`，那会撤销授权）。
+   不正常就把 `config.json` 的路径改回旧版本，再部署一次。
+
 ## LLM 代理（经日本电脑调用 OpenAI / Claude / Gemini）
 
 这些 API 不对香港开放。服务器只让 LLM 请求经 Tailscale 走日本那台电脑出去，
@@ -261,3 +370,4 @@ curl -s -o /dev/null -w "%{http_connect}\n" -x http://100.126.34.25:8118 https:/
 3. 建部署目录，放好 `.env`（权限 600）。
 4. 按上面的表格填 GitHub secrets，`DEPLOY_PATH` 设成部署目录。
 5. 装 Tailscale 并跑 `tailscale serve --bg 8770`。
+6. 第一次部署后，要用夸克网盘就照「夸克网盘（网盘副本）」放 CLI、授权。

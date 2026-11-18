@@ -6,13 +6,16 @@ services:
     build: .
     image: kiri-agent:latest
     container_name: kiri
+    # Fixed: Quark's CLI works out its device id from the host name when it is first
+    # authorized, so authorizing again later is the same device (docs/deploy.md).
+    hostname: kiri
     restart: unless-stopped
     # Secrets (DISCORD_WEBHOOK_URL, ...) live in .env on the server, never in the image.
     env_file:
       - path: .env
         required: false
     volumes:
-      - kiri-data:/app/data  # notify state, chat retry queue, youtube_cookies.txt
+      - kiri-data:/app/data  # notify state, chat retry queue, cookies, quark/ (the drive's CLI and its authorization)
       - kiri-downloads:/app/downloads
     ports:
       # Server-local only: reach it from your devices through `tailscale serve`
