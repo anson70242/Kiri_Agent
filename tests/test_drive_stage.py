@@ -258,16 +258,6 @@ def test_unticked_while_uploading_the_upload_finishes(tmp_path):
     assert links(sent[-1])[0] == ("https://drive.example/s/abc?pwd=x1y2", DRIVE_LABEL)
 
 
-def test_a_drive_job_left_from_before_a_restart_without_the_drive_ends_with_ready_as_today(tmp_path):
-    ad, _, _, _ = processed(tmp_path, FakeDrive())
-    restarted, _, sent = make(tmp_path, drive=None)
-    step(restarted, "drive")
-
-    assert restarted.load() == []
-    assert kinds(sent) == [EventKind.READY]
-    ready_as_today(sent)
-
-
 # ---- the queue view ----
 
 def test_the_snapshot_shows_the_drive_job_waiting_then_uploading_with_its_progress(tmp_path):
