@@ -225,32 +225,42 @@ const clock = ts => new Date(ts * 1000).toLocaleTimeString([], { hour: "2-digit"
 const dur = s => s >= 3600 ? `${Math.floor(s / 3600)} 小时 ${Math.floor(s / 60) % 60} 分`
   : s >= 60 ? `${Math.floor(s / 60)} 分 ${Math.floor(s % 60)} 秒` : `${Math.round(s)} 秒`;
 
+// What each stage of a live's pipeline is called in the queue box: while it waits, while it
+// runs, and, for a stage that reports progress, before its percent once there is one.
+const STAGE_LABELS = {
+  download: { waiting: "等待下载", doing: "下载 准备中", progress: "下载中" },
+  transcribe: { waiting: "等待转写", doing: "转写字幕中" },
+  analyze: { waiting: "等待路灯表分析", doing: "路灯表分析中" },
+  translate: { waiting: "等待中文字幕翻译", doing: "中文字幕翻译中" },
+  upload: { waiting: "等待上传腾讯文档", doing: "上传腾讯文档中" },
+  drive: { waiting: "等待网盘上传", doing: "网盘上传 准备中", progress: "网盘上传" },
+};
+const stageLabels = stage => STAGE_LABELS[stage] || { waiting: "等待处理", doing: "处理中" };
+
 function drawDownloads() {
   const box = document.getElementById("downloads");
   if (!box || !downloads) return;
-  const { active, queue } = downloads;  // active: up to one job per stage (download, transcription, drive upload...)
+  const { active, queue } = downloads;  // active: up to one job per stage, so a live can have several
   const busy = new Set(active.map(a => `${a.stage} ${a.url}`));
   const waiting = queue.filter(j => !busy.has(`${j.stage} ${j.url}`));
   let html = "";
   for (const a of active) {
-    const pct = a.percent;
+    const label = stageLabels(a.stage), pct = a.percent;
     const parts = [];
     if (a.total) parts.push(`${size(a.downloaded)} / ${size(a.total)}`);
     else if (a.downloaded) parts.push(size(a.downloaded));
     if (a.speed) parts.push(`${size(a.speed)}/s`);
     if (a.eta != null) parts.push(`剩余 ${dur(a.eta)}`);
     html += `<div class="job active"><div class="head">
-        <span class="chip dl">${a.stage === "transcribe" ? "转写字幕中"
-          : a.stage === "drive" ? (pct == null ? "网盘上传 准备中" : `网盘上传 ${pct.toFixed(1)}%`)
-          : pct == null ? "准备中" : `下载中 ${pct.toFixed(1)}%`}</span>
+        <span class="chip dl">${label.progress && pct != null ? `${label.progress} ${pct.toFixed(1)}%` : label.doing}</span>
         <span class="creator">${esc(a.name)}</span>
         <span class="title">${esc(a.title || a.url)}</span>
         <span class="meta">${esc(parts.join(" · "))}</span></div>
-      ${a.stage === "transcribe" ? `<div class="meta">已用 ${dur(Date.now() / 1000 - a.started)}（4 小时直播约 20 分钟）</div>`
-        : `<div class="bar"><div style="width:${pct ?? 0}%"></div></div>`}</div>`;
+      ${label.progress ? `<div class="bar"><div style="width:${pct ?? 0}%"></div></div>`
+        : `<div class="meta">已用 ${dur(Date.now() / 1000 - a.started)}${a.stage === "transcribe" ? "（4 小时直播约 20 分钟）" : ""}</div>`}</div>`;
   }
   html += waiting.map(j => `<div class="job"><div class="head">
-      <span class="chip" style="background:var(--off-bg);color:var(--off)">${j.stage === "transcribe" ? "等待转写" : j.stage === "drive" ? "等待网盘上传" : "等待下载"}</span>
+      <span class="chip" style="background:var(--off-bg);color:var(--off)">${stageLabels(j.stage).waiting}</span>
       <span class="creator">${esc(j.name)}</span>
       <span class="title">${esc(j.title || j.url)}</span>
       <span class="meta">${j.next_try * 1000 > Date.now() ? `下次尝试 ${clock(j.next_try)}` : "马上开始"}${j.attempts ? ` · 已试 ${j.attempts} 次` : ""}</span></div>
