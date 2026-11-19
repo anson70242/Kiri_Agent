@@ -117,7 +117,7 @@ class QQGateway:
         member posts a file in a group, so we learn whether a group file reaches the bot as an
         attachment (which event, which fields, how long its url lives). Logged: every group event
         this module does not handle, and any message with attachments; the event's field names and
-        the attachments, never the message text."""
+        the attachments, and a message that is only a file in full; never a member's text."""
         attachments = d.get("attachments") or []
         if t in HANDLED_EVENTS and not attachments:
             return
@@ -126,6 +126,10 @@ class QQGateway:
                  sorted(d), len(attachments))
         for a in attachments:
             log.info("qq probe: attachment %s", json.dumps(a, ensure_ascii=False))
+        if attachments and all(a.get("content_type") == "file" for a in attachments):
+            # A file carries no text of the member's own, so the whole message can be shown: does any
+            # field say which folder of the group files it went to?
+            log.info("qq probe: file message %s", json.dumps(d, ensure_ascii=False))
 
     def _set_status(self, group: str, status: str, why: str) -> None:
         g = self.groups.get(group) or self.groups.register(group)[0]

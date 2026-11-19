@@ -201,15 +201,15 @@ def test_a_file_posted_in_a_group_is_logged_with_its_attachment_and_never_its_te
                   "url": "https://files.example/notes.zip?rkey=K"}
 
     with caplog.at_level("INFO", logger="backend.notify.qq_gateway"):
-        dispatch(gw, "GROUP_MESSAGE_CREATE", {"group_openid": "G1", "id": "MSG1", "content": "private words",
+        dispatch(gw, "GROUP_MESSAGE_CREATE", {"group_openid": "G1", "id": "MSG1", "content": "",
                                               "attachments": [attachment]})
-        dispatch(gw, "GROUP_MESSAGE_CREATE", {"group_openid": "G1", "id": "MSG2", "content": "more words"})
+        dispatch(gw, "GROUP_MESSAGE_CREATE", {"group_openid": "G1", "id": "MSG2", "content": "private words"})
 
     assert "GROUP_MESSAGE_CREATE" in caplog.text and "1 attachment(s)" in caplog.text
     for value in ("notes.zip", "1234", "https://files.example/notes.zip?rkey=K", "content_type"):
         assert value in caplog.text
     assert "0 attachment(s)" in caplog.text  # a plain message shows that the event arrives at all
-    assert "private words" not in caplog.text and "more words" not in caplog.text
+    assert "private words" not in caplog.text
     assert fake.messages == [] and alerts == [] and groups.get("G1") is None  # the bot stays silent
 
 
@@ -223,3 +223,19 @@ def test_a_mention_with_a_file_is_logged_too_and_a_plain_mention_is_not(tmp_path
                                                  "attachments": [{"content_type": "file", "filename": "a.pdf"}]})
     assert "a.pdf" in caplog.text
     assert len(fake.messages) == 1  # the mention is answered as before (the second one is not from an admin)
+
+
+def test_a_file_message_is_logged_whole_so_a_folder_would_show_and_a_picture_keeps_its_caption_private(tmp_path, caplog):
+    """Second question of the probe: does the event say which folder of the group files the file went to?"""
+    gw, _, _ = gateway(tmp_path, FakeQQ())
+    with caplog.at_level("INFO", logger="backend.notify.qq_gateway"):
+        dispatch(gw, "GROUP_MESSAGE_CREATE", {
+            "group_openid": "G1", "id": "MSG1", "content": "", "message_type": 7,
+            "message_scene": {"source": "default", "ext": ["folder=subs"]},
+            "attachments": [{"content_type": "file", "filename": "a.srt"}]})
+        dispatch(gw, "GROUP_MESSAGE_CREATE", {
+            "group_openid": "G1", "id": "MSG2", "content": "a caption", "message_scene": {"source": "default"},
+            "attachments": [{"content_type": "image/png", "filename": "a.png"}]})
+    assert "folder=subs" in caplog.text and '"message_type": 7' in caplog.text  # every field of a file message
+    assert caplog.text.count("qq probe: file message") == 1  # the picture's message is not logged whole
+    assert "a caption" not in caplog.text
