@@ -2,9 +2,16 @@
 which groups it is in.
 
 QQ has no "list my groups" API: a group's openid only arrives in events. So:
-- GROUP_ADD_ROBOT (bot added) / GROUP_AT_MESSAGE_CREATE (bot @-mentioned): register the
-  group (new ones start switched off) and reply with what it is subscribed to. After the
-  first time, only the group owner / admins get that reply (no spam from every member).
+- GROUP_ADD_ROBOT (bot added) / a mention of the bot: register the group (new ones start
+  switched off) and reply with what it is subscribed to.
+- A mention arrives as GROUP_AT_MESSAGE_CREATE in a group that sends the bot only its
+  mentions, and as an ordinary GROUP_MESSAGE_CREATE marking the bot in `mentions` in a
+  group that sends it everything ("接收所有消息"). Both are handled alike: after a group's
+  first mention, the mention's first word is a command (`COMMANDS`): 订阅 (the status,
+  for the group owner / admins only, so not every member can make the bot repeat it) or
+  帮助 (the commands, for anyone); anything else gets the help.
+- Any other message is never answered and registers nothing. Nothing of a message's text
+  is logged: in a group that sends everything, that is the members' chat.
 - GROUP_DEL_ROBOT (bot removed) -> "removed"; GROUP_MSG_REJECT (proactive messages
   turned off) -> "muted"; both stop deliveries and raise one alert (Discord).
   GROUP_MSG_RECEIVE (turned back on) -> "active".
@@ -22,8 +29,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -52,6 +61,25 @@ def subscribed_people(subs: list[str], names: dict[str, str]) -> list[str]:
             if p not in plats:
                 plats.append(p)
     return [f"{person} ({' / '.join(plats)})" if plats else person for person, plats in people.items()]
+
+
+def is_mention(t: str | None, d: dict[str, Any]) -> bool:
+    """Whether the bot was mentioned. A group that sends the bot only its mentions sends
+    GROUP_AT_MESSAGE_CREATE; a group that sends it everything sends an ordinary
+    GROUP_MESSAGE_CREATE whose `mentions` marks the bot's own entry with `is_you`."""
+    if t == "GROUP_AT_MESSAGE_CREATE":
+        return True
+    return t == "GROUP_MESSAGE_CREATE" and any(m.get("is_you") for m in d.get("mentions") or [])
+
+
+MENTION_MARK = re.compile(r"<@[^>]*>")
+
+
+def command_word(content: str | None) -> str:
+    """A mention's command: the first word of its text once every `<@…>` is gone (an
+    ordinary message's text starts with the mention itself; a mention event's has none)."""
+    words = MENTION_MARK.sub(" ", content or "").split()
+    return words[0] if words else ""
 
 
 def default_connect(url: str):
@@ -90,17 +118,12 @@ class QQGateway:
             return
         if not group:
             return
-        if t in ("GROUP_ADD_ROBOT", "GROUP_AT_MESSAGE_CREATE"):
+        if t == "GROUP_ADD_ROBOT":
             g, new = self.groups.register(group)
-            role = (d.get("author") or {}).get("member_role")
-            if t == "GROUP_AT_MESSAGE_CREATE" and not new and role not in ("owner", "admin"):
-                return  # anyone may @ the bot; only the owner / admins get the status again
-            log.info("qq: group %s %s", g.get("name") or group, "registered" if new else "mentioned")
-            reply = {"msg_id": d.get("id")} if t == "GROUP_AT_MESSAGE_CREATE" else {"event_id": payload.get("id")}
-            try:
-                await self.api.send_markdown(group, self.status_text(g), **reply)
-            except (QQError, httpx.HTTPError) as e:
-                log.warning("qq: could not reply in %s: %s", group, e)
+            log.info("qq: group %s %s", g.get("name") or group, "registered" if new else "added again")
+            await self._reply(group, self.status_text(g), event_id=payload.get("id"))
+        elif is_mention(t, d):
+            await self._answer_mention(group, d)
         elif t == "GROUP_DEL_ROBOT":
             self._set_status(group, "removed", "机器人被移出了群")
         elif t == "GROUP_MSG_REJECT":
@@ -108,6 +131,25 @@ class QQGateway:
         elif t == "GROUP_MSG_RECEIVE":
             if self.groups.get(group):
                 self.groups.update(group, status="active")
+
+    async def _answer_mention(self, group: str, d: dict[str, Any]) -> None:
+        g, new = self.groups.register(group)
+        if new:  # whatever the first mention says, it is told it is registered, as when the bot is added
+            log.info("qq: group %s registered", g.get("name") or group)
+            await self._reply(group, self.status_text(g), msg_id=d.get("id"))
+            return
+        command = COMMANDS.get(command_word(d.get("content"))) or COMMANDS[HELP]
+        role = (d.get("author") or {}).get("member_role")
+        if command.admins_only and role not in ("owner", "admin"):
+            return  # anyone may @ the bot; not everyone may make it repeat a long answer
+        log.info("qq: group %s mentioned", g.get("name") or group)  # never the text: it is the members' chat
+        await self._reply(group, command.answer(self, g), msg_id=d.get("id"))
+
+    async def _reply(self, group: str, content: str, **reply: Any) -> None:
+        try:
+            await self.api.send_markdown(group, content, **reply)
+        except (QQError, httpx.HTTPError) as e:
+            log.warning("qq: could not reply in %s: %s", group, e)
 
     def _set_status(self, group: str, status: str, why: str) -> None:
         g = self.groups.get(group) or self.groups.register(group)[0]
@@ -126,6 +168,12 @@ class QQGateway:
             lines.append(f"通知类型：{'、'.join(kinds) if kinds else '（无）'}")
         if not g.get("enabled") or not streamers:
             lines.append("通知目前关闭，请到切片小助手的通知页面设定")
+        return "\n".join(lines)
+
+    def help_text(self, g: dict[str, Any]) -> str:
+        lines = ["@我 并在后面写上指令：", *(f"- {word}：{c.does}" for word, c in COMMANDS.items())]
+        # What a group's own features add to the help (the filing rules, for a group whose
+        # files go to the drive) is appended here, after the commands.
         return "\n".join(lines)
 
     # ---- connection ----
@@ -191,3 +239,22 @@ class QQGateway:
 
     async def aclose(self) -> None:
         await self.client.aclose()
+
+
+@dataclass(frozen=True)
+class Command:
+    """What a mention can ask for: its line in the help, its answer for the group, and
+    whether only the group's owner and admins get that answer."""
+
+    does: str
+    answer: Callable[[QQGateway, dict[str, Any]], str]
+    admins_only: bool = False
+
+
+HELP = "帮助"
+
+# word -> command, in the help's order. A new command is one more entry here.
+COMMANDS: dict[str, Command] = {
+    "订阅": Command("查看本群订阅的主播和通知类型（群主和管理员）", QQGateway.status_text, admins_only=True),
+    HELP: Command("列出我能听懂的指令", QQGateway.help_text),
+}
