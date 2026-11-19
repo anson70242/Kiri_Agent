@@ -1,5 +1,7 @@
 """The Quark drive: everything Quark, behind "is the drive available", "log in", "account
-status" and "upload this archive's drive copy into this folder".
+status", "upload this archive's drive copy into this folder", and, for group files, "list
+this folder's names" (`folder_names`) and "put this local file into this folder"
+(`put_file`).
 
 It runs Quark's official CLI (`quarkclouddrive` 1.0.25, a Node script) as a subprocess; read
 docs/adr/0001-quark-drive-through-the-official-agent-cli.md first. config.json names the
@@ -22,7 +24,8 @@ A drive copy goes into its folder from the top of the drive (made when missing),
 file of the zip's name is there already: the folder is listed before the zip is built, so
 an archive already on the drive costs no disk. The upload has no time limit, but it is killed
 and failed after IDLE_TIMEOUT without a progress line; a failed upload's task record is
-deleted, and `upload resume` is never used (it sends the whole file again).
+deleted, and `upload resume` is never used (it sends the whole file again). A plain file
+goes the same way, under its local name, without a share and without an archive.
 """
 
 from __future__ import annotations
@@ -186,10 +189,7 @@ class Quark:
         except (ArtifactMissing, ArtifactDamaged, OSError):
             kept = None
         path = f"{folder}/{name}"
-        # The path from the top of the drive (`--parent-fid 0`); the same folder when it exists.
-        folder_id = str(self._call(["create-folder", "--dir-path", folder, "--parent-fid", "0"]).get("fid") or "")
-        if not folder_id:
-            raise DriveFailed(f"夸克网盘 CLI 没有给出文件夹 {folder} 的 id")
+        folder_id = self._folder_id(folder)
         # By the name alone: a zip's size differs from one build to the next (its Excel sheet).
         there = next((f for f in self._children(folder_id) if f.get("filename") == name), None)
         if there is not None:
@@ -228,6 +228,35 @@ class Quark:
         log.info("drive link made: %s", path)
         return DriveCopy(path, link.url)
 
+    # ---- plain files ----
+
+    def put_file(self, local: Path, folder: str, progress: DriveProgress | None = None) -> str:
+        """Upload the local file `local` into `folder` (a path from the top of the drive, made
+        when missing) under the local file's own name, and return its path on the drive. The
+        caller decides that name (see `folder_names`) and deletes the local file: nothing
+        else is asked first, no share is made and no archive is read. Progress goes to
+        `progress(sent, total)`. Raises DriveAuthorizationLapsed, or DriveFailed with the
+        CLI's message."""
+        self._send(local, self._folder_id(folder), progress)
+        log.info("file uploaded to the drive: %s/%s", folder, local.name)
+        return f"{folder}/{local.name}"
+
+    # ---- the drive's folders ----
+
+    def folder_names(self, folder: str) -> list[str]:
+        """The names of every file and folder directly in `folder` (a path from the top of the
+        drive, made when missing), from the full listing. Raises DriveAuthorizationLapsed, or
+        DriveFailed with the CLI's message."""
+        return [str(f["filename"]) for f in self._children(self._folder_id(folder)) if f.get("filename")]
+
+    def _folder_id(self, folder: str) -> str:
+        """The id of `folder`, a path from the top of the drive (`--parent-fid 0`), made when
+        missing; the same folder when it exists."""
+        folder_id = str(self._call(["create-folder", "--dir-path", folder, "--parent-fid", "0"]).get("fid") or "")
+        if not folder_id:
+            raise DriveFailed(f"夸克网盘 CLI 没有给出文件夹 {folder} 的 id")
+        return folder_id
+
     def _children(self, folder_id: str) -> list[dict[str, Any]]:
         """Every file and folder directly in the folder: `browse --all` writes them to a JSONL
         file in the working directory and names it in its `artifact` line."""
@@ -252,8 +281,9 @@ class Quark:
                     children.append(entry)
             return children
 
-    def _send(self, zip_path: Path, folder_id: str, progress: DriveProgress | None) -> str:
-        """`upload`, and the uploaded file's id ("" when the CLI gave none). After a failed
+    def _send(self, local: Path, folder_id: str, progress: DriveProgress | None) -> str:
+        """`upload` of a local file, a drive copy's zip or a plain file, and the uploaded
+        file's id ("" when the CLI gave none). Every upload goes through here. After a failed
         upload its task record is deleted (`upload resume` is never used: it sends the whole
         file again)."""
         records: list[str] = []
@@ -270,9 +300,9 @@ class Quark:
                     file_ids.append(str(data["fileId"]))
 
         try:
-            data = self._call(["upload", str(zip_path), "--parent-fid", folder_id], on_object=note)
+            data = self._call(["upload", str(local), "--parent-fid", folder_id], on_object=note)
         except (DriveFailed, DriveAuthorizationLapsed):
-            self._forget_upload(zip_path.name, records)
+            self._forget_upload(local.name, records)
             raise
         fids = data.get("fids")
         return file_ids[-1] if file_ids else str(fids[0]) if isinstance(fids, list) and fids else ""
