@@ -38,8 +38,8 @@ def test_a_tag_with_the_wrong_extension_or_a_name_without_a_tag_matches_nothing(
 
 def test_the_table_is_the_owners_five_rules_in_order():
     assert [(r.tag, r.extension, r.subfolder) for r in FILING_RULES] == [
-        ("【待轴】", ".mp4", "剪辑"), ("【空轴】", ".ass", "空轴"), ("【待校】", ".ass", "待校"),
-        ("【已校】", ".ass", "已校"), ("【熟肉】", ".mp4", "熟肉")]
+        ("【待轴】", "mp4", "剪辑"), ("【空轴】", "ass", "空轴"), ("【待校】", "ass", "待校"),
+        ("【已校】", "ass", "已校"), ("【熟肉】", "mp4", "熟肉")]
 
 
 def test_the_help_has_one_line_per_rule_with_the_tag_the_extension_and_the_folder():
