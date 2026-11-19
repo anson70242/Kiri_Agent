@@ -26,6 +26,7 @@ from backend.auth import auth_enabled, load_auth
 from backend.downloader import load_settings
 from backend.downloader.auto import attach
 from backend.group_files import JOBS_FILE, GroupFileKeeper
+from backend.group_files.report import GroupFileReport
 from backend.notify.incidents import IncidentAlerts
 from backend.notify.qq_gateway import QQGateway
 from backend.quark import load_quark
@@ -92,11 +93,13 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
     # Group files to the drive: the gateway hands them over. The drive is the service's one
     # (None: files are ignored, with a warning); the jobs file sits beside the QQ groups file,
     # local copies on the downloads volume; failed files are retried with the pipeline's
-    # interval and maximum of errors.
+    # interval and maximum of errors. The group is told through the QQ bot, the owner
+    # through the operator alert.
     group_files = GroupFileKeeper(
         notifier.qq.groups, drive,
         jobs_file=notifier.qq.groups.path.parent / JOBS_FILE,
         temp=Downloads(load_settings(config)[0].output_dir).group_files,
+        report=GroupFileReport(notifier.qq.api, notifier.qq.groups, alert=notifier.alert, history=notifier.history),
         **({"retry_interval": auto.retry_interval, "max_errors": auto.max_errors} if auto else {}),
     ) if notifier and notifier.qq else None
     # The QQ bot's event connection: keeps it online and learns which groups it is in.
