@@ -2,7 +2,8 @@
 
     GET    /notify                      the page
     GET    /api/notify                  everything the page shows
-    PATCH  /api/notify/groups?id=<openid>   {name?, enabled?, streamers? (people's names), kinds?}
+    PATCH  /api/notify/groups?id=<openid>   {name?, enabled?, streamers? (people's names), kinds?,
+                                             group_files_to_drive?, group_file_notices?}
     DELETE /api/notify/groups?id=<openid>
     POST   /api/notify/test             {target: "discord" | <group openid>}
 """
@@ -40,7 +41,10 @@ class TestTarget(BaseModel):
     target: str
 
 
-def create_notify_router(notifier: LiveNotifier | None, roster: Roster, gateway: QQGateway | None) -> APIRouter:
+def create_notify_router(notifier: LiveNotifier | None, roster: Roster, gateway: QQGateway | None,
+                         drive_available: bool = False) -> APIRouter:
+    """`drive_available`: the Quark drive can be used on this server (the page says so when
+    not, next to the switch that sends group files there)."""
     router = APIRouter()
     qq = notifier.qq if notifier else None
     discord = next((n for n in notifier.notifiers if n.name == "discord"), None) if notifier else None
@@ -76,6 +80,7 @@ def create_notify_router(notifier: LiveNotifier | None, roster: Roster, gateway:
                    "bot_name": gateway.bot_name if gateway else "",
                    "last_error": gateway.last_error if gateway else ""},
             "groups": [as_people(g) for g in qq.groups.all()] if qq else [],
+            "drive_available": drive_available,
             "streamers": [{"id": name, "name": name} for name in people()],
             "kinds": [{"id": str(k), "label": KIND_LABELS.get(str(k), str(k))} for k in EventKind],
             "log": notifier.history.entries() if notifier else [],

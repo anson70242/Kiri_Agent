@@ -6,7 +6,12 @@ from __future__ import annotations
 
 import json
 
-from .test_notify_api import app
+import pytest
+
+from backend.state_file import StateFileError
+
+from . import test_notify_api as notify_test
+from .test_notify_api import app, write_config
 
 
 def patch(client, body, gid="G1"):
@@ -107,6 +112,39 @@ def test_the_switches_do_not_depend_on_notices_streamers_or_kinds(tmp_path, monk
     assert (g["group_files_to_drive"], g["group_file_notices"]) == (True, True)
     files = client.app.state.notifier.qq.groups.group_files("G1")
     assert (files.to_drive, files.notices) == (True, True)
+
+
+def with_drive(tmp_path, cli: bool):
+    """The notify config, with the drive's CLI in place or missing."""
+    cfg = write_config(tmp_path)
+    body = json.loads(cfg.read_text(encoding="utf-8"))
+    cli_file = tmp_path / "quark" / "quark-drive.cjs"
+    if cli:
+        cli_file.parent.mkdir()
+        cli_file.write_text("// the CLI", encoding="utf-8")
+    body["drive"] = {"quark_cli": str(cli_file)}
+    cfg.write_text(json.dumps(body), encoding="utf-8")
+    return cfg
+
+
+@pytest.mark.parametrize("cli", [True, False])
+def test_the_status_says_once_whether_the_drive_is_available(tmp_path, monkeypatch, cli):
+    monkeypatch.setattr(notify_test, "write_config", lambda _tmp: with_drive(tmp_path, cli))
+    body = app(tmp_path, monkeypatch).get("/api/notify").json()
+    assert body["drive_available"] is cli
+    assert "drive_available" not in body["groups"][0]
+
+
+@pytest.mark.parametrize("switches", [{"group_files_to_drive": "yes"}, {"group_file_notices": 1},
+                                      {"group_files_to_drive": None}])
+def test_a_groups_file_with_a_switch_that_is_not_true_or_false_stops_the_service(tmp_path, monkeypatch, switches):
+    text = json.dumps([{"openid": "G1", "name": "章鱼烧字幕组", **switches}])
+    (tmp_path / "qq_groups.json").write_text(text, encoding="utf-8")
+
+    with pytest.raises(StateFileError) as e:
+        app(tmp_path, monkeypatch)
+    assert e.value.path == tmp_path / "qq_groups.json"
+    assert (tmp_path / "qq_groups.json").read_text(encoding="utf-8") == text  # left alone
 
 
 def test_a_removed_group_keeps_its_switches_but_its_files_are_off(tmp_path, monkeypatch):
