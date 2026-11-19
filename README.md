@@ -23,6 +23,7 @@ A person still decides what to cut in the end.
 | [Web pages](#web-pages) | Five pages: live status / archives / highlight tables / notifications / users; a highlight table downloads as a formatted Excel file | Done |
 | [Upload to Tencent Docs](#upload-to-tencent-docs) | Highlight table → one sub-sheet (formatted) in a Tencent Docs spreadsheet, set per streamer, uploaded automatically | Done |
 | [Drive copies on Quark](#drive-copies-on-quark) | Processed live → one zip (video, chat, SRT, highlight table) kept for good on a Quark cloud drive, with a drive link for the editors; set per streamer | Done |
+| [Group files to the drive](#group-files-to-the-drive) | A file posted in a QQ group whose name carries a stage tag (【待校】 and the like) → the group's folder on the same Quark drive, sorted by stage; set per group. The bot answers two commands, `订阅` (subscriptions) and `帮助` (help) | Done |
 | Google Sheets | The same upload, to Google Sheets instead | Planned |
 
 Each live goes through the steps in order: download → transcribe → analysis and translation side by side → upload → drive copy. Every step retries on failure and reports on Discord.
@@ -122,6 +123,8 @@ which holds at most 100 images; when it is full, our oldest one is deleted), fol
 the bot's proactive messages), it is only recorded under 「最近记录」 (recent log) and does not affect other groups. When the bot is removed from a group or the group turns off proactive messages, sending to that group stops
 and Discord gets one alert; if the bot cannot connect for 10 minutes in a row, Discord also gets one alert. Group settings are stored in `data/qq_groups.json`,
 and the send log (the latest 50 entries) in `data/notify_log.json`.
+
+Mention the bot with `订阅` to see the group's subscriptions (answered for the group's owner and admins), or with `帮助` (or anything else) for the list of commands.
 
 - [qq.py](backend/notify/qq.py): message format, which groups to send to, cover upload, `QQGroups`.
 - [qq_gateway.py](backend/notify/qq_gateway.py): the WebSocket connection to QQ, group registration, reconnecting.
@@ -267,7 +270,7 @@ A 5-hour live takes about 120,000 tokens. By hand: `uv run -m backend.translate 
 - **路灯表** ([highlights.html](frontend/highlights.html)): the highlight table of each archive, filterable by score, chat activity and
   「只看有切片」 (only rows with clips); topic logs can be expanded.
 - **通知** ([notify.html](frontend/notify.html)): the status of the QQ bot and Discord, with test buttons; each QQ group's name,
-  on/off switch, subscribed streamers and notification types; the latest 50 sent messages.
+  on/off switch, subscribed streamers and notification types, and its two group-file switches (see [Group files to the drive](#group-files-to-the-drive)); the latest 50 sent messages.
 - **用户** (users, [users.html](frontend/users.html)): only when login is on, and only for admins; add accounts, reset passwords and disable accounts (see [Login](#login)).
 
 The Excel highlight table ([sheet.py](backend/sheet.py)) is readable as soon as it is opened: the header row is frozen; the two columns for the content summary and the clip titles are wider, wrap text and
@@ -337,6 +340,23 @@ docker compose exec kiri /app/.venv/bin/python -m backend.quark upload <录播�
 
 (The comments mean: authorize (it first prints the authorization link; 授权码 = the authorization code that page gives), and whether it is authorized and the space left. 录播文件夹 = an archive folder or a folder of them, 网盘文件夹 = the drive folder.)
 
+### Group files to the drive
+
+Each QQ group on the 通知 page has two more switches, 「群文件上传到夸克网盘」 (group files to the Quark drive) and 「群文件上传通知」 (group-file notices), both off until turned on and independent of the group's live notifications.
+With the first on, a file posted in the group (in the chat or in its file panel) whose name holds one of five tags, with the right extension, is uploaded to the same Quark drive:
+【待轴】 and 【熟肉】 `.mp4`, 【空轴】, 【待校】 and 【已校】 `.ass`, each into `<群名>/<its folder>/` (`<群名>` is the group's name on the 通知 page, at the top of the drive). Every other file is ignored.
+
+- The group's owner must turn on 「接收所有消息」 (receive all messages) for the bot in mobile QQ; without it the bot sees only the messages that mention it.
+  QQ then sends the bot the whole chat; the service acts on attached files and mentions only, and neither stores nor logs anything else
+  (why, in [ADR 0002](docs/adr/0002-group-files-through-the-official-bots-message-events.md)).
+- A file is downloaded to the server as it is posted, uploaded, and deleted from the server. The same file posted again is not uploaded again; a different file under a name already there is kept beside it, with the time it was posted in its name.
+  Nothing on the drive is replaced, moved or deleted.
+- Group files and drive copies take turns at the drive, a group file first; behind a running drive copy a file waits until it ends. Failures are retried like the pipeline's.
+- With the second switch on, the group is told when a file is on the drive and when it could not be put there; failures reach Discord either way.
+- Out of reach: files already in the group, files posted while the service or the bot is offline (a deploy's restart included), and the folder a member chose in the file panel.
+
+The code is in [backend/group_files](backend/group_files). For turning it on, see 「群文件上传到夸克网盘」 in [docs/deploy.md](docs/deploy.md) (in Chinese).
+
 ## Local preview
 
 You can check changes to the pages without deploying:
@@ -372,7 +392,7 @@ The browser tests of the web pages ([test_monitor_page.py](tests/test_monitor_pa
 CI ([ci.yml](.github/workflows/ci.yml)) runs the tests and builds the Docker image on every pull request and on main.
 After CI passes on main, [deploy.yml](.github/workflows/deploy.yml) copies the code to the server over SSH
 and runs `docker compose up -d --build`. Before that restart, the new code reads the server's state files without changing them; the deploy stops there,
-with the old version still running, if a state file would be refused or set aside, or while the download queue still holds jobs or a drive copy is uploading (see 「部署」 (deployment) in [docs/deploy.md](docs/deploy.md), in Chinese). The web pages listen only on the server's localhost and are reached over Tailscale.
+with the old version still running, if a state file would be refused or set aside, or while the download queue still holds jobs or a drive copy or a group file is uploading (see 「部署」 (deployment) in [docs/deploy.md](docs/deploy.md), in Chinese). The web pages listen only on the server's localhost and are reached over Tailscale.
 
 ```sh
 docker compose up -d --build     # 在本地跑容器（需要 .env）
