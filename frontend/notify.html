@@ -140,6 +140,16 @@ function groupHtml(g) {
     <div class="opts"><div class="label">订阅的主播</div>
       <div class="checks">${checks(data.streamers.map(s => ({ ...s, label: s.name })), g.streamers, "streamer") || `<span class="meta">名单里还没有主播</span>`}</div></div>
     <div class="opts"><div class="label">通知类型</div><div class="checks">${checks(data.kinds, g.kinds, "kind")}</div></div>
+    <div class="opts"><div class="label">群文件（和上面的通知各管各的）</div>
+      <div class="checks">
+        <label><input type="checkbox" name="group_files_to_drive" ${g.group_files_to_drive ? "checked" : ""}>群文件上传到夸克网盘</label>
+        <span class="meta">网盘位置：${g.group_folder ? esc(g.group_folder) + "/" : "先填群名"}</span>
+        <label><input type="checkbox" name="group_file_notices" ${g.group_file_notices ? "checked" : ""}>群文件上传通知</label>
+      </div>
+      <div class="meta">${data.drive_available
+        ? "需要群主在手机 QQ 里给机器人打开「接收所有消息」（群成员列表里点机器人），否则机器人看不到群文件"
+        : "⚠️ 这台服务器上没有夸克网盘（找不到 CLI），群文件不会上传"}</div>
+    </div>
     <div class="actions">
       <button class="primary" data-save>保存</button>
       <button data-test="${esc(g.openid)}">发测试消息</button>
@@ -210,7 +220,9 @@ document.addEventListener("click", async e => {
       const pick = key => [...f.querySelectorAll(`[data-${key}]`)].filter(x => x.checked).map(x => x.dataset[key]);
       await api("PATCH", `/api/notify/groups?id=${encodeURIComponent(f.dataset.id)}`, {
         name: f.querySelector("[name=name]").value, enabled: f.querySelector("[name=enabled]").checked,
-        streamers: pick("streamer"), kinds: pick("kind") });
+        streamers: pick("streamer"), kinds: pick("kind"),
+        group_files_to_drive: f.querySelector("[name=group_files_to_drive]").checked,
+        group_file_notices: f.querySelector("[name=group_file_notices]").checked });
       dirty.delete(f.dataset.id);
       await load();
       say("已保存 ✅");
