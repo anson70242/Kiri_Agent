@@ -39,6 +39,7 @@ class GroupFileJob:
     next_try: float = 0.0  # not tried again before this time (epoch seconds)
     lapsed_since: float | None = None  # the first lapsed try of the current lapse of the drive's authorization
     uploading: bool = False  # its upload is running (a deploy waits for it); a kill leaves it, the start clears it
+    waiting_told: bool = False  # the group was told it waits for the drive (once per file, also over a restart)
 
     @property
     def folder(self) -> str:

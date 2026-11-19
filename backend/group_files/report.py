@@ -24,6 +24,7 @@ import httpx
 from backend.drive import LOGIN_COMMAND
 from backend.notify.history import NotifyHistory
 from backend.notify.qq import QQApi, QQError, QQGroups, escape
+from backend.quark import RunningUpload, UploadKind
 
 from .failures import Failure
 from .jobs import GroupFileJob
@@ -41,7 +42,9 @@ ON_DRIVE = ("☁️", "群文件已上传网盘")
 ALREADY_THERE = ("☁️", "群文件已在网盘，没有重复上传")
 FAILED = ("❗", "群文件上传网盘失败")
 GIVEN_UP = ("❗", "群文件上传网盘失败，已放弃")
+WAITING = ("⏳", "群文件排队中")
 RETRIED_LATER = "稍后自动重试"
+GOES_UP_BY_ITSELF = "轮到后自动上传"
 LAPSED = "网盘授权已失效，重新授权后会自动上传"
 LAPSE_ALERT = f"夸克网盘的授权失效了，群文件的网盘上传都在等待。在服务器上重新授权：\n`{LOGIN_COMMAND}`"
 REASON_KEPT = 500  # characters of a failure's reason that are told (Quark's words can be long)
@@ -49,6 +52,14 @@ REASON_KEPT = 500  # characters of a failure's reason that are told (Quark's wor
 
 def place_line(place: str) -> str:
     return f"网盘位置：{place}"
+
+
+def busy_line(running: RunningUpload) -> str:
+    """What the drive is busy with: the kind of upload only, never a recording's title or
+    another file's name; how far along when the CLI has said."""
+    what = "其他群文件" if running.kind is UploadKind.GROUP_FILE else "一场录播"
+    percent = running.percent
+    return f"网盘正在上传{what}" + ("" if percent is None else f"（{percent}%）")
 
 
 class GroupFileReport:
@@ -99,6 +110,13 @@ class GroupFileReport:
                 self._alert(job, FAILED, LAPSE_ALERT)
             await self.tell(job, FAILED, LAPSED)
         # A later error or lapsed try is silent: the group was told at the first.
+
+    async def waiting(self, job: GroupFileJob, running: RunningUpload) -> None:
+        """The file has waited a while for the upload that has the drive (`running`) to end.
+        Not an error: no alert."""
+        busy = busy_line(running)
+        log.info("group file %s/%s waits for the drive: %s", job.folder, job.name, busy)
+        await self.tell(job, WAITING, busy, GOES_UP_BY_ITSELF)
 
     # ---- telling ----
 
