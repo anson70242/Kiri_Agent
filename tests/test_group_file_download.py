@@ -30,7 +30,7 @@ def test_the_file_is_downloaded_to_the_temporary_folder_with_its_sha256_before_a
 
 
 def test_a_file_of_the_wrong_size_is_not_uploaded(tmp_path, caplog):
-    s = make(tmp_path)
+    s = make(tmp_path, max_errors=1)  # given up on at the first error
     with caplog.at_level(logging.WARNING, logger="backend.group_files"):
         s.post("【待校】第3话.ass", b"half", size=8)
         s.settle()
@@ -40,7 +40,7 @@ def test_a_file_of_the_wrong_size_is_not_uploaded(tmp_path, caplog):
 
 
 def test_a_host_error_fails_the_job(tmp_path):
-    s = make(tmp_path)
+    s = make(tmp_path, max_errors=1)
     s.post("【待校】第3话.ass", url=f"{HOST}/ftn_handler/gone")
     del s.host.files[f"{HOST}/ftn_handler/gone"]
     s.settle()
@@ -50,7 +50,7 @@ def test_a_host_error_fails_the_job(tmp_path):
 @pytest.mark.parametrize("url", ["http://grpfile.ftn.qq.com/ftn_handler/x", "https://qq.com.example.net/x",
                                  "https://notqq.com/x", "ftp://grpfile.ftn.qq.com/x", "/ftn_handler/x", ""])
 def test_an_address_that_is_not_qqs_is_never_fetched(tmp_path, url, caplog):
-    s = make(tmp_path)
+    s = make(tmp_path, max_errors=1)
     with caplog.at_level(logging.INFO, logger="backend.group_files"):
         s.post("【待校】第3话.ass", url=url)
         s.settle()
