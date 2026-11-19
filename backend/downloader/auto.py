@@ -654,9 +654,10 @@ class AutoDownloader:
             log.info("drive copy uploaded: %s %s", name, copy.path)
             self._lapse_alerted = False  # a try that is not lapsed ends the lapse: a later one is new
             if not first or not copy.link:  # READY did not carry the drive link
-                detail = f"网盘路径：`{copy.path}`"
-                if not copy.link:
-                    detail += f"\n没有网盘链接：{copy.reason}"
+                if copy.link:  # the link leads to the zip: the live's date is enough
+                    detail = f"日期：{live_date(video)}"
+                else:  # without a link, the path is the only way to the zip
+                    detail = f"网盘路径：`{copy.path}`\n没有网盘链接：{copy.reason}"
                 events.append((EventKind.DRIVE_UPLOADED, detail,
                                (Link(DRIVE_LINK_LABEL, copy.link),) if copy.link else ()))
         current.ready_sent = True
@@ -726,6 +727,13 @@ def ready_detail(video: Path) -> str:
     """What a finished stream has (✅ / ❌)."""
     present = Archive.from_video(video).present()
     return " · ".join(f"{name} {'✅' if artifact in present else '❌'}" for name, artifact in READY_ARTIFACTS)
+
+
+def live_date(video: Path) -> str:
+    """The date a live's archive is filed under, as a message shows it (`2026-11-18`); a date
+    folder that is not `YYYYMMDD` is shown as it is."""
+    date = Archive.from_video(video).date_folder
+    return f"{date[:4]}-{date[4:6]}-{date[6:]}" if len(date) == 8 and date.isdigit() else date
 
 
 def ready_links(video: Path, site_url: str, output_dir: Path) -> tuple[Link, ...]:

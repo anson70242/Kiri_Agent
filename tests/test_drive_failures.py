@@ -92,7 +92,7 @@ def test_a_retry_that_gets_through_sends_drive_copy_uploaded_with_the_link_and_n
     assert after(sent, 1) == [EventKind.READY, EventKind.DRIVE_FAILED, EventKind.DRIVE_UPLOADED]
     uploaded = sent[-1]
     assert links(uploaded) == [(LINK, "网盘链接")]
-    assert "录播/A/[20261110][A] 歌枠.zip" in uploaded.detail
+    assert uploaded.detail == "日期：2026-11-10"  # the live's date, not the zip's path on the drive
     # A retry is the same call again: the drive checks what is already there before uploading.
     assert drive.calls == [(folder, "录播/A"), (folder, "录播/A")]
 
