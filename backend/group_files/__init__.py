@@ -10,6 +10,7 @@ One concern a file:
 - jobs.py      a job, the jobs file (runtime state), which job goes next
 - download.py  the download from QQ's file host (https, qq.com only; size; SHA-256)
 - naming.py    the name on the drive, decided from the subfolder's listing
+- record.py    the record of uploads (runtime state): is the file there the same content?
 - failures.py  what becomes of a job after a failed attempt
 - report.py    where each outcome is told (the log; messages later)
 - worker.py    GroupFileKeeper: takes files in, runs the loops, the snapshot
