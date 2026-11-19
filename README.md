@@ -353,6 +353,7 @@ With the first on, a file posted in the group (in the chat or in its file panel)
   Nothing on the drive is replaced, moved or deleted.
 - Group files and drive copies take turns at the drive, a group file first; behind a running drive copy a file waits until it ends. Failures are retried like the pipeline's.
 - With the second switch on, the group is told when a file is on the drive and when it could not be put there; failures reach Discord either way.
+  A file that has waited a minute behind another upload is told once that it is queued, with what the drive is busy with (a recording or another group file) and how far along.
 - Out of reach: files already in the group, files posted while the service or the bot is offline (a deploy's restart included), and the folder a member chose in the file panel.
 
 The code is in [backend/group_files](backend/group_files). For turning it on, see 「群文件上传到夸克网盘」 in [docs/deploy.md](docs/deploy.md) (in Chinese).

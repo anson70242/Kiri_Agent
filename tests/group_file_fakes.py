@@ -67,12 +67,14 @@ class FakeFileHost:
 
 class FakeDrive:
     """The drive's two calls the module makes (`folder_names`, `put_file`), on folders held
-    in memory. `error`: raised by the next calls. `put` notes (folder, name, bytes)."""
+    in memory. `error`: raised by the next calls. `put` notes (folder, name, bytes).
+    `uploading`: the upload that has the drive (a test sets it), as Quark's."""
 
     def __init__(self) -> None:
         self.folders: dict[str, dict[str, bytes]] = {}
         self.put: list[tuple[str, str, bytes]] = []
         self.error: Exception | None = None
+        self.uploading: Any = None
 
     def folder_names(self, folder: str) -> list[str]:
         if self.error:

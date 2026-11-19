@@ -6,12 +6,13 @@ or when its group's switch is off as it is about to start (cancelled); its local
 with it.
 
 A failed attempt is tried again later (failures.py): the loops wake when the next job is
-due. The jobs file is runtime state that survives a restart: at start an upload mark left by
+due. While another upload has the drive, a third loop (`tell_waiting`) looks for downloaded
+files that have waited a minute and tells their groups they are queued, once per file. The jobs file is runtime state that survives a restart: at start an upload mark left by
 a kill is cleared (that upload is done again from the local file), and temporary files that
 belong to no job are removed. A download that broke off continues from its `.part`.
 
 Everything outside comes in from the caller: the groups store (the switches and the group
-folder), the drive (`folder_names`, `put_file`: the Quark module), the HTTP client for QQ's
+folder), the drive (`folder_names`, `put_file`, `uploading`: the Quark module), the HTTP client for QQ's
 file host, the clock, and the folder for local copies (on the downloads volume).
 """
 
@@ -29,6 +30,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 import httpx
 
 from backend.drive import DriveAuthorizationLapsed, DriveProgress
+from backend.quark import RunningUpload, UploadKind
 
 from .download import fetch
 from .failures import after_failure
@@ -45,14 +47,22 @@ log = logging.getLogger(__name__)
 
 IDLE_CHECK = 300.0  # seconds a loop sleeps without being woken, before it looks again
 PART = ".part"  # a download's file until it is complete
+# A downloaded file that has waited this long (seconds since its download ended) for another
+# upload to end is told to its group as waiting: files that only queue behind a small one
+# stay silent, and the message is still a reply to the member's.
+WAITING_AFTER = 60.0
+WAITING_CHECK = 10.0  # seconds between two looks for such files, while an upload has the drive
 
 
 class GroupFileDrive(Protocol):
-    """What the module asks of the drive (backend.quark.Quark has both)."""
+    """What the module asks of the drive (backend.quark.Quark has all three)."""
 
     def folder_names(self, folder: str) -> list[str]: ...
 
     def put_file(self, local: Path, folder: str, progress: DriveProgress | None = None) -> str: ...
+
+    @property
+    def uploading(self) -> RunningUpload | None: ...
 
 
 def message_time(timestamp: Any, clock: Callable[[], float]) -> float:
@@ -84,6 +94,7 @@ class GroupFileKeeper:
         self._warned = False  # "the drive is not available" was logged
         self._wake = {"download": asyncio.Event(), "upload": asyncio.Event()}
         self._active: dict[str, dict[str, Any] | None] = {"download": None, "upload": None}
+        self._in_hand: GroupFileJob | None = None  # the job the upload loop is uploading (or waiting to)
 
     # ---- taking a file in ----
 
@@ -122,7 +133,8 @@ class GroupFileKeeper:
             self._start()
         except Exception:  # noqa: BLE001 - the loops still run; a leftover only takes room
             log.exception("group files: the start's clean-up failed")
-        await asyncio.gather(self._loop("download", self.download_next), self._loop("upload", self.upload_next))
+        await asyncio.gather(self._loop("download", self.download_next), self._loop("upload", self.upload_next),
+                             self._watch())
 
     def _start(self) -> None:
         """An upload marked as running was cut off by a kill: the mark goes and the upload is
@@ -203,6 +215,7 @@ class GroupFileKeeper:
         job.uploading = True  # before the upload starts; the attempt's end clears it
         self.jobs.replace(job)
         row = self._activate("upload", job)
+        self._in_hand = job
         try:
             if self.drive is None:
                 raise RuntimeError("网盘不可用")
@@ -228,10 +241,44 @@ class GroupFileKeeper:
             return True
         finally:
             self._active["upload"] = None
+            self._in_hand = None
         self.uploads.note(Upload(job.group, f"{job.folder}/{choice.name}", job.size, job.sha256, self.clock()))
         self._end(job)
         await self.report.uploaded(job, place)
         return True
+
+    async def tell_waiting(self) -> None:
+        """Tell the group of each file that has waited a minute, since its download ended, for
+        another upload to end: it is queued behind what has the drive now. Once per file (the
+        job notes it, so a restart does not tell it again). A file that has failed before is
+        waiting for a retry or the authorization: its group had the failure message instead."""
+        running = self.drive.uploading if self.drive is not None else None
+        if running is None:
+            return
+        now, in_hand = self.clock(), self._in_hand
+        for job in self.jobs.load():
+            if (job.waiting_told or not job.downloaded or job.downloaded_at is None
+                    or now - job.downloaded_at < WAITING_AFTER
+                    or not job.due(now) or job.errors or job.lapsed_since is not None):
+                continue
+            mine = in_hand is not None and in_hand.id == job.id
+            # The worker uploads one group file at a time: a group file that has the drive
+            # while this job is in hand is this job's own upload.
+            if mine and running.kind is UploadKind.GROUP_FILE:
+                continue
+            job.waiting_told = True
+            self.jobs.replace(job)
+            if mine:  # the upload loop saves its copy of the job when the attempt fails
+                in_hand.waiting_told = True
+            await self.report.waiting(job, running)
+
+    async def _watch(self) -> None:
+        while True:
+            try:
+                await self.tell_waiting()
+            except Exception:  # noqa: BLE001 - keep the worker alive
+                log.exception("group file waiting watch error")
+            await asyncio.sleep(WAITING_CHECK)
 
     async def _failed(self, job: GroupFileJob, reason: str, lapsed: bool = False) -> None:
         """After a failed attempt: kept to be tried again, or given up on (failures.py). The
