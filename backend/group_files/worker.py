@@ -1,7 +1,7 @@
 """The group-files module's worker: takes posted files in from the gateway (`posted`), and
 runs two loops (`run`): one downloads the jobs' files, one at a time in the order posted,
 starting at once; the other uploads them, one at a time in the order posted. A job ends
-when its file is on the drive, when its name is taken there, or when it is given up on; its
+when its file is on the drive, when the same file is there already, or when it is given up on; its
 local copy goes with it.
 
 Everything outside comes in from the caller: the groups store (the switches and the group
@@ -28,6 +28,7 @@ from .download import fetch
 from .failures import after_failure
 from .jobs import GroupFileJob, GroupFileJobs, next_to_download, next_to_upload
 from .naming import drive_name, file_name
+from .record import UPLOADS_FILE, GroupFileUploads, Upload
 from .report import GroupFileReport
 from .rules import filing_subfolder
 
@@ -63,6 +64,7 @@ class GroupFileKeeper:
         self.groups = groups
         self.drive = drive  # None: the drive is not available, posted files are ignored
         self.jobs = GroupFileJobs(jobs_file)
+        self.uploads = GroupFileUploads(jobs_file.parent / UPLOADS_FILE)  # the record of uploads
         self.temp = temp  # one folder per job in here, named after its id
         self.client = client or httpx.AsyncClient(timeout=httpx.Timeout(60, connect=20))
         self.clock = clock
@@ -152,10 +154,10 @@ class GroupFileKeeper:
             if self.drive is None:
                 raise RuntimeError("网盘不可用")
             names = await asyncio.to_thread(self.drive.folder_names, job.folder)
-            choice = drive_name(job, names)
+            choice = drive_name(job, names, self.uploads)
             if not choice.upload:
                 self._end(job)
-                await self.report.name_taken(job, f"{job.folder}/{choice.name}")
+                await self.report.already_there(job, f"{job.folder}/{choice.name}")
                 return True
             local = self._local(job)
             if local.name != choice.name:
@@ -173,6 +175,7 @@ class GroupFileKeeper:
             return True
         finally:
             self._active["upload"] = None
+        self.uploads.note(Upload(job.group, f"{job.folder}/{choice.name}", job.size, job.sha256, self.clock()))
         self._end(job)
         await self.report.uploaded(job, place)
         return True
