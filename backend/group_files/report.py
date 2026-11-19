@@ -17,10 +17,9 @@ class GroupFileReport:
         """The file is on the drive at `place` (`<群名>/<子文件夹>/<name on the drive>`)."""
         log.info("group file on the drive: %s", place)
 
-    async def name_taken(self, job: GroupFileJob, place: str) -> None:
-        """A file of that name is at `place` already: nothing was uploaded (ticket 06 makes
-        this "already there", or uploads under another name)."""
-        log.info("group file not uploaded, its name is taken on the drive: %s", place)
+    async def already_there(self, job: GroupFileJob, place: str) -> None:
+        """The same file (by the record of uploads) is at `place` already: nothing was uploaded."""
+        log.info("group file already on the drive, not uploaded again: %s", place)
 
     async def failed(self, job: GroupFileJob, reason: str, failure: Failure) -> None:
         """An attempt failed with `reason`. `failure` says what became of the job (see

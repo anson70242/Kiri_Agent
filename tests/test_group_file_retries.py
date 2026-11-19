@@ -24,7 +24,7 @@ class Told:
     async def uploaded(self, job, place) -> None:
         self.places.append(place)
 
-    async def name_taken(self, job, place) -> None:
+    async def already_there(self, job, place) -> None:
         pass
 
     async def failed(self, job, reason, failure) -> None:

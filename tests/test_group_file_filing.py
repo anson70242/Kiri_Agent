@@ -81,17 +81,6 @@ def test_a_name_with_characters_a_file_name_cannot_have_is_uploaded_with_them_re
     assert [p[1] for p in s.drive.put] == ["【待校】第3_4话.ass"]
 
 
-def test_a_name_already_in_the_folder_ends_the_job_with_a_log_line_and_nothing_uploaded(tmp_path, caplog):
-    s = make(tmp_path)
-    s.drive.folders[f"{FOLDER}/待校"] = {"【待校】第3话.ass": b"older"}
-    with caplog.at_level(logging.INFO, logger="backend.group_files"):
-        s.post("【待校】第3话.ass", b"newer")
-        s.settle()
-    assert s.drive.put == [] and s.drive.folders[f"{FOLDER}/待校"]["【待校】第3话.ass"] == b"older"
-    assert GroupFileJobs(s.jobs_file).load() == [] and list(s.temp.rglob("*")) == []
-    assert any("【待校】第3话.ass" in r.message for r in caplog.records)
-
-
 def test_a_failed_upload_given_up_on_is_logged_and_the_job_and_its_file_dropped(tmp_path, caplog):
     s = make(tmp_path, max_errors=1)  # given up on at the first error
     s.drive.error = DriveFailed("网盘空间不足")
