@@ -21,9 +21,11 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from backend.archive import Downloads
 from backend.auth import auth_enabled, load_auth
 from backend.downloader import load_settings
 from backend.downloader.auto import attach
+from backend.group_files import JOBS_FILE, GroupFileKeeper
 from backend.notify.incidents import IncidentAlerts
 from backend.notify.qq_gateway import QQGateway
 from backend.state_file import StateFileError, set_incident_hook
@@ -83,10 +85,19 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
     else:
         print("Notify: off (set DISCORD_WEBHOOK_URL in .env to enable)")
     print(f"Auto-download: {len(auto.keep)} streamer(s)" if auto else "Auto-download: off")
+    # Group files to the drive: the gateway hands them over. The drive is the one the
+    # pipeline was given (None: files are ignored, with a warning); the jobs file sits beside
+    # the QQ groups file, local copies on the downloads volume.
+    group_files = GroupFileKeeper(
+        notifier.qq.groups, auto.drive if auto else None,
+        jobs_file=notifier.qq.groups.path.parent / JOBS_FILE,
+        temp=Downloads(load_settings(config)[0].output_dir).group_files,
+    ) if notifier and notifier.qq else None
     # The QQ bot's event connection: keeps it online and learns which groups it is in.
     gateway = QQGateway(
         notifier.qq.settings, notifier.qq.groups, alert=notifier.alert,
         names=lambda: {entry_id(e): e.get("name") or e["channel"] for e in roster.entries},
+        take_group_file=group_files.posted if group_files else None,
     ) if notifier and notifier.qq else None
 
     @contextlib.asynccontextmanager
@@ -95,6 +106,7 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
         task = asyncio.create_task(mon.run(interval))
         auto_task = asyncio.create_task(auto.run()) if auto else None
         qq_task = asyncio.create_task(gateway.run()) if gateway else None
+        files_task = asyncio.create_task(group_files.run()) if group_files else None
         yield
         task.cancel()
         if auto_task:
@@ -102,6 +114,10 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
         if qq_task:
             qq_task.cancel()
             await gateway.aclose()
+        if files_task:
+            files_task.cancel()
+            await asyncio.gather(files_task, return_exceptions=True)
+            await group_files.aclose()
         await mon.aclose()
         alerts.stop()
         if notifier:
@@ -110,6 +126,8 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
     app = FastAPI(title="Kiri Live Monitor", lifespan=lifespan)
     app.state.notifier = notifier
     app.state.auto = auto
+    app.state.gateway = gateway
+    app.state.group_files = group_files
     def streamer_names() -> set[str]:
         return {e.get("name") or e["channel"] for e in roster.entries}
 

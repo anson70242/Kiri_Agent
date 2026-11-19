@@ -98,6 +98,7 @@ class DriveLink:
 DOWNLOADING_SUFFIX = ".part"  # a download in progress (the video, or Twitch raw chat being fetched)
 SAVING_SUFFIX = ".tmp"  # an artifact being saved by a stage: never a download in progress
 DRIVE_COPIES_FOLDER = ".drive_copies"  # under the downloads root: drive copy zips being uploaded
+GROUP_FILES_FOLDER = ".group_files"  # under the downloads root: group files between QQ and the drive
 
 
 @dataclass(frozen=True)
@@ -403,6 +404,12 @@ class Downloads:
         outside every archive. Never a creator folder (`safe_name` strips a leading dot), and
         never listed as an archive."""
         return self.root / DRIVE_COPIES_FOLDER
+
+    @property
+    def group_files(self) -> Path:
+        """Where group files wait between QQ and the drive (backend.group_files): beside the
+        drive copies, outside every archive, never listed as an archive."""
+        return self.root / GROUP_FILES_FOLDER
 
     def list(self) -> list[Archive]:
         """Every `<creator>/<date>/<title>/` archive, newest first by date, then by when a file
