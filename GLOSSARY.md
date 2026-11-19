@@ -60,6 +60,20 @@ _Avoid_: final result, cloud backup
 The address editors download a drive copy from (网盘链接), with its extraction code. It is noted in the archive, so the archive's page can show it.
 _Avoid_: share link, pan link
 
+### Group files
+
+**Group file**:
+A file a member posts in a QQ group (群文件), in the chat or through the group's file panel. The bot sees both the same way, as a message with the file attached.
+_Avoid_: group attachment, QQ file
+
+**Filing rule**:
+Which group files are kept on the cloud drive and where: a tag in the file's name, an extension, and the subfolder they lead to.
+_Avoid_: sort rule, routing rule
+
+**Group folder**:
+The folder on the cloud drive that holds one QQ group's filed files, named after the group.
+_Avoid_: group directory
+
 ### State files
 
 **State file**:

@@ -22,7 +22,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -34,8 +33,6 @@ from .qq import KIND_LABELS, QQApi, QQError, QQGroups, QQSettings
 log = logging.getLogger(__name__)
 
 GROUP_EVENTS = 1 << 25
-HANDLED_EVENTS = ("GROUP_ADD_ROBOT", "GROUP_AT_MESSAGE_CREATE", "GROUP_DEL_ROBOT", "GROUP_MSG_REJECT",
-                  "GROUP_MSG_RECEIVE")
 
 
 PLATFORMS = {"youtube": "YouTube", "twitch": "Twitch"}
@@ -78,7 +75,6 @@ class QQGateway:
         self.connect, self.clock, self.sleep, self.alert_after = connect, clock, sleep, alert_after
         self.online = False
         self.bot_name = ""
-        self.bot_id = ""  # for the probe only
         self.last_error = ""
         self.offline_since: float | None = None
         self.alerted = False
@@ -91,11 +87,9 @@ class QQGateway:
         group = d.get("group_openid")
         if t == "READY":
             self.bot_name = (d.get("user") or {}).get("username") or ""
-            self.bot_id = str((d.get("user") or {}).get("id") or "")
             return
         if not group:
             return
-        self.probe(t, d, group)
         if t in ("GROUP_ADD_ROBOT", "GROUP_AT_MESSAGE_CREATE"):
             g, new = self.groups.register(group)
             role = (d.get("author") or {}).get("member_role")
@@ -114,50 +108,6 @@ class QQGateway:
         elif t == "GROUP_MSG_RECEIVE":
             if self.groups.get(group):
                 self.groups.update(group, status="active")
-
-    def probe(self, t: Any, d: dict[str, Any], group: str) -> None:
-        """Temporary (2026-11-19), to be removed once the answer is known: log what QQ sends when a
-        member posts a file in a group, so we learn whether a group file reaches the bot as an
-        attachment (which event, which fields, how long its url lives). Logged: every group event
-        this module does not handle, and any message with attachments; the event's field names and
-        the attachments, and a message that is only a file in full; never a member's text."""
-        attachments = d.get("attachments") or []
-        if d.get("mentions"):
-            # How is the bot named in `mentions`, is the author's role there, and what does the
-            # text look like around the mention? Shapes only: a string is shown as what it equals
-            # (the bot's id or name) or as its length, the text with every character as `x`.
-            log.info("qq probe: mention in %s: mentions %s, author %s, text %s", t,
-                     json.dumps([self._shape(m) for m in d["mentions"] if isinstance(m, dict)], ensure_ascii=False),
-                     json.dumps({**self._shape(d.get("author") or {}),
-                                 **{k: v for k, v in (d.get("author") or {}).items() if k == "member_role"}},
-                                ensure_ascii=False),
-                     re.sub(r"[^\s<>@!/:=\"'#\[\]()]", "x", str(d.get("content") or "")))
-        if t in HANDLED_EVENTS and not attachments:
-            return
-        g = self.groups.get(group) or {}
-        log.info("qq probe: %s in %s, fields %s, %d attachment(s)", t, g.get("name") or group,
-                 sorted(d), len(attachments))
-        for a in attachments:
-            log.info("qq probe: attachment %s", json.dumps(a, ensure_ascii=False))
-        if attachments and all(a.get("content_type") == "file" for a in attachments):
-            # A file carries no text of the member's own, so the whole message can be shown: does any
-            # field say which folder of the group files it went to?
-            log.info("qq probe: file message %s", json.dumps(d, ensure_ascii=False))
-
-    def _shape(self, entry: dict[str, Any]) -> dict[str, Any]:
-        """The probe's view of one object: flags and numbers as they are, a string as what it
-        equals or as its length."""
-        def shape(v: Any) -> Any:
-            if isinstance(v, bool | int | float) or v is None:
-                return v
-            if isinstance(v, str):
-                if v and v == self.bot_id:
-                    return "is the bot's id"
-                if v and v == self.bot_name:
-                    return "is the bot's name"
-                return f"text of {len(v)}"
-            return type(v).__name__
-        return {k: shape(v) for k, v in entry.items()}
 
     def _set_status(self, group: str, status: str, why: str) -> None:
         g = self.groups.get(group) or self.groups.register(group)[0]
