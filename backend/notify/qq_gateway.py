@@ -12,6 +12,9 @@ QQ has no "list my groups" API: a group's openid only arrives in events. So:
   帮助 (the commands, for anyone); anything else gets the help.
 - Any other message is never answered and registers nothing. Nothing of a message's text
   is logged: in a group that sends everything, that is the members' chat.
+- Every `file` attachment of a group message, mentioned or not, is handed to the group-files
+  module (`take_group_file`) with the group, the message's id and time, and nothing else of
+  the message; the module decides by the group's switch (backend.group_files).
 - GROUP_DEL_ROBOT (bot removed) -> "removed"; GROUP_MSG_REJECT (proactive messages
   turned off) -> "muted"; both stop deliveries and raise one alert (Discord).
   GROUP_MSG_RECEIVE (turned back on) -> "active".
@@ -37,11 +40,14 @@ from typing import Any
 
 import httpx
 
-from .qq import KIND_LABELS, QQApi, QQError, QQGroups, QQSettings
+from backend.group_files.rules import rule_lines
+
+from .qq import KIND_LABELS, GroupFiles, QQApi, QQError, QQGroups, QQSettings
 
 log = logging.getLogger(__name__)
 
 GROUP_EVENTS = 1 << 25
+MESSAGE_EVENTS = ("GROUP_MESSAGE_CREATE", "GROUP_AT_MESSAGE_CREATE")
 
 
 PLATFORMS = {"youtube": "YouTube", "twitch": "Twitch"}
@@ -92,12 +98,15 @@ class QQGateway:
     def __init__(self, settings: QQSettings, groups: QQGroups, *,
                  names: Callable[[], dict[str, str]],
                  alert: Callable[[str], Any],
+                 # (group openid, message id, message time, attachment): the group-files module
+                 take_group_file: Callable[[str, str, Any, dict[str, Any]], Any] | None = None,
                  client: httpx.AsyncClient | None = None,
                  connect: Callable[[str], Any] = default_connect,
                  clock: Callable[[], float] = time.monotonic,
                  sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
                  alert_after: float = 600):
         self.groups, self.names, self.alert = groups, names, alert
+        self.take_group_file = take_group_file
         self.client = client or httpx.AsyncClient(timeout=30)
         self.api = QQApi(settings, self.client)
         self.connect, self.clock, self.sleep, self.alert_after = connect, clock, sleep, alert_after
@@ -118,6 +127,8 @@ class QQGateway:
             return
         if not group:
             return
+        if t in MESSAGE_EVENTS:
+            self._hand_over_files(group, d)
         if t == "GROUP_ADD_ROBOT":
             g, new = self.groups.register(group)
             log.info("qq: group %s %s", g.get("name") or group, "registered" if new else "added again")
@@ -144,6 +155,18 @@ class QQGateway:
             return  # anyone may @ the bot; not everyone may make it repeat a long answer
         log.info("qq: group %s mentioned", g.get("name") or group)  # never the text: it is the members' chat
         await self._reply(group, command.answer(self, g), msg_id=d.get("id"))
+
+    def _hand_over_files(self, group: str, d: dict[str, Any]) -> None:
+        """Each `file` attachment (a group file) to the group-files module; pictures, voice and
+        video have other content types and stay here, like the rest of the message."""
+        if not self.take_group_file:
+            return
+        for a in d.get("attachments") or []:
+            if isinstance(a, dict) and a.get("content_type") == "file":
+                try:
+                    self.take_group_file(group, d.get("id") or "", d.get("timestamp"), dict(a))
+                except Exception as e:  # noqa: BLE001 - a broken hand-over never stops the gateway
+                    log.error("qq: a group file of %s was not taken: %s", group, type(e).__name__)
 
     async def _reply(self, group: str, content: str, **reply: Any) -> None:
         try:
@@ -172,8 +195,10 @@ class QQGateway:
 
     def help_text(self, g: dict[str, Any]) -> str:
         lines = ["@我 并在后面写上指令：", *(f"- {word}：{c.does}" for word, c in COMMANDS.items())]
-        # What a group's own features add to the help (the filing rules, for a group whose
-        # files go to the drive) is appended here, after the commands.
+        # What a group's own features add to the help comes after the commands.
+        files = GroupFiles.of(g)
+        if files.to_drive:
+            lines += ["", "本群的群文件按文件名自动存到夸克网盘：", *rule_lines(files.folder)]
         return "\n".join(lines)
 
     # ---- connection ----
