@@ -281,12 +281,17 @@ class GroupFileKeeper:
 
     def snapshot(self) -> dict[str, Any]:
         """What is being downloaded or uploaded now, with its progress (`done` of `total`
-        bytes), and the jobs waiting, oldest first. Rows name the group (its folder) and the
-        file: for a user who sees everything only."""
+        bytes), and the jobs waiting, oldest first, with the last error and the time of the
+        next try of one that failed ("" and 0 for none). Rows name the group (its folder) and
+        the file: for a user who sees everything only."""
         active = [dict(a) for a in self._active.values() if a]
         busy = {a["id"] for a in active}
+        # getattr: a job's last error and next try are the retries' fields (failures.py);
+        # the snapshot reads them as the pipeline's jobs name them, and copes without.
         queue = [{"id": j.id, "group": j.group_folder, "file": j.name,
-                  "waiting_for": "upload" if j.downloaded else "download"}
+                  "waiting_for": "upload" if j.downloaded else "download",
+                  "last_error": getattr(j, "last_error", "") or "",
+                  "next_try": getattr(j, "next_try", 0) or 0}
                  for j in self.jobs.load() if j.id not in busy]
         return {"active": active, "queue": queue}
 
