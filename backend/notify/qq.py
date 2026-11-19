@@ -34,6 +34,7 @@ from typing import Any
 import httpx
 
 from backend.monitor import StreamStatus
+from backend.monitor.roster import drive_folder_as_typed
 from backend.state_file import StateFile, expect_list
 
 from .base import EventKind, Notifier, StreamEvent
@@ -96,12 +97,53 @@ class QQSettings:
 
 # ---- groups ----
 
+SWITCHES = ("group_files_to_drive", "group_file_notices")  # a group's two group-file switches
+
+
 def decode_groups(raw: Any) -> dict[str, dict[str, Any]]:
     """The file's list of groups, keyed by openid; raises on anything else."""
     for g in expect_list(raw, "groups"):
         if not (isinstance(g, dict) and isinstance(g.get("openid"), str)):
             raise ValueError(f"not a group (needs an openid): {g!r}")
+        if bad := [k for k in SWITCHES if not isinstance(g.get(k, False), bool)]:
+            raise ValueError(f"not a group ({', '.join(bad)} must be true or false): {g!r}")
     return {g["openid"]: g for g in raw}
+
+
+def group_folder(name: str) -> str:
+    """The group folder a group's name gives: the name itself, one folder at the top of the
+    drive. Raises ValueError with the reason, in Chinese, when the name cannot be one: it
+    is blank, holds a slash of either kind, or fails the roster's drive-folder check."""
+    name = name.strip()
+    if not name:
+        raise ValueError("群名是空的：群文件会放进以群名命名的网盘文件夹，先填群名")
+    if "/" in name or "\\" in name:
+        raise ValueError("群名不能当网盘文件夹名：不能含有 / 或 \\")
+    try:
+        return drive_folder_as_typed(name)
+    except ValueError as e:
+        raise ValueError(f"群名不能当网盘文件夹名：{e}") from None
+
+
+@dataclass(frozen=True)
+class GroupFiles:
+    """What the group-files module needs of one group: whether its files go to the drive,
+    whether it is told about them, and its group folder. Both switches read as off for a
+    group marked as removed, and for a group saved before the switches existed."""
+
+    to_drive: bool
+    notices: bool
+    folder: str  # "" when the name cannot be a group folder (then `to_drive` is never saved on)
+
+    @classmethod
+    def of(cls, group: dict[str, Any]) -> GroupFiles:
+        present = group.get("status") != "removed"
+        try:
+            folder = group_folder(group.get("name") or "")
+        except ValueError:
+            folder = ""
+        return cls(to_drive=present and bool(group.get("group_files_to_drive")) and bool(folder),
+                   notices=present and bool(group.get("group_file_notices")), folder=folder)
 
 
 class QQGroups:
@@ -110,7 +152,10 @@ class QQGroups:
     A group: {openid, name, enabled, streamers: [streamer name: a person, every platform;
     older saves hold channel ids, still honoured], kinds: [event kind],
     status: "active" | "removed" (bot kicked) | "muted" (proactive messages turned off),
-    added_at}. New groups start switched off with no streamers.
+    added_at, group_files_to_drive, group_file_notices}. New groups start switched off with
+    no streamers. The two group-file switches don't depend on `enabled`, the streamers or
+    the kinds; a group saved before they existed has neither and reads as off and off
+    (read them through `group_files`).
 
     Operator data: a damaged file raises StateFileError (the service refuses to start)
     instead of wiping the subscriptions; a missing one means no groups yet.
@@ -144,14 +189,25 @@ class QQGroups:
                 self.save()
             return dict(g), False
         g = {"openid": openid, "name": "", "enabled": False, "streamers": [], "kinds": list(DEFAULT_KINDS),
+             "group_files_to_drive": False, "group_file_notices": False,
              "status": "active", "added_at": datetime.now(timezone.utc).isoformat()}
         self._groups[openid] = g
         self.save()
         return dict(g), True
 
+    def group_files(self, openid: str) -> GroupFiles | None:
+        """The group's group-file switches and folder; None for a group the bot doesn't know."""
+        g = self._groups.get(openid)
+        return GroupFiles.of(g) if g else None
+
     def update(self, openid: str, **fields: Any) -> dict[str, Any]:
+        """Change a group's settings; None values are left alone. Raises ValueError (nothing
+        saved) when its files would go to the drive while its name cannot be their folder."""
         g = self._groups[openid]
-        g.update({k: v for k, v in fields.items() if v is not None})
+        new = g | {k: v for k, v in fields.items() if v is not None}
+        if new.get("group_files_to_drive"):
+            group_folder(new.get("name") or "")
+        g.update(new)
         self.save()
         return dict(g)
 
