@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import threading
+import time
 
 from backend import quark
 from backend.downloader.auto import load_auto
@@ -87,9 +88,11 @@ def test_the_pipeline_given_no_drive_has_none(tmp_path):
     assert load_auto(write_config(tmp_path), drive=None).drive is None
 
 
-def test_left_alone_the_pipeline_builds_its_own_drive_as_before(tmp_path):
-    """The deploy check calls load_auto without a drive."""
-    assert isinstance(load_auto(write_config(tmp_path)).drive, quark.Quark)
+def test_left_alone_the_pipeline_has_no_drive(tmp_path, caplog):
+    """The deploy check calls load_auto without a drive: it only reads the queue."""
+    with caplog.at_level(logging.INFO, logger="backend.quark"):
+        assert load_auto(write_config(tmp_path)).drive is None
+    assert not [r for r in caplog.records if "drive" in r.message]
 
 
 # ---- the group-files module with the real Quark module ----
@@ -107,8 +110,9 @@ def test_a_group_files_download_starts_while_a_drive_copy_uploads_and_its_upload
 
     worker = threading.Thread(target=lambda: asyncio.run(settle(s.keeper)), daemon=True)  # the upload loop
     worker.start()
-    assert wait_for(lambda: d.waiting == [quark.UploadKind.GROUP_FILE])  # listed, then waiting for its turn
+    time.sleep(0.3)  # waiting for its turn: nothing listed yet
     assert uploads.started == [ZIP]
+    assert ["create-folder", "--dir-path", f"{FOLDER}/待校", "--parent-fid", "0"] not in cli.commands()
 
     uploads.let_go(ZIP)
     uploads.let_go("【待校】第3话.ass")

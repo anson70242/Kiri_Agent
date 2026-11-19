@@ -27,7 +27,7 @@ def files(s):
 
 def restart(s, until):
     """A new keeper on the same files (the service started again), run until `until()`."""
-    keeper = GroupFileKeeper(s.groups, s.drive, jobs_file=s.jobs_file, temp=s.temp,
+    keeper = GroupFileKeeper(s.groups, s.drive, temp=s.temp,
                              client=s.host.client(), clock=s.clock)
 
     async def scenario() -> None:

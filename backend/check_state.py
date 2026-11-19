@@ -27,8 +27,8 @@ from backend.auth import load_auth
 from backend.downloader import load_settings
 from backend.downloader.auto import Job, load_auto
 from backend.downloader.pending import PendingChats
-from backend.group_files import JOBS_FILE, GroupFileJob, GroupFileJobs
-from backend.group_files.record import UPLOADS_FILE, GroupFileUploads
+from backend.group_files import GroupFileJob, GroupFileJobs, state_files
+from backend.group_files.record import GroupFileUploads
 from backend.monitor.roster import load_roster
 from backend.notify import load_notifier
 from backend.state_file import Damage, dry_run
@@ -53,9 +53,9 @@ def check(config: Path) -> tuple[list[Damage], list[Job], list[GroupFileJob]]:
             pending.load()  # the chat retry queue
         group_files: list[GroupFileJob] = []
         if notifier and notifier.qq:  # the service keeps group files only with the QQ bot on
-            data = notifier.qq.groups.path.parent  # both files sit beside the QQ groups file
-            group_files = GroupFileJobs(data / JOBS_FILE).load()
-            GroupFileUploads(data / UPLOADS_FILE).load()  # the record of uploads
+            jobs_file, uploads_file = state_files(notifier.qq.groups.path)
+            group_files = GroupFileJobs(jobs_file).load()
+            GroupFileUploads(uploads_file).load()  # the record of uploads
     unique = {d.path: d for d in damaged}  # the roster is loaded twice (load_auto reads it too)
     return list(unique.values()), jobs, group_files
 

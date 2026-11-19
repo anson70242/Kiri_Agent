@@ -17,7 +17,15 @@ from typing import Any
 
 from backend.state_file import StateFile, expect_list
 
+from .record import UPLOADS_FILE
+
 JOBS_FILE = "group_file_jobs.json"  # in the data directory, beside qq_groups.json
+
+
+def state_files(groups_file: Path) -> tuple[Path, Path]:
+    """The module's two state files, beside the QQ groups file `groups_file`: the jobs file
+    and the record of uploads."""
+    return groups_file.parent / JOBS_FILE, groups_file.parent / UPLOADS_FILE
 
 
 @dataclass

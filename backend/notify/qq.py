@@ -387,6 +387,32 @@ class QQApi:
         return True
 
 
+# ---- sending with tries ----
+
+TRIES = 2  # tries of one message
+RETRY_PAUSE = 2.0  # seconds between two tries
+
+
+def refused_by_rule(e: Exception) -> bool:
+    """QQ refused by one of its rules (a 40xxxxxx code, e.g. proactive messages off):
+    trying again won't help."""
+    return isinstance(e, QQError) and bool(e.code) and 40000000 <= int(e.code) < 50000000
+
+
+async def send_with_tries(api: QQApi, group: str, text: str, tries: int = TRIES, msg_id: str | None = None) -> None:
+    """Send `text` to `group` (a reply to `msg_id` when given), with `tries` tries: a network
+    error, or an error QQ gives that is not one of its rules, is tried again after a short
+    pause. Raises the last error."""
+    for attempt in range(tries):
+        try:
+            await api.send_markdown(group, text, msg_id=msg_id)
+            return
+        except (QQError, httpx.HTTPError) as e:
+            if refused_by_rule(e) or attempt + 1 >= tries:
+                raise
+        await asyncio.sleep(RETRY_PAUSE)
+
+
 # ---- notifier ----
 
 class QQNotifier(Notifier):
@@ -394,7 +420,7 @@ class QQNotifier(Notifier):
     logs_itself = True  # one history entry per group
 
     def __init__(self, settings: QQSettings, groups: QQGroups, client: httpx.AsyncClient | None = None,
-                 history: NotifyHistory | None = None, gap: float = 1.0, tries: int = 2):
+                 history: NotifyHistory | None = None, gap: float = 1.0, tries: int = TRIES):
         self.settings, self.groups = settings, groups
         self.client = client or httpx.AsyncClient(timeout=30)
         self.api = QQApi(settings, self.client)
@@ -426,18 +452,12 @@ class QQNotifier(Notifier):
     async def deliver(self, group: dict[str, Any], text: str, summary: str, quiet: bool = False) -> bool:
         """Send to one group, retrying a little; logs and records the outcome.
         `quiet`: a failure is neither logged nor recorded (the caller tries again)."""
-        error = ""
-        for attempt in range(self.tries):
-            try:
-                await self.api.send_markdown(group["openid"], text)
-                self.history.add("qq", group["openid"], summary, True)
-                return True
-            except (QQError, httpx.HTTPError) as e:
-                error = str(e) or type(e).__name__
-                if isinstance(e, QQError) and e.code and 40000000 <= int(e.code) < 50000000:
-                    break  # a rule (e.g. proactive messages off): retrying won't help
-                if attempt + 1 < self.tries:
-                    await asyncio.sleep(2)
+        try:
+            await send_with_tries(self.api, group["openid"], text, self.tries)
+            self.history.add("qq", group["openid"], summary, True)
+            return True
+        except (QQError, httpx.HTTPError) as e:
+            error = str(e) or type(e).__name__
         if quiet:
             return False
         log.warning("qq: %s not delivered to %s: %s", summary, group.get("name") or group["openid"], error)

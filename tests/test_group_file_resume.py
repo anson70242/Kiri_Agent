@@ -108,7 +108,7 @@ def test_a_part_left_by_a_restart_is_continued(tmp_path):
     (s.temp / job.id).mkdir(parents=True)
     (s.temp / job.id / "【熟肉】第3话.mp4.part").write_bytes(DATA[:50_000])  # the service was killed
 
-    keeper = GroupFileKeeper(s.groups, s.drive, jobs_file=s.jobs_file, temp=s.temp,
+    keeper = GroupFileKeeper(s.groups, s.drive, temp=s.temp,
                              client=s.host.client(), clock=s.clock)
 
     async def scenario() -> None:

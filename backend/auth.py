@@ -116,10 +116,14 @@ def public_user(u: dict[str, Any]) -> dict[str, Any]:
             "created_at": u.get("created_at"), "streamers": streamers_of(u)}
 
 
+def is_admin(u: dict[str, Any]) -> bool:
+    return u.get("role") == "admin"
+
+
 def streamers_of(u: dict[str, Any]) -> str | list[str]:
     """Whom a user may see: "all", or a list of streamer names (members only; a new
     member sees nobody until an admin picks). Admins always see everyone."""
-    if u.get("role") == "admin":
+    if is_admin(u):
         return "all"
     s = u.get("streamers")
     return "all" if s == "all" else list(s or [])

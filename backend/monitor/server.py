@@ -22,10 +22,10 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from backend.archive import Downloads
-from backend.auth import auth_enabled, load_auth
+from backend.auth import auth_enabled, is_admin, load_auth
 from backend.downloader import load_settings
 from backend.downloader.auto import attach
-from backend.group_files import JOBS_FILE, GroupFileKeeper
+from backend.group_files import GroupFileKeeper
 from backend.group_files.report import GroupFileReport
 from backend.notify.incidents import IncidentAlerts
 from backend.notify.qq_gateway import QQGateway
@@ -91,13 +91,12 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
         print("Notify: off (set DISCORD_WEBHOOK_URL in .env to enable)")
     print(f"Auto-download: {len(auto.keep)} streamer(s)" if auto else "Auto-download: off")
     # Group files to the drive: the gateway hands them over. The drive is the service's one
-    # (None: files are ignored, with a warning); the jobs file sits beside the QQ groups file,
-    # local copies on the downloads volume; failed files are retried with the pipeline's
+    # (None: files are ignored, with a warning); its state files sit beside the QQ groups
+    # file, local copies on the downloads volume; failed files are retried with the pipeline's
     # interval and maximum of errors. The group is told through the QQ bot, the owner
     # through the operator alert.
     group_files = GroupFileKeeper(
         notifier.qq.groups, drive,
-        jobs_file=notifier.qq.groups.path.parent / JOBS_FILE,
         temp=Downloads(load_settings(config)[0].output_dir).group_files,
         report=GroupFileReport(notifier.qq.api, notifier.qq.groups, alert=notifier.alert, history=notifier.history),
         **({"retry_interval": auto.retry_interval, "max_errors": auto.max_errors} if auto else {}),
@@ -198,7 +197,7 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
         # Group files have no streamer and name a QQ group's files: only for the owner (an
         # admin, or login off), under their own key, and only while there are some.
         user = getattr(request.state, "user", None)
-        files = group_files.snapshot() if group_files and (user is None or user.get("role") == "admin") else None
+        files = group_files.snapshot() if group_files and (user is None or is_admin(user)) else None
         extra = {"group_files": files} if files and (files["active"] or files["queue"]) else {}
         if not auto:
             return {"enabled": False, "active": [], "queue": [], **extra}

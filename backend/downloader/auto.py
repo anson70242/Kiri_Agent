@@ -51,7 +51,6 @@ import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from types import EllipsisType
 from typing import Any, Literal
 from urllib.parse import quote
 
@@ -61,7 +60,6 @@ from backend.asr import ASRSettings, transcribe
 from backend.drive import LOGIN_COMMAND as DRIVE_LOGIN_COMMAND
 from backend.drive import Drive, DriveAuthorizationLapsed, DriveCopy, DriveFailed
 from backend.drive_copy import remove_leftover_drive_copies
-from backend.quark import load_quark
 from backend.llm import LLMError, chat, load_llm
 from backend.tencent_docs import (
     TencentDocsError, load_credentials, sheet_title, upload_table)
@@ -84,6 +82,10 @@ AUTH_HINTS = ("member", "sign in", "cookie", "login", "subscriber", "private")
 # A live shorter than this whose replay is not published is dropped without a word: test
 # lives and the fragments a dropped connection leaves.
 SHORT_LIVE = 5 * 60
+# The defaults of download.auto.retry_minutes (in seconds) and max_errors; the group-files
+# module's retries take the same.
+RETRY_INTERVAL = 15 * 60
+MAX_ERRORS = 3
 
 
 @dataclass
@@ -164,9 +166,9 @@ class AutoDownloader:
         streamers: Iterable[Streamer],
         keep: dict[str, int],  # streamer id -> archives to keep; only these auto-download
         state_file: Path,
-        retry_interval: float = 15 * 60,
+        retry_interval: float = RETRY_INTERVAL,
         give_up: float = 12 * 3600,
-        max_errors: int = 3,
+        max_errors: int = MAX_ERRORS,
         default_keep: int = 6,  # for streamers without their own `keep`
         notify: Callable[[StreamEvent], None] | None = None,
         clock: Callable[[], float] = time.time,
@@ -812,11 +814,11 @@ def failure_detail(job: Job, settings: DownloadSettings) -> str:
     return text
 
 
-def load_auto(config: Path, drive: Drive | None | EllipsisType = ...) -> AutoDownloader | None:
+def load_auto(config: Path, drive: Drive | None = None) -> AutoDownloader | None:
     """AutoDownloader from config.json (streamers from the roster), or None if
-    `download.auto.enabled` is false. `drive`: the service's one drive, so drive copies take
-    turns with the other uploads through it (None: not available); left out, the drive
-    config.json names is built here (the deploy check)."""
+    `download.auto.enabled` is false. `drive`: the service's one drive (`load_quark`), so
+    drive copies take turns with the other uploads through it; None: not available (the
+    deploy check needs none)."""
     cfg = json.loads(config.read_text(encoding="utf-8"))
     auto = (cfg.get("download") or {}).get("auto") or {}
     if auto.get("enabled") is False:
@@ -843,16 +845,16 @@ def load_auto(config: Path, drive: Drive | None | EllipsisType = ...) -> AutoDow
         streamers,
         keep,
         state if state.is_absolute() else REPO_ROOT / state,
-        retry_interval=float(auto.get("retry_minutes", 15)) * 60,
+        retry_interval=float(auto.get("retry_minutes", RETRY_INTERVAL / 60)) * 60,
         give_up=float(auto.get("give_up_hours", 12)) * 3600,
-        max_errors=int(auto.get("max_errors", 3)),
+        max_errors=int(auto.get("max_errors", MAX_ERRORS)),
         default_keep=default_keep,
         transcribe=transcriber,
         analyze=analyzer,
         translate=load_translator(config, cfg) if transcriber else None,
         upload=load_uploader(config) if analyzer else None,  # uploads the analysis
         # None without the CLI: ticked streamers get READY as today
-        drive=load_quark(config) if isinstance(drive, EllipsisType) else drive,
+        drive=drive,
     )
     ad.uploads = roster.upload_map()
     ad.drive_folders = roster.drive_map()
@@ -923,7 +925,7 @@ def load_analyzer(config: Path, cfg: dict[str, Any]) -> Callable[[Path, str, str
 
 
 def attach(config: Path, mon: StreamMonitor,
-           drive: Drive | None | EllipsisType = ...) -> tuple[LiveNotifier | None, AutoDownloader | None]:
+           drive: Drive | None = None) -> tuple[LiveNotifier | None, AutoDownloader | None]:
     """Hook notifications and auto-download onto a monitor. Run `auto.run()` as a task.
     `drive`: as in load_auto."""
     auto = load_auto(config, drive)

@@ -23,7 +23,7 @@ A person still decides what to cut in the end.
 | [Web pages](#web-pages) | Five pages: live status / archives / highlight tables / notifications / users; a highlight table downloads as a formatted Excel file | Done |
 | [Upload to Tencent Docs](#upload-to-tencent-docs) | Highlight table → one sub-sheet (formatted) in a Tencent Docs spreadsheet, set per streamer, uploaded automatically | Done |
 | [Drive copies on Quark](#drive-copies-on-quark) | Processed live → one zip (video, chat, SRT, highlight table) kept for good on a Quark cloud drive, with a drive link for the editors; set per streamer | Done |
-| [Group files to the drive](#group-files-to-the-drive) | A file posted in a QQ group whose name carries a stage tag (【待校】 and the like) → the group's folder on the same Quark drive, sorted by stage; set per group. The bot answers two commands, `订阅` (subscriptions) and `帮助` (help) | Done |
+| [Group files to the drive](#group-files-to-the-drive) | A group file (posted in a QQ group) that a filing rule keeps, by the tag in its name (【待校】 and the like) → the rule's subfolder of the group folder on the same Quark drive; set per group. The bot answers two commands, `订阅` (subscriptions) and `帮助` (help) | Done |
 | Google Sheets | The same upload, to Google Sheets instead | Planned |
 
 Each live goes through the steps in order: download → transcribe → analysis and translation side by side → upload → drive copy. Every step retries on failure and reports on Discord.
@@ -343,17 +343,17 @@ docker compose exec kiri /app/.venv/bin/python -m backend.quark upload <录播�
 ### Group files to the drive
 
 Each QQ group on the 通知 page has two more switches, 「群文件上传到夸克网盘」 (group files to the Quark drive) and 「群文件上传通知」 (group-file notices), both off until turned on and independent of the group's live notifications.
-With the first on, a file posted in the group (in the chat or in its file panel) whose name holds one of five tags, with the right extension, is uploaded to the same Quark drive:
-【待轴】 and 【熟肉】 `.mp4`, 【空轴】, 【待校】 and 【已校】 `.ass`, each into `<群名>/<its folder>/` (`<群名>` is the group's name on the 通知 page, at the top of the drive). Every other file is ignored.
+With the first on, a group file (a file posted in the group, in the chat or in its file panel) that one of five filing rules keeps, by a tag in its name and its extension, is uploaded to the same Quark drive:
+【待轴】 and 【熟肉】 `.mp4`, 【空轴】, 【待校】 and 【已校】 `.ass`, each into the rule's subfolder of the group folder, `<群名>/<subfolder>/` (`<群名>` is the group's name on the 通知 page, at the top of the drive). Every other file is ignored.
 
 - The group's owner must turn on 「接收所有消息」 (receive all messages) for the bot in mobile QQ; without it the bot sees only the messages that mention it.
   QQ then sends the bot the whole chat; the service acts on attached files and mentions only, and neither stores nor logs anything else
   (why, in [ADR 0002](docs/adr/0002-group-files-through-the-official-bots-message-events.md)).
 - A file is downloaded to the server as it is posted, uploaded, and deleted from the server. The same file posted again is not uploaded again; a different file under a name already there is kept beside it, with the time it was posted in its name.
   Nothing on the drive is replaced, moved or deleted.
-- Group files and drive copies take turns at the drive, a group file first; behind a running drive copy a file waits until it ends. Failures are retried like the pipeline's.
+- Group files and drive copies take turns at the drive (the Quark CLI never runs twice at once), a group file first; behind a running drive copy's upload a group file waits until it ends. Failures are retried like the pipeline's.
 - With the second switch on, the group is told when a file is on the drive and when it could not be put there; failures reach Discord either way.
-  A file that has waited a minute behind another upload is told once that it is queued, with what the drive is busy with (a recording or another group file) and how far along.
+  A group file that has waited a minute behind another upload is told once that it is queued, with what the drive is busy with (a drive copy or another group file) and how far along.
 - Out of reach: files already in the group, files posted while the service or the bot is offline (a deploy's restart included), and the folder a member chose in the file panel.
 
 The code is in [backend/group_files](backend/group_files). For turning it on, see 「群文件上传到夸克网盘」 in [docs/deploy.md](docs/deploy.md) (in Chinese).

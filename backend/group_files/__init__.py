@@ -12,11 +12,11 @@ One concern a file:
 - naming.py    the name on the drive, decided from the subfolder's listing
 - record.py    the record of uploads (runtime state): is the file there the same content?
 - failures.py  what becomes of a job after a failed attempt
-- report.py    where each outcome is told (the log; messages later)
+- report.py    where each outcome is told: the group's messages, the owner's alerts, the log
 - worker.py    GroupFileKeeper: takes files in, runs the loops, the snapshot
 """
 
-from .jobs import JOBS_FILE, GroupFileJob, GroupFileJobs
+from .jobs import JOBS_FILE, GroupFileJob, GroupFileJobs, state_files
 from .worker import GroupFileKeeper
 
-__all__ = ["JOBS_FILE", "GroupFileJob", "GroupFileJobs", "GroupFileKeeper"]
+__all__ = ["JOBS_FILE", "GroupFileJob", "GroupFileJobs", "GroupFileKeeper", "state_files"]
