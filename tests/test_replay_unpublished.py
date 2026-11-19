@@ -179,7 +179,7 @@ def test_the_deploy_check_passes_on_a_queue_file_of_the_previous_version(tmp_pat
                      "chat_retry": {"state_file": str(data / "pending_chat.json")}},
     }), encoding="utf-8")
 
-    damaged, jobs = check_state.check(cfg)
+    damaged, jobs, _ = check_state.check(cfg)
     assert damaged == [] and len(jobs) == 1
 
 
