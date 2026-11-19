@@ -3,7 +3,8 @@ the pipeline treats its drive jobs (backend.downloader.auto, `_finish_drive`):
 
 - A failure is one error of the job. It is tried again after the automatic download's retry
   interval and given up on at its maximum of errors (`download.auto.retry_minutes` and
-  `max_errors`: no settings of its own).
+  `max_errors`: no settings of its own), or at once when trying again cannot help (an
+  address that is not QQ's).
 - A lapsed authorization of the drive is neither an attempt nor an error: the job is tried
   again at the same interval and given up on DRIVE_LAPSE_GIVE_UP (72 hours) after the first
   lapsed try of the lapse. Any try that is not lapsed ends the lapse.
@@ -43,9 +44,10 @@ class AfterFailure:
 
 
 def after_failure(job: GroupFileJob, reason: str, lapsed: bool, now: float, *,
-                  retry_interval: float, max_errors: int) -> AfterFailure:
+                  retry_interval: float, max_errors: int, final: bool = False) -> AfterFailure:
     """The job after an attempt that failed with `reason`; `lapsed`: the drive's
-    authorization had lapsed. The attempt is over: its upload is no longer running."""
+    authorization had lapsed; `final`: trying again cannot help. The attempt is over: its
+    upload is no longer running."""
     job = dataclasses.replace(job, uploading=False, last_error=reason, next_try=now + retry_interval)
     if lapsed:
         first = job.lapsed_since is None
@@ -58,6 +60,6 @@ def after_failure(job: GroupFileJob, reason: str, lapsed: bool, now: float, *,
         return AfterFailure(job, Failure.FIRST_LAPSE if first else Failure.LATER_LAPSE, reason)
     job.lapsed_since = None  # a try that is not lapsed ends the lapse
     job.errors += 1
-    if job.errors >= max_errors:
+    if final or job.errors >= max_errors:
         return AfterFailure(job, Failure.GIVEN_UP, reason)
     return AfterFailure(job, Failure.FIRST_ERROR if job.errors == 1 else Failure.LATER_ERROR, reason)

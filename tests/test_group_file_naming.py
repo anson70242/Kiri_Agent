@@ -95,6 +95,33 @@ def test_a_new_version_posted_again_is_already_there_under_its_name_with_the_tim
     assert told.outcomes[-1] == ("already there", f"{SUB}/【待校】第3话.2026-11-19-0541.ass")
 
 
+def test_a_file_of_another_name_that_only_starts_like_it_is_no_earlier_version(tmp_path):
+    told = Told()
+    s = make(tmp_path, report=told)
+    s.drive.folders[SUB] = {"【待校】第3话.ass": b"put there by hand"}
+    s.post("【待校】第3话.v2.ass", b"the file", msg_id="M1")  # uploaded under its own name
+    s.settle()
+    s.post("【待校】第3话.ass", b"the file", msg_id="M2")
+    s.settle()
+
+    assert [put[1] for put in s.drive.put] == ["【待校】第3话.v2.ass", "【待校】第3话.2026-11-19-0541.ass"]
+    assert told.outcomes[-1] == ("uploaded", f"{SUB}/【待校】第3话.2026-11-19-0541.ass")
+
+
+def test_a_version_with_the_seconds_and_a_number_posted_again_is_already_there(tmp_path):
+    told = Told()
+    s = make(tmp_path, report=told)
+    s.drive.folders[SUB] = {"【待校】第3话.ass": b"a", "【待校】第3话.2026-11-19-0541.ass": b"b",
+                            "【待校】第3话.2026-11-19-054100.ass": b"c"}
+    s.post("【待校】第3话.ass", b"the file", msg_id="M1")
+    s.settle()
+    s.post("【待校】第3话.ass", b"the file", msg_id="M2", posted="2026-11-19T07:00:00+08:00")
+    s.settle()
+
+    assert [put[1] for put in s.drive.put] == ["【待校】第3话.2026-11-19-054100-2.ass"]
+    assert told.outcomes[-1] == ("already there", f"{SUB}/【待校】第3话.2026-11-19-054100-2.ass")
+
+
 def test_a_file_deleted_on_the_drive_is_uploaded_again_under_its_name_when_posted_again(tmp_path):
     s = make(tmp_path)
     s.post("【待校】第3话.ass", b"the file", msg_id="M1")
@@ -128,3 +155,4 @@ def test_the_same_name_in_another_group_is_another_place(tmp_path):
     s.settle()
 
     assert s.drive.put == [(SUB, "【待校】第3话.ass", b"the file"), ("鲷鱼烧字幕组/待校", "【待校】第3话.ass", b"the file")]
+

@@ -6,16 +6,19 @@ whatever the switch says; successes do not."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime
 
 import httpx
+import pytest
 
 from backend.drive import LOGIN_COMMAND, DriveAuthorizationLapsed, DriveFailed
 from backend.group_files.jobs import GroupFileJobs
 from backend.group_files.report import GroupFileReport
 from backend.notify.base import EventKind
 from backend.notify.history import NotifyHistory
+from backend.notify import qq
 from backend.notify.qq import KIND_LABELS, QQApi, QQSettings
 
 from .group_file_fakes import FOLDER, GROUP, POSTED, SECRET, FakeDrive, FakeQQ, make
@@ -25,19 +28,32 @@ MINUTE = 60.0
 POSTED_AT = datetime.fromisoformat(POSTED).timestamp()
 
 
+@pytest.fixture(autouse=True)
+def no_pause_between_tries(monkeypatch):
+    monkeypatch.setattr(qq, "RETRY_PAUSE", 0)
+
+
 class QQ(FakeQQ):
     """The QQ API; `refuse_replies`: a message sent as a reply is refused, as QQ does after
-    its 5 minutes; `down`: every message fails."""
+    its 5 minutes; `down`: every message fails; `errors`: the next messages fail with a
+    server error; `refuse`: every message is refused by a rule. `tries`: messages asked."""
 
     def __init__(self) -> None:
         super().__init__()
         self.refuse_replies = False
         self.down = False
+        self.errors = 0
+        self.refuse = False
+        self.tries = 0
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/messages"):
             body = json.loads(request.content)
-            if self.down:
+            self.tries += 1
+            if self.refuse:
+                return httpx.Response(400, json={"code": 40034105, "message": "proactive messages off"})
+            if self.down or self.errors:
+                self.errors = max(0, self.errors - 1)
                 return httpx.Response(500, json={"code": 500, "message": "server error"})
             if self.refuse_replies and body.get("msg_id"):
                 return httpx.Response(400, json={"code": 40034024, "message": "msg_id expired"})
@@ -168,6 +184,18 @@ def test_a_failed_download_is_told_as_well(tmp_path):
     assert len(t.alerts) == 1
 
 
+@pytest.mark.parametrize("url", ["https://files.example.net/x", ""])
+def test_an_address_that_is_not_qqs_is_given_up_on_at_once(tmp_path, url):
+    t = Told(tmp_path)
+    t.post("【待校】第3话.ass", url=url)
+    asyncio.run(t.s.keeper.download_next())
+
+    assert GroupFileJobs(t.s.jobs_file).load() == [] and t.s.host.requests == []
+    (_, sent, _), = t.qq.sent()
+    assert sent.startswith("❗ 群文件上传网盘失败，已放弃\n【待校】第3话.ass\n") and "稍后自动重试" not in sent
+    assert len(t.alerts) == 1
+
+
 def test_a_lapsed_authorization_tells_each_group_and_alerts_the_owner_once_per_lapse(tmp_path):
     t = Told(tmp_path)
     t.s.drive.error = DriveAuthorizationLapsed("网盘授权已失效")
@@ -258,6 +286,27 @@ def test_a_message_qq_does_not_take_is_noted_and_the_file_is_on_the_drive_all_th
     assert GroupFileJobs(t.s.jobs_file).load() == []
     ((target, summary, ok, error),) = [(e["target"], e["summary"], e["ok"], e["error"]) for e in t.history.entries()]
     assert (target, summary, ok) == (GROUP, "☁️ 群文件已上传网盘：【待校】第3话.ass", False) and error
+
+
+def test_a_notice_qq_fails_once_is_tried_again_and_delivered_as_a_reply(tmp_path):
+    t = Told(tmp_path)
+    t.qq.errors = 1
+    t.post("【待校】第3话.ass", msg_id="MSG1")
+    t.settle()
+
+    assert [(g, msg_id) for g, _, msg_id in t.qq.sent()] == [(GROUP, "MSG1")] and t.qq.tries == 2
+    assert [e["ok"] for e in t.history.entries()] == [True]
+
+
+def test_a_notice_refused_by_one_of_qqs_rules_is_not_tried_again(tmp_path):
+    t = Told(tmp_path)
+    t.qq.refuse = True
+    t.s.clock.t += 10 * MINUTE  # past the reply window: an ordinary message
+    t.post("【待校】第3话.ass")
+    t.settle()
+
+    assert t.qq.tries == 1 and t.qq.sent() == []
+    assert [e["ok"] for e in t.history.entries()] == [False]
 
 
 def test_the_notices_are_no_pipeline_event_and_carry_no_cover(tmp_path):

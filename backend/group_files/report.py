@@ -23,7 +23,7 @@ import httpx
 
 from backend.drive import LOGIN_COMMAND
 from backend.notify.history import NotifyHistory
-from backend.notify.qq import QQApi, QQError, QQGroups, escape
+from backend.notify.qq import QQApi, QQError, QQGroups, escape, send_with_tries
 from backend.quark import RunningUpload, UploadKind
 
 from .failures import Failure
@@ -123,8 +123,8 @@ class GroupFileReport:
     async def tell(self, job: GroupFileJob, headline: tuple[str, str], *lines: str) -> None:
         """Tell the group the file came from, when its notice switch is on: the headline, the
         file's name as posted, `lines`, the footer. A reply to the member's message while QQ
-        takes one; later, or when QQ refuses the reply, an ordinary message, once. Noted in
-        the history, sent or not."""
+        takes one; later, or when QQ refuses the reply, an ordinary message; each with the
+        usual tries of a QQ message. Noted in the history, sent or not."""
         if self.api is None or self.groups is None:
             return
         try:
@@ -145,14 +145,15 @@ class GroupFileReport:
             log.exception("group file %s/%s: the group was not told", job.folder, job.name)
 
     async def _send(self, job: GroupFileJob, text: str) -> None:
+        """With the usual tries of a QQ message (`send_with_tries`)."""
         assert self.api
         if job.msg_id and self.clock() - job.posted_at < REPLY_WITHIN:
             try:
-                await self.api.send_markdown(job.group, text, msg_id=job.msg_id)
+                await send_with_tries(self.api, job.group, text, msg_id=job.msg_id)
                 return
             except QQError as e:  # refused as a reply: the same text as an ordinary message
                 log.info("qq: a group-file notice was refused as a reply (%s); sending it as a message", e)
-        await self.api.send_markdown(job.group, text)
+        await send_with_tries(self.api, job.group, text)
 
     def _note(self, job: GroupFileJob, summary: str, ok: bool, error: str = "") -> None:
         if self.history:

@@ -24,13 +24,17 @@ class GroupFileDownloadFailed(Exception):
     """The file could not be downloaded; the message says why, in Chinese, without the address."""
 
 
+class AddressRefused(GroupFileDownloadFailed):
+    """The address (or one it redirects to) is not QQ's: trying again cannot help."""
+
+
 def qq_address(url: str) -> str:
     """`url` when it may be fetched: https, on `qq.com` or a host under it. Raises
-    GroupFileDownloadFailed otherwise."""
+    AddressRefused otherwise."""
     parts = urlsplit(url)
     host = (parts.hostname or "").lower()
     if parts.scheme != "https" or not (host == "qq.com" or host.endswith(".qq.com")):
-        raise GroupFileDownloadFailed("下载地址不是 QQ 的 https 地址，没有下载")
+        raise AddressRefused("下载地址不是 QQ 的 https 地址，没有下载")
     return url
 
 
@@ -41,7 +45,7 @@ async def fetch(client: httpx.AsyncClient, url: str, size: int, local: Path,
     continued with a range request; when the host answers with the whole file instead, it
     starts over. A download that breaks off leaves `local` for the next try; one of the
     wrong size removes it. `progress(bytes so far)` as it comes. Raises
-    GroupFileDownloadFailed."""
+    GroupFileDownloadFailed (AddressRefused for an address that is not QQ's)."""
     address = qq_address(url)
     have = local.stat().st_size if local.is_file() else 0
     if not 0 < have < size:  # nothing to continue (or more than the file: start over)

@@ -36,7 +36,7 @@ import httpx
 from backend.drive import DriveAuthorizationLapsed, DriveProgress
 from backend.quark import RunningUpload, UploadKind
 
-from .download import fetch
+from .download import AddressRefused, fetch
 from .failures import after_failure
 from .jobs import GroupFileJob, GroupFileJobs, next_due, next_to_download, next_to_upload
 from .naming import drive_name, file_name
@@ -205,6 +205,9 @@ class GroupFileKeeper:
             job.sha256 = await fetch(self.client, job.url, job.size, part,
                                      progress=lambda got: row.update(done=got))
             part.replace(local)
+        except AddressRefused as e:  # never fetched: trying again cannot help
+            await self._failed(job, str(e), final=True)
+            return True
         except Exception as e:  # noqa: BLE001 - any failure is a failed attempt
             await self._failed(job, str(e) or type(e).__name__)
             return True
@@ -308,11 +311,11 @@ class GroupFileKeeper:
                 log.exception("group file waiting watch error")
             await asyncio.sleep(WAITING_CHECK)
 
-    async def _failed(self, job: GroupFileJob, reason: str, lapsed: bool = False) -> None:
+    async def _failed(self, job: GroupFileJob, reason: str, lapsed: bool = False, final: bool = False) -> None:
         """After a failed attempt: kept to be tried again, or given up on (failures.py). The
         report is told which, with the job as it is now."""
-        after = after_failure(job, reason, lapsed, self.clock(),
-                              retry_interval=self.retry_interval, max_errors=self.max_errors)
+        after = after_failure(job, reason, lapsed, self.clock(), retry_interval=self.retry_interval,
+                              max_errors=self.max_errors, final=final)
         if after.kept:
             self.jobs.replace(after.job)
         else:

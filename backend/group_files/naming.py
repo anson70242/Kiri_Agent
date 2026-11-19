@@ -49,9 +49,11 @@ def drive_name(job: GroupFileJob, names: list[str], uploads: GroupFileUploads) -
     stem, dot, ext = name.rpartition(".")
     if not dot:
         stem, ext = name, ""
-    # The name itself first, then the names given to earlier versions: a version posted
-    # again is not uploaded again. Only names in the listing: the drive decides what is there.
-    versions = [name, *(n for n in names if n != name and n.startswith(f"{stem}.") and n.endswith(f"{dot}{ext}"))]
+    # The name itself first, then the names this module gave earlier versions (the time, with
+    # the seconds and a number when taken): a version posted again is not uploaded again.
+    # Only names in the listing: the drive decides what is there.
+    dated = re.compile(rf"{re.escape(stem)}\.\d{{4}}-\d{{2}}-\d{{2}}-\d{{4}}(?:\d{{2}}(?:-\d+)?)?{re.escape(dot + ext)}")
+    versions = [name, *(n for n in names if dated.fullmatch(n))]
     for there in versions:
         if uploads.sha256_at(f"{job.folder}/{there}") == job.sha256:
             return DriveName(there, upload=False)
