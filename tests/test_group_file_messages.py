@@ -62,8 +62,8 @@ class Told:
         # The member posted the file just now, by the module's clock.
         self.s.clock.t = POSTED_AT
 
-    def post(self, name: str, data: bytes = b"subtitle", **kw) -> None:
-        self.s.post(name, data, **kw)
+    def post(self, name: str, data: bytes = b"subtitle", **kw) -> str:
+        return self.s.post(name, data, **kw)
 
     def settle(self) -> None:
         self.s.settle()

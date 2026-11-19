@@ -1,10 +1,11 @@
-"""Turns at the drive: the Quark module never runs two uploads at once, drive copies and
-group files alike; when an upload ends, a waiting group file goes before a waiting drive
-copy, and group files go in the order they came. Run through the fake CLI, with each upload
-held until the test lets it go."""
+"""Turns at the drive: the Quark module never runs its CLI twice at once (folders, listings,
+uploads and shares of drive copies and group files alike); when a turn ends, a waiting group
+file goes before a waiting drive copy, and group files go in the order they came. Run
+through the fake CLI, with each upload held until the test lets it go."""
 
 from __future__ import annotations
 
+import asyncio
 import threading
 import time
 from pathlib import Path
@@ -51,12 +52,15 @@ class Uploads:
     def __init__(self, cli: FakeCli) -> None:
         self.started: list[str] = []
         self.held: dict[str, HeldUpload] = {}
+        self.free = False  # every upload goes through at once (a test is over)
         cli.answers.update({"create-folder": [create_folder()], "browse": browse([]), "upload": self._upload,
                             "upload delete": [UPLOAD_DELETED], "share": [SHARED]})
 
     def _upload(self, argv, cwd):
         path = Path(argv[3])
         held = HeldUpload(path.name, path.stat().st_size)
+        if self.free:
+            held.go.set()
         self.held[path.name] = held
         self.started.append(path.name)
         return held
@@ -64,6 +68,12 @@ class Uploads:
     def let_go(self, name: str) -> None:
         assert wait_for(lambda: name in self.held), f"{name} never started"
         self.held[name].go.set()
+
+    def let_all_go(self) -> None:
+        """After a test (also a failed one): no upload stays held, so no thread waits forever."""
+        self.free = True
+        for held in list(self.held.values()):
+            held.go.set()
 
 
 class Caller(threading.Thread):
@@ -95,7 +105,9 @@ def cli(monkeypatch):
 
 @pytest.fixture
 def uploads(cli):
-    return Uploads(cli)
+    held = Uploads(cli)
+    yield held
+    held.let_all_go()
 
 
 @pytest.fixture
@@ -121,8 +133,13 @@ def drive_copy(d, root):
 
 
 def put(d, local):
-    """The group-files module's call for one file, in a thread."""
+    """A group file's upload in a turn of its own, in a thread."""
     return Caller(lambda: d.put_file(local, FOLDER))
+
+
+def asked() -> None:
+    """Give a caller just started the time to ask for its turn (a waiting caller runs nothing)."""
+    time.sleep(0.2)
 
 
 # ---- one upload at a time ----
@@ -168,9 +185,9 @@ def test_when_an_upload_ends_a_waiting_group_file_goes_before_a_drive_copy_that_
     first = put(d, group_file(tmp_path, "第1话.ass"))
     assert wait_for(lambda: uploads.started == ["第1话.ass"])
     copy = drive_copy(d, root)
-    assert wait_for(lambda: d.waiting == [quark.UploadKind.DRIVE_COPY])
+    asked()
     second = put(d, group_file(tmp_path, "第2话.ass"))
-    assert wait_for(lambda: d.waiting == [quark.UploadKind.GROUP_FILE, quark.UploadKind.DRIVE_COPY])
+    asked()
 
     for name in ("第1话.ass", "第2话.ass", ZIP):
         uploads.let_go(name)
@@ -184,9 +201,9 @@ def test_waiting_group_files_go_in_the_order_they_came(tmp_path, root, uploads):
     assert wait_for(lambda: uploads.started == [ZIP])
     names = [f"第{n}话.ass" for n in range(1, 5)]
     files = []
-    for n, name in enumerate(names, 1):
+    for name in names:
         files.append(put(d, group_file(tmp_path, name)))
-        assert wait_for(lambda n=n: len(d.waiting) == n)
+        asked()
 
     for name in [ZIP, *names]:
         uploads.let_go(name)
@@ -199,14 +216,13 @@ def test_a_running_upload_is_not_stopped_by_callers_that_wait(tmp_path, root, up
     copy = drive_copy(d, root)
     assert wait_for(lambda: uploads.started == [ZIP])
     files = [put(d, group_file(tmp_path, f"第{n}话.ass")) for n in (1, 2)]
-    assert wait_for(lambda: len(d.waiting) == 2)
+    asked()
 
-    uploads.let_go(ZIP)
+    for name in (ZIP, "第1话.ass", "第2话.ass"):  # the drive copy's share waits for the two
+        uploads.let_go(name)
     assert copy.ended()
     assert copy.raised is None and copy.got.path == f"录播/柊優花/{ZIP}"
     assert not uploads.held[ZIP].killed.is_set()
-    for name in ("第1话.ass", "第2话.ass"):
-        uploads.let_go(name)
     assert all(f.ended() and f.raised is None for f in files)
 
 
@@ -228,7 +244,7 @@ def test_a_failed_upload_gives_the_turn_to_the_next(tmp_path, root, cli, uploads
     copy = drive_copy(d, root)
     assert wait_for(lambda: uploads.started == [ZIP])
     file = put(d, group_file(tmp_path, "第3话.ass"))
-    assert wait_for(lambda: len(d.waiting) == 1)
+    asked()
 
     uploads.held[ZIP].kill()  # the running CLI dies without a result
     assert copy.ended() and copy.raised is not None
@@ -240,7 +256,7 @@ def test_a_failed_upload_gives_the_turn_to_the_next(tmp_path, root, cli, uploads
 
 def test_the_running_upload_is_seen_with_its_kind_and_progress(tmp_path, root, uploads):
     d = drive(root)
-    assert d.uploading is None and d.waiting == []
+    assert d.uploading is None
 
     copy = drive_copy(d, root)
     assert wait_for(lambda: d.uploading is not None and d.uploading.sent > 0)
@@ -250,12 +266,12 @@ def test_the_running_upload_is_seen_with_its_kind_and_progress(tmp_path, root, u
     assert running.percent in (49, 50)
 
     file = put(d, group_file(tmp_path, "第3话.ass"))
-    assert wait_for(lambda: d.waiting == [quark.UploadKind.GROUP_FILE])
+    asked()
     uploads.let_go(ZIP)
     assert wait_for(lambda: d.uploading is not None and d.uploading.kind is quark.UploadKind.GROUP_FILE)
     uploads.let_go("第3话.ass")
     assert copy.ended() and file.ended()
-    assert d.uploading is None and d.waiting == []
+    assert d.uploading is None
 
 
 def test_a_running_upload_without_a_size_yet_has_no_percentage():
@@ -264,18 +280,77 @@ def test_a_running_upload_without_a_size_yet_has_no_percentage():
     assert quark.RunningUpload(quark.UploadKind.GROUP_FILE, sent=43, total=100).percent == 43
 
 
-# ---- outside the turns ----
+# ---- every run of the CLI takes a turn ----
 
-def test_listing_a_folder_does_not_wait_for_a_running_upload(root, cli, uploads):
+def test_listing_a_folder_waits_for_a_running_upload(root, cli, uploads):
+    d = drive(root)
+    copy = drive_copy(d, root)
+    assert wait_for(lambda: uploads.started == [ZIP])
+    before = len(cli.commands())
+
+    listing = Caller(lambda: d.folder_names(FOLDER))
+    asked()
+    assert len(cli.commands()) == before  # no folder made, nothing listed
+
+    uploads.let_go(ZIP)
+    assert listing.ended() and listing.raised is None and listing.got == []
+    assert copy.ended()
+
+
+def test_a_drive_copys_folder_and_listing_wait_for_a_running_group_file(tmp_path, root, cli, uploads):
+    d = drive(root)
+    file = put(d, group_file(tmp_path, "第3话.ass"))
+    assert wait_for(lambda: uploads.started == ["第3话.ass"])
+    before = len(cli.commands())
+
+    copy = drive_copy(d, root)
+    asked()
+    assert len(cli.commands()) == before
+
+    uploads.let_go("第3话.ass")
+    uploads.let_go(ZIP)
+    assert file.ended() and copy.ended() and copy.raised is None
+
+
+def test_a_drive_copys_share_waits_for_a_group_file_that_asked_while_it_uploaded(tmp_path, root, cli, uploads):
+    d = drive(root)
+    copy = drive_copy(d, root)
+    assert wait_for(lambda: uploads.started == [ZIP])
+    file = put(d, group_file(tmp_path, "第3话.ass"))
+    asked()
+
+    uploads.let_go(ZIP)
+    assert wait_for(lambda: uploads.started == [ZIP, "第3话.ass"])
+    asked()
+    assert not [c for c in cli.commands() if c[0] == "share"]  # the group file has the drive
+
+    uploads.let_go("第3话.ass")
+    assert file.ended() and copy.ended()
+    assert copy.raised is None and copy.got.link
+
+
+def test_a_caller_cancelled_while_it_waits_for_its_turn_leaves_the_queue(root, uploads):
     d = drive(root)
     copy = drive_copy(d, root)
     assert wait_for(lambda: uploads.started == [ZIP])
 
-    assert d.folder_names(FOLDER) == []  # does not block
+    async def cancelled_while_waiting() -> None:
+        async def hold() -> None:
+            async with d.turn(quark.UploadKind.GROUP_FILE):
+                pass
 
+        waiting = asyncio.create_task(hold())
+        await asyncio.sleep(0.2)
+        waiting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiting
+
+    asyncio.run(cancelled_while_waiting())
     uploads.let_go(ZIP)
-    assert copy.ended()
+    assert copy.ended() and copy.raised is None  # its share is not held behind the one that left
 
+
+# ---- outside the turns ----
 
 def test_two_quark_objects_do_not_share_turns(tmp_path, root, uploads):
     """The by-hand commands build their own Quark: they are outside the service's turns."""

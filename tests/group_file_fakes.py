@@ -7,6 +7,7 @@ Addresses, group ids and names are invented."""
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -66,15 +67,20 @@ class FakeFileHost:
 
 
 class FakeDrive:
-    """The drive's two calls the module makes (`folder_names`, `put_file`), on folders held
-    in memory. `error`: raised by the next calls. `put` notes (folder, name, bytes).
-    `uploading`: the upload that has the drive (a test sets it), as Quark's."""
+    """The drive's calls the module makes (`folder_names`, `put_file`, in a `turn` that comes
+    at once), on folders held in memory. `error`: raised by the next calls. `put` notes
+    (folder, name, bytes). `uploading`: the upload that has the drive (a test sets it), as
+    Quark's."""
 
     def __init__(self) -> None:
         self.folders: dict[str, dict[str, bytes]] = {}
         self.put: list[tuple[str, str, bytes]] = []
         self.error: Exception | None = None
         self.uploading: Any = None
+
+    @asynccontextmanager
+    async def turn(self, kind: Any):
+        yield self
 
     def folder_names(self, folder: str) -> list[str]:
         if self.error:

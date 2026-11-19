@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import threading
+import time
 
 from backend import quark
 from backend.downloader.auto import load_auto
@@ -107,8 +108,9 @@ def test_a_group_files_download_starts_while_a_drive_copy_uploads_and_its_upload
 
     worker = threading.Thread(target=lambda: asyncio.run(settle(s.keeper)), daemon=True)  # the upload loop
     worker.start()
-    assert wait_for(lambda: d.waiting == [quark.UploadKind.GROUP_FILE])  # listed, then waiting for its turn
+    time.sleep(0.3)  # waiting for its turn: nothing listed yet
     assert uploads.started == [ZIP]
+    assert ["create-folder", "--dir-path", f"{FOLDER}/待校", "--parent-fid", "0"] not in cli.commands()
 
     uploads.let_go(ZIP)
     uploads.let_go("【待校】第3话.ass")

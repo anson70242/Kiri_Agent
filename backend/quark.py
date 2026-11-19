@@ -27,14 +27,17 @@ and failed after IDLE_TIMEOUT without a progress line; a failed upload's task re
 deleted, and `upload resume` is never used (it sends the whole file again). A plain file
 goes the same way, under its local name, without a share and without an archive.
 
-Uploads through one Quark object take turns: never two at once, and when one ends a waiting
+Every run of the CLI through one Quark object (making a folder, listing it, an upload, a
+share) waits for a turn at the drive: never two at once, and when a turn ends a waiting
 group file goes before a waiting drive copy (the service holds one object; see `_Turns`).
-Only the upload itself waits: making a folder, listing it and sharing do not.
+Building a drive copy's zip does not hold a turn. The group-files worker holds one turn for
+every file that is ready by the time the one before it ends (`turn`).
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import heapq
 import itertools
 import json
@@ -46,8 +49,8 @@ import sys
 import tempfile
 import threading
 import time
-from collections.abc import Callable, Iterable, Iterator
-from contextlib import contextmanager
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator
+from contextlib import AbstractContextManager, asynccontextmanager, contextmanager, nullcontext
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from enum import Enum
@@ -174,8 +177,8 @@ class UploadKind(Enum):
     DRIVE_COPY = "drive_copy"
 
 
-# When an upload ends, the waiting upload of the lowest rank goes next; within a rank, the
-# one that asked first. A group file is small and a member is waiting for it.
+# When a turn ends, the waiting caller of the lowest rank goes next; within a rank, the one
+# that asked first. A group file is small and a member is waiting for it.
 _RANK = {UploadKind.GROUP_FILE: 0, UploadKind.DRIVE_COPY: 1}
 
 
@@ -192,40 +195,86 @@ class RunningUpload:
         return min(100, self.sent * 100 // self.total) if self.total else None
 
 
+class Turn:
+    """One caller's turn at the drive: asked for, then held until it is given back."""
+
+    def __init__(self, kind: UploadKind) -> None:
+        self.kind = kind
+
+
 class _Turns:
-    """One upload at a time: a caller waits in `turn(kind)` until the upload before it ended
-    and no caller that goes first is waiting. A running upload is never stopped."""
+    """One caller at the drive at a time: a caller asks for a turn and waits until the one
+    before it gave the drive back and no caller that goes first is waiting. The holder is
+    never stopped."""
 
     def __init__(self) -> None:
         self._changed = threading.Condition()
         self._asked = itertools.count()
-        self._waiting: list[tuple[int, int, UploadKind]] = []  # a heap: (rank, asked, kind)
-        self.running: RunningUpload | None = None
+        self._waiting: list[tuple[int, int, Turn]] = []  # a heap: (rank, asked, turn)
+        self._holder: Turn | None = None
+        self.running: RunningUpload | None = None  # what the holder carries, and how far it is
+
+    def ask(self, kind: UploadKind) -> Turn:
+        with self._changed:
+            turn = Turn(kind)
+            heapq.heappush(self._waiting, (_RANK[kind], next(self._asked), turn))
+            return turn
+
+    def wait(self, turn: Turn, timeout: float | None = None) -> bool:
+        """Wait until `turn` has the drive (True), or `timeout` seconds (False)."""
+        with self._changed:
+            return self._changed.wait_for(lambda: self._take(turn), timeout)
+
+    def _take(self, turn: Turn) -> bool:
+        if self._holder is turn:
+            return True
+        if self._holder is not None or not self._waiting or self._waiting[0][2] is not turn:
+            return False
+        heapq.heappop(self._waiting)
+        self._holder, self.running = turn, RunningUpload(turn.kind)
+        return True
+
+    def leave(self, turn: Turn) -> None:
+        """`turn` gives the drive back, or stops waiting for it."""
+        with self._changed:
+            if self._holder is turn:
+                self._holder = self.running = None
+            else:
+                self._waiting = [w for w in self._waiting if w[2] is not turn]
+                heapq.heapify(self._waiting)
+            self._changed.notify_all()
+
+    def holds(self, turn: Turn) -> bool:
+        return self._holder is turn
 
     @contextmanager
-    def turn(self, kind: UploadKind) -> Iterator[None]:
-        with self._changed:
-            mine = (_RANK[kind], next(self._asked), kind)
-            heapq.heappush(self._waiting, mine)
-            while self.running is not None or self._waiting[0] != mine:
-                self._changed.wait()
-            heapq.heappop(self._waiting)
-            self.running = RunningUpload(kind)
+    def turn(self, kind: UploadKind) -> Iterator[Turn]:
+        """A turn for a caller in a thread of its own: ask, wait, give it back at the end."""
+        turn = self.ask(kind)
         try:
-            yield
+            self.wait(turn)
+            yield turn
         finally:
-            with self._changed:
-                self.running = None
-                self._changed.notify_all()
-
-    def waiting(self) -> list[UploadKind]:
-        with self._changed:
-            return [kind for _, _, kind in sorted(self._waiting)]
+            self.leave(turn)
 
     def advanced(self, sent: int, total: int | None) -> None:
-        """The running upload's progress (only its own thread calls this while it runs)."""
+        """The holder's upload progress (only its own thread calls this while it runs)."""
         if self.running is not None:
             self.running = replace(self.running, sent=sent, total=total)
+
+
+class HeldDrive:
+    """The drive while its caller holds a turn (`Quark.turn`): the group-files calls, run at
+    once without asking for a turn again."""
+
+    def __init__(self, quark: Quark, turn: Turn) -> None:
+        self._quark, self._turn = quark, turn
+
+    def folder_names(self, folder: str) -> list[str]:
+        return self._quark.folder_names(folder, turn=self._turn)
+
+    def put_file(self, local: Path, folder: str, progress: DriveProgress | None = None) -> str:
+        return self._quark.put_file(local, folder, progress, turn=self._turn)
 
 
 class Quark:
@@ -233,9 +282,9 @@ class Quark:
     downloads root `downloads` (see backend.drive_copy). A Quark is the pipeline's `Drive`
     and the group-files module's drive.
 
-    Uploads through one Quark object take turns (see `_send`): the service holds one, so
-    drive copies and group files never upload at once. The by-hand commands build their own
-    and stay outside the service's turns."""
+    Drive copies and group files take turns through one Quark object (see `_Turns`): the
+    service holds one, so its CLI never runs twice at once. The by-hand commands build their
+    own and stay outside the service's turns."""
 
     def __init__(self, cli: Path, downloads: Path, idle_timeout: float = IDLE_TIMEOUT) -> None:
         self.cli = cli
@@ -245,14 +294,32 @@ class Quark:
 
     @property
     def uploading(self) -> RunningUpload | None:
-        """The upload that has the drive now (its kind and progress), or None. Read-only: for
-        telling a waiting caller what the drive is busy with."""
+        """What has the drive now (a drive copy or a group file, and how far its upload is),
+        or None. Read-only: for telling a waiting caller what the drive is busy with."""
         return self._turns.running
 
-    @property
-    def waiting(self) -> list[UploadKind]:
-        """The kinds of the uploads waiting for their turn, in the order they will go."""
-        return self._turns.waiting()
+    @asynccontextmanager
+    async def turn(self, kind: UploadKind) -> AsyncIterator[HeldDrive]:
+        """Hold the drive for several calls, from the event loop: waits until it is this
+        caller's turn, then gives the drive whose calls run at once, and gives the turn back
+        at the end. The wait is a thread's, a second at a time, so a caller cancelled while
+        it waits leaves the queue."""
+        turn = self._turns.ask(kind)
+        try:
+            while not await asyncio.to_thread(self._turns.wait, turn, 1.0):
+                pass
+            yield HeldDrive(self, turn)
+        finally:
+            self._turns.leave(turn)
+
+    def _in_turn(self, turn: Turn | None, kind: UploadKind) -> AbstractContextManager[Turn]:
+        """The caller's turn when it holds one (it is not asked for again), else a turn for
+        this call alone."""
+        if turn is None:
+            return self._turns.turn(kind)
+        if not self._turns.holds(turn):
+            raise RuntimeError("the drive is not this caller's turn")
+        return nullcontext(turn)
 
     def __call__(self, archive: Archive, folder: str, progress: DriveProgress) -> DriveCopy:
         return self.upload(archive, folder, progress).copy
@@ -267,7 +334,10 @@ class Quark:
         whose zip is there, is left alone. Progress goes to `progress(sent, total)`. Raises
         DriveAuthorizationLapsed, or DriveFailed with the CLI's message (also for an archive
         without video, before anything is asked of the CLI). A share that fails is not a
-        failed upload: the drive copy comes back without a link, with the reason."""
+        failed upload: the drive copy comes back without a link, with the reason.
+
+        Each run of the CLI waits for a turn at the drive (the folder and its listing, the
+        upload, the share); building the zip does not hold one."""
         name = drive_copy_name(archive)
         if name is None:
             raise DriveFailed("没有影片，没有可上传的网盘副本")
@@ -276,21 +346,24 @@ class Quark:
         except (ArtifactMissing, ArtifactDamaged, OSError):
             kept = None
         path = f"{folder}/{name}"
-        folder_id = self._folder_id(folder)
-        # By the name alone: a zip's size differs from one build to the next (its Excel sheet).
-        there = next((f for f in self._children(folder_id) if f.get("filename") == name), None)
-        if there is not None:
-            log.info("drive copy already on the drive: %s", path)
-            if kept is not None and kept.path == path:
-                return DriveUpload(DriveCopy(path, kept.url), sent=False)
-            # A listing's id differs in every listing: good for a share made right now only.
-            return DriveUpload(self._share(archive, str(there.get("fid") or ""), path), sent=False)
+        with self._turns.turn(UploadKind.DRIVE_COPY):
+            folder_id = self._folder_id(folder)
+            # By the name alone: a zip's size differs from one build to the next (its Excel sheet).
+            there = next((f for f in self._children(folder_id) if f.get("filename") == name), None)
+            if there is not None:
+                log.info("drive copy already on the drive: %s", path)
+                if kept is not None and kept.path == path:
+                    return DriveUpload(DriveCopy(path, kept.url), sent=False)
+                # A listing's id differs in every listing: good for a share made right now only.
+                return DriveUpload(self._share(archive, str(there.get("fid") or ""), path), sent=False)
         with drive_copy(archive, self.downloads) as zip_path:
             if zip_path is None:  # the video went since the name was known
                 raise DriveFailed("没有影片，没有可上传的网盘副本")
-            file_id = self._send(zip_path, folder_id, progress, UploadKind.DRIVE_COPY)
+            with self._turns.turn(UploadKind.DRIVE_COPY):
+                file_id = self._send(zip_path, folder_id, progress)
         log.info("drive copy uploaded: %s", path)
-        return DriveUpload(self._share(archive, file_id, path), sent=True)
+        with self._turns.turn(UploadKind.DRIVE_COPY):
+            return DriveUpload(self._share(archive, file_id, path), sent=True)
 
     def _share(self, archive: Archive, file_id: str, path: str) -> DriveCopy:
         """Share the zip at `path` (drive id `file_id`) as a private link that never expires,
@@ -317,24 +390,29 @@ class Quark:
 
     # ---- plain files ----
 
-    def put_file(self, local: Path, folder: str, progress: DriveProgress | None = None) -> str:
+    def put_file(self, local: Path, folder: str, progress: DriveProgress | None = None, *,
+                 turn: Turn | None = None) -> str:
         """Upload the local file `local` into `folder` (a path from the top of the drive, made
         when missing) under the local file's own name, and return its path on the drive. The
         caller decides that name (see `folder_names`) and deletes the local file: nothing
         else is asked first, no share is made and no archive is read. Progress goes to
         `progress(sent, total)`. Raises DriveAuthorizationLapsed, or DriveFailed with the
-        CLI's message."""
-        self._send(local, self._folder_id(folder), progress, UploadKind.GROUP_FILE)
+        CLI's message. In the caller's `turn` (see `turn`), else in a group file's turn of
+        its own."""
+        with self._in_turn(turn, UploadKind.GROUP_FILE):
+            self._send(local, self._folder_id(folder), progress)
         log.info("file uploaded to the drive: %s/%s", folder, local.name)
         return f"{folder}/{local.name}"
 
     # ---- the drive's folders ----
 
-    def folder_names(self, folder: str) -> list[str]:
+    def folder_names(self, folder: str, *, turn: Turn | None = None) -> list[str]:
         """The names of every file and folder directly in `folder` (a path from the top of the
         drive, made when missing), from the full listing. Raises DriveAuthorizationLapsed, or
-        DriveFailed with the CLI's message."""
-        return [str(f["filename"]) for f in self._children(self._folder_id(folder)) if f.get("filename")]
+        DriveFailed with the CLI's message. In the caller's `turn`, else in a group file's
+        turn of its own."""
+        with self._in_turn(turn, UploadKind.GROUP_FILE):
+            return [str(f["filename"]) for f in self._children(self._folder_id(folder)) if f.get("filename")]
 
     def _folder_id(self, folder: str) -> str:
         """The id of `folder`, a path from the top of the drive (`--parent-fid 0`), made when
@@ -368,12 +446,13 @@ class Quark:
                     children.append(entry)
             return children
 
-    def _send(self, local: Path, folder_id: str, progress: DriveProgress | None, kind: UploadKind) -> str:
+    def _send(self, local: Path, folder_id: str, progress: DriveProgress | None) -> str:
         """`upload` of a local file, a drive copy's zip or a group file, and the uploaded
-        file's id ("" when the CLI gave none). Every upload goes through here, and waits here
-        for its turn (`kind` decides who goes first). The wait is before the CLI runs, so it
-        never counts against the watchdog. After a failed upload its task record is deleted
-        (`upload resume` is never used: it sends the whole file again), still in its turn."""
+        file's id ("" when the CLI gave none). The caller holds the turn: the wait for it was
+        before any CLI run, so it never counts against the watchdog. After a failed upload
+        its task record is deleted (`upload resume` is never used: it sends the whole file
+        again), still in the turn."""
+        self._turns.advanced(0, None)  # a turn may hold several uploads: this one starts at 0
         records: list[str] = []
         file_ids: list[str] = []
 
@@ -390,12 +469,11 @@ class Quark:
                 if data.get("fileId"):
                     file_ids.append(str(data["fileId"]))
 
-        with self._turns.turn(kind):
-            try:
-                data = self._call(["upload", str(local), "--parent-fid", folder_id], on_object=note)
-            except (DriveFailed, DriveAuthorizationLapsed):
-                self._forget_upload(local.name, records)
-                raise
+        try:
+            data = self._call(["upload", str(local), "--parent-fid", folder_id], on_object=note)
+        except (DriveFailed, DriveAuthorizationLapsed):
+            self._forget_upload(local.name, records)
+            raise
         fids = data.get("fids")
         return file_ids[-1] if file_ids else str(fids[0]) if isinstance(fids, list) and fids else ""
 

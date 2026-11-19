@@ -1,19 +1,22 @@
 """The group-files module's worker: takes posted files in from the gateway (`posted`), and
 runs two loops (`run`): one downloads the jobs' files, one at a time in the order posted,
-starting at once; the other uploads them, one at a time in the order posted. A job ends
-when its file is on the drive, when the same file is there already, when it is given up on,
-or when its group's switch is off as it is about to start (cancelled); its local copy goes
-with it.
+starting at once; the other uploads them, one at a time in the order posted, in one turn at
+the drive for every file that is ready by the time the one before it ends. A job ends when
+its file is on the drive, when the same file is there already, when it is given up on, or
+when its group's switch is off as its download or its turn at the drive comes (cancelled);
+its local copy goes with it.
 
 A failed attempt is tried again later (failures.py): the loops wake when the next job is
 due. While another upload has the drive, a third loop (`tell_waiting`) looks for downloaded
-files that have waited a minute and tells their groups they are queued, once per file. The jobs file is runtime state that survives a restart: at start an upload mark left by
-a kill is cleared (that upload is done again from the local file), and temporary files that
-belong to no job are removed. A download that broke off continues from its `.part`.
+files that have waited a minute and tells their groups they are queued, once per file. The
+jobs file is runtime state that survives a restart: at start an upload mark left by a kill
+is cleared (that upload is done again from the local file), and temporary files that belong
+to no job are removed. A download that broke off continues from its `.part`.
 
 Everything outside comes in from the caller: the groups store (the switches and the group
-folder), the drive (`folder_names`, `put_file`, `uploading`: the Quark module), the HTTP client for QQ's
-file host, the clock, and the folder for local copies (on the downloads volume).
+folder), the drive (`turn`, then `folder_names` and `put_file` in it; `uploading`: the
+Quark module), the HTTP client for QQ's file host, the clock, and the folder for local
+copies (on the downloads volume).
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ import logging
 import shutil
 import time
 from collections.abc import Awaitable, Callable
+from contextlib import AbstractAsyncContextManager
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
@@ -54,12 +58,18 @@ WAITING_AFTER = 60.0
 WAITING_CHECK = 10.0  # seconds between two looks for such files, while an upload has the drive
 
 
-class GroupFileDrive(Protocol):
-    """What the module asks of the drive (backend.quark.Quark has all three)."""
+class DriveCalls(Protocol):
+    """What the module asks of the drive in its turn (backend.quark.HeldDrive)."""
 
     def folder_names(self, folder: str) -> list[str]: ...
 
     def put_file(self, local: Path, folder: str, progress: DriveProgress | None = None) -> str: ...
+
+
+class GroupFileDrive(Protocol):
+    """The drive the module is given (backend.quark.Quark): a turn at it, and what has it now."""
+
+    def turn(self, kind: UploadKind) -> AbstractAsyncContextManager[DriveCalls]: ...
 
     @property
     def uploading(self) -> RunningUpload | None: ...
@@ -94,7 +104,7 @@ class GroupFileKeeper:
         self._warned = False  # "the drive is not available" was logged
         self._wake = {"download": asyncio.Event(), "upload": asyncio.Event()}
         self._active: dict[str, dict[str, Any] | None] = {"download": None, "upload": None}
-        self._in_hand: GroupFileJob | None = None  # the job the upload loop is uploading (or waiting to)
+        self._in_hand: GroupFileJob | None = None  # the job being uploaded, in the worker's turn at the drive
 
     # ---- taking a file in ----
 
@@ -206,25 +216,41 @@ class GroupFileKeeper:
         return True
 
     async def upload_next(self) -> bool:
-        """Upload the next downloaded job's file; False when there was none."""
+        """Upload the downloaded jobs' files in one turn at the drive, in the order posted;
+        False when there was none. Every file downloaded (and due) by the time the one
+        before it ends goes in the same turn, so group files go before a drive copy that
+        waits; a file still downloading then does not hold the drive copy back."""
         job = next_to_upload(self.jobs.load(), self.clock())
         if job is None:
             return False
-        if self._switched_off(job):
+        if self.drive is None:
+            await self._upload(job, None)
             return True
-        job.uploading = True  # before the upload starts; the attempt's end clears it
+        async with self.drive.turn(UploadKind.GROUP_FILE) as drive:
+            # Looked at again now that the turn came: a job may have ended while it waited.
+            while (job := next_to_upload(self.jobs.load(), self.clock())) is not None:
+                await self._upload(job, drive)
+        return True
+
+    async def _upload(self, job: GroupFileJob, drive: DriveCalls | None) -> None:
+        """Upload one job's file, in the worker's turn at the drive. Its group's switch is
+        looked at first: a job switched off while it waited for the turn sends nothing. Only
+        then is it marked as uploading and shown as the upload in the queue box."""
+        if self._switched_off(job):
+            return
+        job.uploading = True  # the attempt's end clears it
         self.jobs.replace(job)
         row = self._activate("upload", job)
         self._in_hand = job
         try:
-            if self.drive is None:
+            if drive is None:
                 raise RuntimeError("网盘不可用")
-            names = await asyncio.to_thread(self.drive.folder_names, job.folder)
+            names = await asyncio.to_thread(drive.folder_names, job.folder)
             choice = drive_name(job, names, self.uploads)
             if not choice.upload:
                 self._end(job)
                 await self.report.already_there(job, f"{job.folder}/{choice.name}")
-                return True
+                return
             local = self._local(job)
             if local.name != choice.name:
                 local = local.replace(local.with_name(choice.name))
@@ -232,45 +258,47 @@ class GroupFileKeeper:
             def progress(sent: int, total: int | None) -> None:
                 row.update(done=sent, total=total or row["total"])
 
-            place = await asyncio.to_thread(self.drive.put_file, local, job.folder, progress)
+            place = await asyncio.to_thread(drive.put_file, local, job.folder, progress)
         except DriveAuthorizationLapsed as e:
             await self._failed(job, str(e) or "网盘授权已失效", lapsed=True)
-            return True
+            return
         except Exception as e:  # noqa: BLE001 - any failure is a failed attempt
             await self._failed(job, str(e) or type(e).__name__)
-            return True
+            return
         finally:
             self._active["upload"] = None
             self._in_hand = None
         self.uploads.note(Upload(job.group, f"{job.folder}/{choice.name}", job.size, job.sha256, self.clock()))
         self._end(job)
         await self.report.uploaded(job, place)
-        return True
 
     async def tell_waiting(self) -> None:
-        """Tell the group of each file that has waited a minute, since its download ended, for
-        another upload to end: it is queued behind what has the drive now. Once per file (the
-        job notes it, so a restart does not tell it again). A file that has failed before is
-        waiting for a retry or the authorization: its group had the failure message instead."""
-        running = self.drive.uploading if self.drive is not None else None
-        if running is None:
-            return
-        now, in_hand = self.clock(), self._in_hand
-        for job in self.jobs.load():
-            if (job.waiting_told or not job.downloaded or job.downloaded_at is None
-                    or now - job.downloaded_at < WAITING_AFTER
-                    or not job.due(now) or job.errors or job.lapsed_since is not None):
-                continue
-            mine = in_hand is not None and in_hand.id == job.id
-            # The worker uploads one group file at a time: a group file that has the drive
-            # while this job is in hand is this job's own upload.
-            if mine and running.kind is UploadKind.GROUP_FILE:
-                continue
+        """Tell the group of each file that has waited a minute for another upload to end
+        that it is queued behind what has the drive now. Once per file (the job notes it, so
+        a restart does not tell it again). A file waiting for its retry or for the
+        authorization is not due: its group had the failure message instead. Once its retry
+        has come it waits like any other, and the minute counts from then."""
+        while (running := self.drive.uploading if self.drive is not None else None) is not None:
+            job = self._untold()
+            if job is None:
+                return
+            # Saved from the copy just loaded, before the message: a restart does not tell it again.
             job.waiting_told = True
             self.jobs.replace(job)
-            if mine:  # the upload loop saves its copy of the job when the attempt fails
-                in_hand.waiting_told = True
             await self.report.waiting(job, running)
+
+    def _untold(self) -> GroupFileJob | None:
+        """The first job that has waited a minute for the drive and was not told so."""
+        now = self.clock()
+        for job in self.jobs.load():
+            if (job.waiting_told or not job.downloaded or job.downloaded_at is None or not job.due(now)
+                    or now - max(job.downloaded_at, job.next_try) < WAITING_AFTER):
+                continue
+            # The job in hand has the worker's turn: what has the drive is its own upload.
+            if self._in_hand is not None and self._in_hand.id == job.id:
+                continue
+            return job
+        return None
 
     async def _watch(self) -> None:
         while True:
