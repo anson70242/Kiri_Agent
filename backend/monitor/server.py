@@ -188,13 +188,18 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
 
     @app.get("/api/downloads")
     async def downloads(request: Request) -> dict:
+        # Group files have no streamer and name a QQ group's files: only for the owner (an
+        # admin, or login off), under their own key, and only while there are some.
+        user = getattr(request.state, "user", None)
+        files = group_files.snapshot() if group_files and (user is None or user.get("role") == "admin") else None
+        extra = {"group_files": files} if files and (files["active"] or files["queue"]) else {}
         if not auto:
-            return {"enabled": False, "active": [], "queue": []}
+            return {"enabled": False, "active": [], "queue": [], **extra}
         snap, names = auto.snapshot(), visible(request)
         if names is not None:
             snap = {**snap, **{k: [j for j in snap.get(k) or [] if j.get("name") in names]
                                for k in ("active", "queue")}}
-        return {"enabled": True, **snap}
+        return {"enabled": True, **snap, **extra}
 
     checked: dict[Streamer, StreamStatus] = {}  # a new streamer's check, until she is in the roster
 

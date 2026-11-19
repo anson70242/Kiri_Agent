@@ -236,11 +236,40 @@ const STAGE_LABELS = {
   drive: { waiting: "等待网盘上传", doing: "网盘上传 准备中", progress: "网盘上传" },
 };
 const stageLabels = stage => STAGE_LABELS[stage] || { waiting: "等待处理", doing: "处理中" };
+// The same for a group file (群文件, admins only): it is downloaded from QQ, then uploaded.
+const GROUP_FILE_LABELS = {
+  download: { waiting: "等待下载", doing: "下载中" },
+  upload: { waiting: "等待网盘上传", doing: "网盘上传 准备中", progress: "网盘上传" },
+};
+
+// A group file's rows: the group's name and the file's name in the places a live's rows have
+// the streamer and the title, and the class `group-file`.
+function groupFileActive(a) {
+  const label = GROUP_FILE_LABELS[a.doing] || GROUP_FILE_LABELS.upload;
+  const pct = a.total ? Math.min(100, a.done / a.total * 100) : null;
+  return `<div class="job active group-file"><div class="head">
+      <span class="chip dl">${label.progress && pct != null ? `${label.progress} ${pct.toFixed(1)}%` : label.doing}</span>
+      <span class="creator">${esc(a.group)}</span>
+      <span class="title">${esc(a.file)}</span>
+      <span class="meta">群文件${a.total ? ` · ${size(a.done)} / ${size(a.total)}` : ""}</span></div>
+    <div class="bar"><div style="width:${Math.round(pct ?? 0)}%"></div></div></div>`;
+}
+
+function groupFileWaiting(j) {
+  const label = GROUP_FILE_LABELS[j.waiting_for] || GROUP_FILE_LABELS.upload;
+  return `<div class="job group-file"><div class="head">
+      <span class="chip" style="background:var(--off-bg);color:var(--off)">${label.waiting}</span>
+      <span class="creator">${esc(j.group)}</span>
+      <span class="title">${esc(j.file)}</span>
+      <span class="meta">群文件${j.next_try * 1000 > Date.now() ? ` · 下次尝试 ${clock(j.next_try)}` : ""}</span></div>
+    ${j.last_error ? `<div class="err">${esc(j.last_error)}</div>` : ""}</div>`;
+}
 
 function drawDownloads() {
   const box = document.getElementById("downloads");
   if (!box || !downloads) return;
   const { active, queue } = downloads;  // active: up to one job per stage, so a live can have several
+  const files = downloads.group_files || { active: [], queue: [] };  // apart from a live's jobs
   const busy = new Set(active.map(a => `${a.stage} ${a.url}`));
   const waiting = queue.filter(j => !busy.has(`${j.stage} ${j.url}`));
   let html = "";
@@ -259,6 +288,8 @@ function drawDownloads() {
       ${label.progress ? `<div class="bar"><div style="width:${pct ?? 0}%"></div></div>`
         : `<div class="meta">已用 ${dur(Date.now() / 1000 - a.started)}${a.stage === "transcribe" ? "（4 小时直播约 20 分钟）" : ""}</div>`}</div>`;
   }
+  // A waiting group file goes to the drive before a waiting drive copy: listed in that order.
+  html += files.active.map(groupFileActive).join("") + files.queue.map(groupFileWaiting).join("");
   html += waiting.map(j => `<div class="job"><div class="head">
       <span class="chip" style="background:var(--off-bg);color:var(--off)">${stageLabels(j.stage).waiting}</span>
       <span class="creator">${esc(j.name)}</span>
@@ -274,11 +305,11 @@ async function pollDownloads() {
     const next = await r.json();
     // a job left the active list: a download or transcription just ended
     const finished = (downloads?.active || []).some(a => !(next.active || []).some(b => b.url === a.url && b.stage === a.stage));
-    downloads = next.enabled ? next : null;
+    downloads = next.enabled || next.group_files ? next : null;
     drawDownloads();
     if (finished && !location.hash) load();  // a download just ended: refresh the list (not a detail page)
   } catch {}
-  setTimeout(pollDownloads, downloads?.active?.length ? 2000 : 10000);
+  setTimeout(pollDownloads, downloads?.active?.length || downloads?.group_files?.active?.length ? 2000 : 10000);
 }
 
 // ---- Detail view ----
