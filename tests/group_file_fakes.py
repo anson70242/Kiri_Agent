@@ -146,7 +146,5 @@ def make(tmp_path: Path, *, drive: FakeDrive | None = None, no_drive: bool = Fal
     drive = drive or FakeDrive()
     groups = qq_groups(tmp_path, to_drive=to_drive)
     temp = tmp_path / "dl" / ".group_files"
-    jobs_file = tmp_path / "data" / "group_file_jobs.json"
-    keeper = GroupFileKeeper(groups, None if no_drive else drive, jobs_file=jobs_file, temp=temp,
-                             client=host.client(), clock=clock, **kw)
-    return Setup(keeper, host, drive, groups, clock, temp, jobs_file)
+    keeper = GroupFileKeeper(groups, None if no_drive else drive, temp=temp, client=host.client(), clock=clock, **kw)
+    return Setup(keeper, host, drive, groups, clock, temp, keeper.jobs.path)

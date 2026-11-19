@@ -36,6 +36,7 @@ def file_name(name: str) -> str:
 class DriveName:
     name: str  # the file's name in its subfolder
     upload: bool  # False: the same file is there under `name`, the job ends as "already there"
+    place: str  # `<群名>/<子文件夹>/<name>`, from the top of the drive
 
 
 def drive_name(job: GroupFileJob, names: list[str], uploads: GroupFileUploads) -> DriveName:
@@ -45,7 +46,7 @@ def drive_name(job: GroupFileJob, names: list[str], uploads: GroupFileUploads) -
     (the seconds added when that is taken too, then a number)."""
     name = file_name(job.name)
     if name not in names:
-        return DriveName(name, upload=True)
+        return DriveName(name, True, f"{job.folder}/{name}")
     stem, dot, ext = name.rpartition(".")
     if not dot:
         stem, ext = name, ""
@@ -56,9 +57,9 @@ def drive_name(job: GroupFileJob, names: list[str], uploads: GroupFileUploads) -
     versions = [name, *(n for n in names if dated.fullmatch(n))]
     for there in versions:
         if uploads.sha256_at(f"{job.folder}/{there}") == job.sha256:
-            return DriveName(there, upload=False)
+            return DriveName(there, False, f"{job.folder}/{there}")
     posted = datetime.fromtimestamp(job.posted_at, GROUP_TIME)
     minute, second = posted.strftime("%Y-%m-%d-%H%M"), posted.strftime("%Y-%m-%d-%H%M%S")
     stamps = itertools.chain([minute, second], (f"{second}-{n}" for n in itertools.count(2)))
-    return next(DriveName(dated, upload=True) for dated in (f"{stem}.{s}{dot}{ext}" for s in stamps)
+    return next(DriveName(dated, True, f"{job.folder}/{dated}") for dated in (f"{stem}.{s}{dot}{ext}" for s in stamps)
                 if dated not in names)

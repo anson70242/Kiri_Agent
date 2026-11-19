@@ -127,7 +127,7 @@ def test_a_restart_does_not_tell_a_file_again(tmp_path):
     t.s.clock.t += MINUTE
     look(t)
     s = t.s
-    s.keeper = GroupFileKeeper(s.groups, s.drive, jobs_file=s.jobs_file, temp=s.temp, client=s.host.client(),
+    s.keeper = GroupFileKeeper(s.groups, s.drive, temp=s.temp, client=s.host.client(),
                                clock=s.clock, report=s.keeper.report)
     look(t)
 

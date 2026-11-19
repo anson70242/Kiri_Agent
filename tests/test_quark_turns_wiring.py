@@ -88,9 +88,11 @@ def test_the_pipeline_given_no_drive_has_none(tmp_path):
     assert load_auto(write_config(tmp_path), drive=None).drive is None
 
 
-def test_left_alone_the_pipeline_builds_its_own_drive_as_before(tmp_path):
-    """The deploy check calls load_auto without a drive."""
-    assert isinstance(load_auto(write_config(tmp_path)).drive, quark.Quark)
+def test_left_alone_the_pipeline_has_no_drive(tmp_path, caplog):
+    """The deploy check calls load_auto without a drive: it only reads the queue."""
+    with caplog.at_level(logging.INFO, logger="backend.quark"):
+        assert load_auto(write_config(tmp_path)).drive is None
+    assert not [r for r in caplog.records if "drive" in r.message]
 
 
 # ---- the group-files module with the real Quark module ----

@@ -4,7 +4,10 @@ fake host, a fake drive and a fake clock."""
 
 from __future__ import annotations
 
+import pytest
+
 from backend.group_files.jobs import GroupFileJobs
+from backend.group_files.naming import file_name
 
 from .group_file_fakes import FOLDER, make
 
@@ -23,7 +26,7 @@ class Told:
     async def already_there(self, job, place):
         self.outcomes.append(("already there", place))
 
-    async def failed(self, job, reason, given_up):
+    async def failed(self, job, reason, failure):
         self.outcomes.append(("failed", reason))
 
 
@@ -156,3 +159,21 @@ def test_the_same_name_in_another_group_is_another_place(tmp_path):
 
     assert s.drive.put == [(SUB, "【待校】第3话.ass", b"the file"), ("鲷鱼烧字幕组/待校", "【待校】第3话.ass", b"the file")]
 
+
+# ---- the posted name as a file name on the server ----
+# The service runs on Linux, where only `/` and NUL cannot be in a file name; the backslash
+# and control characters are replaced too. What only Windows refuses (`:`, `?`, `*`, `|`,
+# `<`, `>`, `"`) is kept: the file goes to the drive under the name as posted. Pure: the
+# same answer on every platform the tests run on.
+
+@pytest.mark.parametrize(("posted", "safe"), [
+    ("【待校】第3话.ass", "【待校】第3话.ass"),
+    ("【待校】第3/4话.ass", "【待校】第3_4话.ass"),
+    ("【待校】第3\\4话.ass", "【待校】第3_4话.ass"),
+    ("【待校】第3\x00话\n.ass", "【待校】第3_话_.ass"),
+    ("  【待校】第3话.ass ", "【待校】第3话.ass"),
+    ("", "_"), (".", "_"), ("..", "_"), ("../..", ".._.."),
+    ('【待校】第3话: "final"?*|<>.ass', '【待校】第3话: "final"?*|<>.ass'),
+])
+def test_a_posted_name_becomes_one_file_name_on_the_server(posted, safe):
+    assert file_name(posted) == safe

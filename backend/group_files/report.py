@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
-from typing import Any
+from typing import Any, NamedTuple
 
 import httpx
 
@@ -37,12 +37,20 @@ log = logging.getLogger(__name__)
 REPLY_WITHIN = 4.5 * 60
 
 FOOTER = "切片小助手 群文件"
-# Headlines: (icon, words). The group's message shows both, the owner's alert the words.
-ON_DRIVE = ("☁️", "群文件已上传网盘")
-ALREADY_THERE = ("☁️", "群文件已在网盘，没有重复上传")
-FAILED = ("❗", "群文件上传网盘失败")
-GIVEN_UP = ("❗", "群文件上传网盘失败，已放弃")
-WAITING = ("⏳", "群文件排队中")
+
+
+class Headline(NamedTuple):
+    """A message's first line. The group's message shows both, the owner's alert the words."""
+
+    icon: str
+    words: str
+
+
+ON_DRIVE = Headline("☁️", "群文件已上传网盘")
+ALREADY_THERE = Headline("☁️", "群文件已在网盘，没有重复上传")
+FAILED = Headline("❗", "群文件上传网盘失败")
+GIVEN_UP = Headline("❗", "群文件上传网盘失败，已放弃")
+WAITING = Headline("⏳", "群文件排队中")
 RETRIED_LATER = "稍后自动重试"
 GOES_UP_BY_ITSELF = "轮到后自动上传"
 LAPSED = "网盘授权已失效，重新授权后会自动上传"
@@ -55,7 +63,7 @@ def place_line(place: str) -> str:
 
 
 def busy_line(running: RunningUpload) -> str:
-    """What the drive is busy with: the kind of upload only, never a recording's title or
+    """What the drive is busy with: the kind of upload only, never a drive copy's title or
     another file's name; how far along when the CLI has said."""
     what = "其他群文件" if running.kind is UploadKind.GROUP_FILE else "一场录播"
     percent = running.percent
@@ -120,7 +128,7 @@ class GroupFileReport:
 
     # ---- telling ----
 
-    async def tell(self, job: GroupFileJob, headline: tuple[str, str], *lines: str) -> None:
+    async def tell(self, job: GroupFileJob, headline: Headline, *lines: str) -> None:
         """Tell the group the file came from, when its notice switch is on: the headline, the
         file's name as posted, `lines`, the footer. A reply to the member's message while QQ
         takes one; later, or when QQ refuses the reply, an ordinary message; each with the
@@ -159,12 +167,12 @@ class GroupFileReport:
         if self.history:
             self.history.add("qq", job.group, summary, ok, error)
 
-    def _alert(self, job: GroupFileJob, headline: tuple[str, str], *lines: str) -> None:
+    def _alert(self, job: GroupFileJob, headline: Headline, *lines: str) -> None:
         """The owner's alert (plain text): the group's name with the headline's words, the
         file's name, `lines`. Whatever the group's notice switch says."""
         if self.alert is None:
             return
         try:
-            self.alert("\n".join([f"QQ 群「{job.group_folder}」{headline[1]}", job.name, *lines]))
+            self.alert("\n".join([f"QQ 群「{job.group_folder}」{headline.words}", job.name, *lines]))
         except Exception:  # noqa: BLE001 - an alert never touches the job
             log.exception("group file %s/%s: the owner was not alerted", job.folder, job.name)

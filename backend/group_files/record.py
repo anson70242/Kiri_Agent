@@ -41,10 +41,6 @@ class GroupFileUploads:
                                decode=lambda raw: [Upload.from_dict(d) for d in expect_list(raw, "group-file uploads")],
                                encode=lambda uploads: [asdict(u) for u in uploads])
 
-    @property
-    def path(self) -> Path:
-        return self._file.path
-
     def load(self) -> list[Upload]:
         return self._file.load()
 

@@ -14,9 +14,9 @@ is cleared (that upload is done again from the local file), and temporary files 
 to no job are removed. A download that broke off continues from its `.part`.
 
 Everything outside comes in from the caller: the groups store (the switches and the group
-folder), the drive (`turn`, then `folder_names` and `put_file` in it; `uploading`: the
-Quark module), the HTTP client for QQ's file host, the clock, and the folder for local
-copies (on the downloads volume).
+folder; the module's state files sit beside its file), the drive (`turn`, then
+`folder_names` and `put_file` in it; `uploading`: the Quark module), the HTTP client for
+QQ's file host, the clock, and the folder for local copies (on the downloads volume).
 """
 
 from __future__ import annotations
@@ -28,19 +28,22 @@ import time
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from datetime import datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 import httpx
 
+from backend.archive import DOWNLOADING_SUFFIX
+from backend.downloader.auto import MAX_ERRORS, RETRY_INTERVAL
 from backend.drive import DriveAuthorizationLapsed, DriveProgress
 from backend.quark import RunningUpload, UploadKind
 
 from .download import AddressRefused, fetch
 from .failures import after_failure
-from .jobs import GroupFileJob, GroupFileJobs, next_due, next_to_download, next_to_upload
+from .jobs import GroupFileJob, GroupFileJobs, next_due, next_to_download, next_to_upload, state_files
 from .naming import drive_name, file_name
-from .record import UPLOADS_FILE, GroupFileUploads, Upload
+from .record import GroupFileUploads, Upload
 from .report import GroupFileReport
 from .rules import filing_subfolder
 
@@ -50,7 +53,6 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 IDLE_CHECK = 300.0  # seconds a loop sleeps without being woken, before it looks again
-PART = ".part"  # a download's file until it is complete
 # A downloaded file that has waited this long (seconds since its download ended) for another
 # upload to end is told to its group as waiting: files that only queue behind a small one
 # stay silent, and the message is still a reply to the member's.
@@ -75,6 +77,13 @@ class GroupFileDrive(Protocol):
     def uploading(self) -> RunningUpload | None: ...
 
 
+class Doing(StrEnum):
+    """What the worker does with a job: each has its loop; the queue box's rows name it."""
+
+    DOWNLOAD = "download"
+    UPLOAD = "upload"
+
+
 def message_time(timestamp: Any, clock: Callable[[], float]) -> float:
     """A message's `timestamp` (ISO 8601, as QQ sends it) in epoch seconds; the clock's time
     when it is missing or cannot be read."""
@@ -85,14 +94,15 @@ def message_time(timestamp: Any, clock: Callable[[], float]) -> float:
 
 
 class GroupFileKeeper:
-    def __init__(self, groups: QQGroups, drive: GroupFileDrive | None, *, jobs_file: Path, temp: Path,
+    def __init__(self, groups: QQGroups, drive: GroupFileDrive | None, *, temp: Path,
                  client: httpx.AsyncClient | None = None, clock: Callable[[], float] = time.time,
                  report: GroupFileReport | None = None,
-                 retry_interval: float = 15 * 60, max_errors: int = 3) -> None:
+                 retry_interval: float = RETRY_INTERVAL, max_errors: int = MAX_ERRORS) -> None:
         self.groups = groups
         self.drive = drive  # None: the drive is not available, posted files are ignored
+        jobs_file, uploads_file = state_files(groups.path)  # beside the groups file
         self.jobs = GroupFileJobs(jobs_file)
-        self.uploads = GroupFileUploads(jobs_file.parent / UPLOADS_FILE)  # the record of uploads
+        self.uploads = GroupFileUploads(uploads_file)  # the record of uploads
         self.temp = temp  # one folder per job in here, named after its id
         self.client = client or httpx.AsyncClient(timeout=httpx.Timeout(60, connect=20))
         self.clock = clock
@@ -102,8 +112,8 @@ class GroupFileKeeper:
         self.retry_interval = retry_interval
         self.max_errors = max_errors
         self._warned = False  # "the drive is not available" was logged
-        self._wake = {"download": asyncio.Event(), "upload": asyncio.Event()}
-        self._active: dict[str, dict[str, Any] | None] = {"download": None, "upload": None}
+        self._wake = {Doing.DOWNLOAD: asyncio.Event(), Doing.UPLOAD: asyncio.Event()}
+        self._active: dict[Doing, dict[str, Any] | None] = {Doing.DOWNLOAD: None, Doing.UPLOAD: None}
         self._in_hand: GroupFileJob | None = None  # the job being uploaded, in the worker's turn at the drive
 
     # ---- taking a file in ----
@@ -133,7 +143,7 @@ class GroupFileKeeper:
                            str(msg_id or ""), message_time(timestamp, self.clock))
         self.jobs.add(job)
         log.info("group file queued: %s/%s", job.folder, name)
-        self._wake["download"].set()
+        self._wake[Doing.DOWNLOAD].set()
 
     # ---- the worker ----
 
@@ -143,7 +153,7 @@ class GroupFileKeeper:
             self._start()
         except Exception:  # noqa: BLE001 - the loops still run; a leftover only takes room
             log.exception("group files: the start's clean-up failed")
-        await asyncio.gather(self._loop("download", self.download_next), self._loop("upload", self.upload_next),
+        await asyncio.gather(self._loop(Doing.DOWNLOAD, self.download_next), self._loop(Doing.UPLOAD, self.upload_next),
                              self._watch())
 
     def _start(self) -> None:
@@ -168,26 +178,26 @@ class GroupFileKeeper:
                     else:
                         leftover.unlink(missing_ok=True)
 
-    async def _loop(self, what: str, step: Callable[[], Awaitable[bool]]) -> None:
-        wake = self._wake[what]
+    async def _loop(self, doing: Doing, step: Callable[[], Awaitable[bool]]) -> None:
+        wake = self._wake[doing]
         while True:
             wake.clear()
             try:
                 while await step():
                     pass
             except Exception:  # noqa: BLE001 - keep the worker alive
-                log.exception("group file %s worker error", what)
+                log.exception("group file %s worker error", doing)
             try:
-                await asyncio.wait_for(wake.wait(), self._sleep(what))
+                await asyncio.wait_for(wake.wait(), self._sleep(doing))
             except TimeoutError:
                 pass
 
-    def _sleep(self, what: str) -> float:
+    def _sleep(self, doing: Doing) -> float:
         """How long a loop may sleep: until its next job waiting for a retry is due."""
         try:
-            due = next_due(self.jobs.load(), downloaded=what == "upload")
+            due = next_due(self.jobs.load(), downloaded=doing is Doing.UPLOAD)
         except Exception:  # noqa: BLE001 - keep the worker alive
-            log.exception("group file %s worker error", what)
+            log.exception("group file %s worker error", doing)
             due = None
         return IDLE_CHECK if due is None else min(IDLE_CHECK, max(1.0, due - self.clock()))
 
@@ -199,8 +209,8 @@ class GroupFileKeeper:
         if self._switched_off(job):
             return True
         local = self._local(job)
-        part = local.with_name(local.name + PART)
-        row = self._activate("download", job)
+        part = local.with_name(local.name + DOWNLOADING_SUFFIX)  # until it is complete
+        row = self._activate(Doing.DOWNLOAD, job)
         try:
             job.sha256 = await fetch(self.client, job.url, job.size, part,
                                      progress=lambda got: row.update(done=got))
@@ -212,10 +222,10 @@ class GroupFileKeeper:
             await self._failed(job, str(e) or type(e).__name__)
             return True
         finally:
-            self._active["download"] = None
+            self._active[Doing.DOWNLOAD] = None
         job.downloaded, job.downloaded_at = True, self.clock()
         self.jobs.replace(job)
-        self._wake["upload"].set()
+        self._wake[Doing.UPLOAD].set()
         return True
 
     async def upload_next(self) -> bool:
@@ -243,7 +253,7 @@ class GroupFileKeeper:
             return
         job.uploading = True  # the attempt's end clears it
         self.jobs.replace(job)
-        row = self._activate("upload", job)
+        row = self._activate(Doing.UPLOAD, job)
         self._in_hand = job
         try:
             if drive is None:
@@ -252,7 +262,7 @@ class GroupFileKeeper:
             choice = drive_name(job, names, self.uploads)
             if not choice.upload:
                 self._end(job)
-                await self.report.already_there(job, f"{job.folder}/{choice.name}")
+                await self.report.already_there(job, choice.place)
                 return
             local = self._local(job)
             if local.name != choice.name:
@@ -261,7 +271,7 @@ class GroupFileKeeper:
             def progress(sent: int, total: int | None) -> None:
                 row.update(done=sent, total=total or row["total"])
 
-            place = await asyncio.to_thread(drive.put_file, local, job.folder, progress)
+            await asyncio.to_thread(drive.put_file, local, job.folder, progress)
         except DriveAuthorizationLapsed as e:
             await self._failed(job, str(e) or "网盘授权已失效", lapsed=True)
             return
@@ -269,11 +279,11 @@ class GroupFileKeeper:
             await self._failed(job, str(e) or type(e).__name__)
             return
         finally:
-            self._active["upload"] = None
+            self._active[Doing.UPLOAD] = None
             self._in_hand = None
-        self.uploads.note(Upload(job.group, f"{job.folder}/{choice.name}", job.size, job.sha256, self.clock()))
+        self.uploads.note(Upload(job.group, choice.place, job.size, job.sha256, self.clock()))
         self._end(job)
-        await self.report.uploaded(job, place)
+        await self.report.uploaded(job, choice.place)
 
     async def tell_waiting(self) -> None:
         """Tell the group of each file that has waited a minute for another upload to end
@@ -347,12 +357,12 @@ class GroupFileKeeper:
         folder = self.temp / job.id
         if not folder.is_dir():
             return None
-        return next((p for p in folder.iterdir() if p.is_file() and not p.name.endswith(PART)), None)
+        return next((p for p in folder.iterdir() if p.is_file() and not p.name.endswith(DOWNLOADING_SUFFIX)), None)
 
-    def _activate(self, what: str, job: GroupFileJob) -> dict[str, Any]:
-        row = {"id": job.id, "group": job.group_folder, "file": job.name, "doing": what,
+    def _activate(self, doing: Doing, job: GroupFileJob) -> dict[str, Any]:
+        row = {"id": job.id, "group": job.group_folder, "file": job.name, "doing": doing,
                "done": 0, "total": job.size}
-        self._active[what] = row
+        self._active[doing] = row
         return row
 
     # ---- for the queue box ----
@@ -364,12 +374,9 @@ class GroupFileKeeper:
         the file: for a user who sees everything only."""
         active = [dict(a) for a in self._active.values() if a]
         busy = {a["id"] for a in active}
-        # getattr: a job's last error and next try are the retries' fields (failures.py);
-        # the snapshot reads them as the pipeline's jobs name them, and copes without.
         queue = [{"id": j.id, "group": j.group_folder, "file": j.name,
-                  "waiting_for": "upload" if j.downloaded else "download",
-                  "last_error": getattr(j, "last_error", "") or "",
-                  "next_try": getattr(j, "next_try", 0) or 0}
+                  "waiting_for": Doing.UPLOAD if j.downloaded else Doing.DOWNLOAD,
+                  "last_error": j.last_error, "next_try": j.next_try}
                  for j in self.jobs.load() if j.id not in busy]
         return {"active": active, "queue": queue}
 
