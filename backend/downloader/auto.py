@@ -51,6 +51,7 @@ import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import EllipsisType
 from typing import Any, Literal
 from urllib.parse import quote
 
@@ -811,9 +812,11 @@ def failure_detail(job: Job, settings: DownloadSettings) -> str:
     return text
 
 
-def load_auto(config: Path) -> AutoDownloader | None:
+def load_auto(config: Path, drive: Drive | None | EllipsisType = ...) -> AutoDownloader | None:
     """AutoDownloader from config.json (streamers from the roster), or None if
-    `download.auto.enabled` is false."""
+    `download.auto.enabled` is false. `drive`: the service's one drive, so drive copies take
+    turns with the other uploads through it (None: not available); left out, the drive
+    config.json names is built here (the deploy check)."""
     cfg = json.loads(config.read_text(encoding="utf-8"))
     auto = (cfg.get("download") or {}).get("auto") or {}
     if auto.get("enabled") is False:
@@ -848,7 +851,8 @@ def load_auto(config: Path) -> AutoDownloader | None:
         analyze=analyzer,
         translate=load_translator(config, cfg) if transcriber else None,
         upload=load_uploader(config) if analyzer else None,  # uploads the analysis
-        drive=load_quark(config),  # None without the CLI: ticked streamers get READY as today
+        # None without the CLI: ticked streamers get READY as today
+        drive=load_quark(config) if isinstance(drive, EllipsisType) else drive,
     )
     ad.uploads = roster.upload_map()
     ad.drive_folders = roster.drive_map()
@@ -918,9 +922,11 @@ def load_analyzer(config: Path, cfg: dict[str, Any]) -> Callable[[Path, str, str
     return run
 
 
-def attach(config: Path, mon: StreamMonitor) -> tuple[LiveNotifier | None, AutoDownloader | None]:
-    """Hook notifications and auto-download onto a monitor. Run `auto.run()` as a task."""
-    auto = load_auto(config)
+def attach(config: Path, mon: StreamMonitor,
+           drive: Drive | None | EllipsisType = ...) -> tuple[LiveNotifier | None, AutoDownloader | None]:
+    """Hook notifications and auto-download onto a monitor. Run `auto.run()` as a task.
+    `drive`: as in load_auto."""
+    auto = load_auto(config, drive)
     notifier = load_notifier(config, allow_empty=auto is not None)
     if notifier:
         mon.on_change.append(notifier.on_change)
