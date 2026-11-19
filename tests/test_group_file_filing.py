@@ -92,8 +92,8 @@ def test_a_name_already_in_the_folder_ends_the_job_with_a_log_line_and_nothing_u
     assert any("【待校】第3话.ass" in r.message for r in caplog.records)
 
 
-def test_a_failed_upload_is_logged_and_the_job_and_its_file_dropped(tmp_path, caplog):
-    s = make(tmp_path)
+def test_a_failed_upload_given_up_on_is_logged_and_the_job_and_its_file_dropped(tmp_path, caplog):
+    s = make(tmp_path, max_errors=1)  # given up on at the first error
     s.drive.error = DriveFailed("网盘空间不足")
     with caplog.at_level(logging.WARNING, logger="backend.group_files"):
         s.post("【待校】第3话.ass")
@@ -107,8 +107,8 @@ def test_a_failed_upload_is_logged_and_the_job_and_its_file_dropped(tmp_path, ca
     assert [p[1] for p in s.drive.put] == ["【已校】第3话.ass"]
 
 
-def test_an_unexpected_error_in_an_attempt_drops_the_job_and_the_worker_goes_on(tmp_path):
-    s = make(tmp_path)
+def test_an_unexpected_error_in_an_attempt_fails_the_job_and_the_worker_goes_on(tmp_path):
+    s = make(tmp_path, max_errors=1)
     s.drive.error = RuntimeError("boom")
     s.post("【待校】第3话.ass")
     s.settle()
