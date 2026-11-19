@@ -26,11 +26,17 @@ an archive already on the drive costs no disk. The upload has no time limit, but
 and failed after IDLE_TIMEOUT without a progress line; a failed upload's task record is
 deleted, and `upload resume` is never used (it sends the whole file again). A plain file
 goes the same way, under its local name, without a share and without an archive.
+
+Uploads through one Quark object take turns: never two at once, and when one ends a waiting
+group file goes before a waiting drive copy (the service holds one object; see `_Turns`).
+Only the upload itself waits: making a folder, listing it and sharing do not.
 """
 
 from __future__ import annotations
 
 import argparse
+import heapq
+import itertools
 import json
 import logging
 import os
@@ -41,8 +47,10 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable, Iterable, Iterator
-from dataclasses import dataclass
+from contextlib import contextmanager
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -158,14 +166,93 @@ class DriveUpload:
     sent: bool  # False: a file of the zip's name was on the drive already
 
 
+class UploadKind(Enum):
+    """What an upload carries, by the call that asked for it: `put_file` a group file,
+    `upload` (and the pipeline's call) a drive copy."""
+
+    GROUP_FILE = "group_file"
+    DRIVE_COPY = "drive_copy"
+
+
+# When an upload ends, the waiting upload of the lowest rank goes next; within a rank, the
+# one that asked first. A group file is small and a member is waiting for it.
+_RANK = {UploadKind.GROUP_FILE: 0, UploadKind.DRIVE_COPY: 1}
+
+
+@dataclass(frozen=True)
+class RunningUpload:
+    """The upload that has the drive now: what it carries and how far it is."""
+
+    kind: UploadKind
+    sent: int = 0  # bytes
+    total: int | None = None  # bytes; None until the CLI says
+
+    @property
+    def percent(self) -> int | None:
+        return min(100, self.sent * 100 // self.total) if self.total else None
+
+
+class _Turns:
+    """One upload at a time: a caller waits in `turn(kind)` until the upload before it ended
+    and no caller that goes first is waiting. A running upload is never stopped."""
+
+    def __init__(self) -> None:
+        self._changed = threading.Condition()
+        self._asked = itertools.count()
+        self._waiting: list[tuple[int, int, UploadKind]] = []  # a heap: (rank, asked, kind)
+        self.running: RunningUpload | None = None
+
+    @contextmanager
+    def turn(self, kind: UploadKind) -> Iterator[None]:
+        with self._changed:
+            mine = (_RANK[kind], next(self._asked), kind)
+            heapq.heappush(self._waiting, mine)
+            while self.running is not None or self._waiting[0] != mine:
+                self._changed.wait()
+            heapq.heappop(self._waiting)
+            self.running = RunningUpload(kind)
+        try:
+            yield
+        finally:
+            with self._changed:
+                self.running = None
+                self._changed.notify_all()
+
+    def waiting(self) -> list[UploadKind]:
+        with self._changed:
+            return [kind for _, _, kind in sorted(self._waiting)]
+
+    def advanced(self, sent: int, total: int | None) -> None:
+        """The running upload's progress (only its own thread calls this while it runs)."""
+        if self.running is not None:
+            self.running = replace(self.running, sent=sent, total=total)
+
+
 class Quark:
     """The drive, reached through the CLI script `cli`. Drive copies are built under the
-    downloads root `downloads` (see backend.drive_copy). A Quark is the pipeline's `Drive`."""
+    downloads root `downloads` (see backend.drive_copy). A Quark is the pipeline's `Drive`
+    and the group-files module's drive.
+
+    Uploads through one Quark object take turns (see `_send`): the service holds one, so
+    drive copies and group files never upload at once. The by-hand commands build their own
+    and stay outside the service's turns."""
 
     def __init__(self, cli: Path, downloads: Path, idle_timeout: float = IDLE_TIMEOUT) -> None:
         self.cli = cli
         self.downloads = downloads
         self.idle_timeout = idle_timeout
+        self._turns = _Turns()
+
+    @property
+    def uploading(self) -> RunningUpload | None:
+        """The upload that has the drive now (its kind and progress), or None. Read-only: for
+        telling a waiting caller what the drive is busy with."""
+        return self._turns.running
+
+    @property
+    def waiting(self) -> list[UploadKind]:
+        """The kinds of the uploads waiting for their turn, in the order they will go."""
+        return self._turns.waiting()
 
     def __call__(self, archive: Archive, folder: str, progress: DriveProgress) -> DriveCopy:
         return self.upload(archive, folder, progress).copy
@@ -201,7 +288,7 @@ class Quark:
         with drive_copy(archive, self.downloads) as zip_path:
             if zip_path is None:  # the video went since the name was known
                 raise DriveFailed("没有影片，没有可上传的网盘副本")
-            file_id = self._send(zip_path, folder_id, progress)
+            file_id = self._send(zip_path, folder_id, progress, UploadKind.DRIVE_COPY)
         log.info("drive copy uploaded: %s", path)
         return DriveUpload(self._share(archive, file_id, path), sent=True)
 
@@ -237,7 +324,7 @@ class Quark:
         else is asked first, no share is made and no archive is read. Progress goes to
         `progress(sent, total)`. Raises DriveAuthorizationLapsed, or DriveFailed with the
         CLI's message."""
-        self._send(local, self._folder_id(folder), progress)
+        self._send(local, self._folder_id(folder), progress, UploadKind.GROUP_FILE)
         log.info("file uploaded to the drive: %s/%s", folder, local.name)
         return f"{folder}/{local.name}"
 
@@ -281,29 +368,34 @@ class Quark:
                     children.append(entry)
             return children
 
-    def _send(self, local: Path, folder_id: str, progress: DriveProgress | None) -> str:
-        """`upload` of a local file, a drive copy's zip or a plain file, and the uploaded
-        file's id ("" when the CLI gave none). Every upload goes through here. After a failed
-        upload its task record is deleted (`upload resume` is never used: it sends the whole
-        file again)."""
+    def _send(self, local: Path, folder_id: str, progress: DriveProgress | None, kind: UploadKind) -> str:
+        """`upload` of a local file, a drive copy's zip or a group file, and the uploaded
+        file's id ("" when the CLI gave none). Every upload goes through here, and waits here
+        for its turn (`kind` decides who goes first). The wait is before the CLI runs, so it
+        never counts against the watchdog. After a failed upload its task record is deleted
+        (`upload resume` is never used: it sends the whole file again), still in its turn."""
         records: list[str] = []
         file_ids: list[str] = []
 
         def note(obj: dict[str, Any]) -> None:
             data = obj.get("data") if isinstance(obj.get("data"), dict) else {}
-            if obj["type"] == "progress" and progress:
+            if obj["type"] == "progress":
                 total = data.get("total")
-                progress(int(data.get("current") or 0), int(total) if isinstance(total, int | float) else None)
+                sent, size = int(data.get("current") or 0), int(total) if isinstance(total, int | float) else None
+                self._turns.advanced(sent, size)
+                if progress:
+                    progress(sent, size)
             elif obj["type"] == "list" and data.get("recordId"):
                 records.append(str(data["recordId"]))
                 if data.get("fileId"):
                     file_ids.append(str(data["fileId"]))
 
-        try:
-            data = self._call(["upload", str(local), "--parent-fid", folder_id], on_object=note)
-        except (DriveFailed, DriveAuthorizationLapsed):
-            self._forget_upload(local.name, records)
-            raise
+        with self._turns.turn(kind):
+            try:
+                data = self._call(["upload", str(local), "--parent-fid", folder_id], on_object=note)
+            except (DriveFailed, DriveAuthorizationLapsed):
+                self._forget_upload(local.name, records)
+                raise
         fids = data.get("fids")
         return file_ids[-1] if file_ids else str(fids[0]) if isinstance(fids, list) and fids else ""
 

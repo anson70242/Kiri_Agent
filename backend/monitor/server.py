@@ -28,6 +28,7 @@ from backend.downloader.auto import attach
 from backend.group_files import JOBS_FILE, GroupFileKeeper
 from backend.notify.incidents import IncidentAlerts
 from backend.notify.qq_gateway import QQGateway
+from backend.quark import load_quark
 from backend.state_file import StateFileError, set_incident_hook
 
 from . import StreamMonitor
@@ -77,7 +78,10 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
     interval = interval or cfg_interval
     roster = load_roster(config)
     mon = StreamMonitor(roster.streamers())
-    notifier, auto = (None, None) if dev else attach(config, mon)
+    # The service's one drive (None without the Quark CLI, and in dev mode): the pipeline and
+    # the group-files module upload through it, so their uploads take turns.
+    drive = None if dev else load_quark(config)
+    notifier, auto = (None, None) if dev else attach(config, mon, drive)
     if dev:
         print("Dev mode: no auto-download, no notifications")
     elif notifier and notifier.notifiers:
@@ -85,11 +89,11 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
     else:
         print("Notify: off (set DISCORD_WEBHOOK_URL in .env to enable)")
     print(f"Auto-download: {len(auto.keep)} streamer(s)" if auto else "Auto-download: off")
-    # Group files to the drive: the gateway hands them over. The drive is the one the
-    # pipeline was given (None: files are ignored, with a warning); the jobs file sits beside
-    # the QQ groups file, local copies on the downloads volume.
+    # Group files to the drive: the gateway hands them over. The drive is the service's one
+    # (None: files are ignored, with a warning); the jobs file sits beside the QQ groups file,
+    # local copies on the downloads volume.
     group_files = GroupFileKeeper(
-        notifier.qq.groups, auto.drive if auto else None,
+        notifier.qq.groups, drive,
         jobs_file=notifier.qq.groups.path.parent / JOBS_FILE,
         temp=Downloads(load_settings(config)[0].output_dir).group_files,
     ) if notifier and notifier.qq else None
@@ -126,6 +130,7 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
     app = FastAPI(title="Kiri Live Monitor", lifespan=lifespan)
     app.state.notifier = notifier
     app.state.auto = auto
+    app.state.drive = drive
     app.state.gateway = gateway
     app.state.group_files = group_files
     def streamer_names() -> set[str]:
@@ -142,10 +147,7 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
         install_open_me(app)
         print("Login: off")
     app.include_router(create_router(load_settings(config)[0].output_dir, visible))
-    # The drive the pipeline was given (None without the Quark CLI, or with the automatic
-    # download off): until the service holds one Quark object, the page asks the pipeline.
-    app.include_router(create_notify_router(notifier, roster, gateway,
-                                            drive_available=bool(auto and auto.drive)))
+    app.include_router(create_notify_router(notifier, roster, gateway, drive_available=drive is not None))
 
     def snapshot(names: set[str] | None = None) -> dict:
         rows = []
