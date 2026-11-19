@@ -1,5 +1,6 @@
 """QQ bot gateway: groups register themselves (bot added / @-mentioned), get removed or
-muted, and the connection keeps coming back. Fake QQ API + fake WebSocket."""
+muted, and the connection keeps coming back. Fake QQ API + fake WebSocket. The commands a
+mention carries are in test_qq_mention_commands.py."""
 
 from __future__ import annotations
 
@@ -46,7 +47,7 @@ def test_a_mention_registers_the_group_and_replies_with_its_subscriptions(tmp_pa
     assert "本群已订阅：（还没有）" in body["markdown"]["content"]
 
     groups.update("G1", streamers=["youtube:@a", "twitch:b"], enabled=True)
-    dispatch(gw, "GROUP_AT_MESSAGE_CREATE", {"group_openid": "G1", "id": "MSG2", "content": "",
+    dispatch(gw, "GROUP_AT_MESSAGE_CREATE", {"group_openid": "G1", "id": "MSG2", "content": " 订阅",
                                              "author": {"member_role": "owner"}})
     text = fake.messages[-1][1]["markdown"]["content"]
     assert "本群已订阅：\n- A (YouTube)\n- B (Twitch)\n" in text and "开播" in text
@@ -165,7 +166,7 @@ def fake_gateway(fake: FakeQQ) -> None:
 
 
 
-def test_after_registering_only_owner_and_admins_get_an_answer(tmp_path):
+def test_after_registering_only_owner_and_admins_get_the_status(tmp_path):
     fake = FakeQQ()
     gw, groups, _ = gateway(tmp_path, fake)
     member = {"member_role": "member"}
@@ -173,11 +174,12 @@ def test_after_registering_only_owner_and_admins_get_an_answer(tmp_path):
     dispatch(gw, "GROUP_AT_MESSAGE_CREATE", {"group_openid": "G1", "id": "M1", "author": member})
     assert len(fake.messages) == 1  # first time: whoever it was, the group is registered and told
 
-    dispatch(gw, "GROUP_AT_MESSAGE_CREATE", {"group_openid": "G1", "id": "M2", "author": member})
-    assert len(fake.messages) == 1  # a member @-ing it again: ignored, no spam
+    dispatch(gw, "GROUP_AT_MESSAGE_CREATE", {"group_openid": "G1", "id": "M2", "content": " 订阅", "author": member})
+    assert len(fake.messages) == 1  # a member asking for the status again: ignored, no spam
 
     for role, msg_id in (("owner", "M3"), ("admin", "M4")):
-        dispatch(gw, "GROUP_AT_MESSAGE_CREATE", {"group_openid": "G1", "id": msg_id, "author": {"member_role": role}})
+        dispatch(gw, "GROUP_AT_MESSAGE_CREATE", {"group_openid": "G1", "id": msg_id, "content": " 订阅",
+                                                 "author": {"member_role": role}})
     assert [b["msg_id"] for _, b in fake.messages] == ["M1", "M3", "M4"]
 
 
@@ -189,5 +191,6 @@ def test_the_status_lists_each_person_once_with_their_platforms(tmp_path):
     groups.register("G1")
     # saved before subscriptions went per person: one entry per channel, plus a newer name
     groups.update("G1", streamers=["youtube:@a", "twitch:a_tw", "B"], enabled=True)
-    dispatch(gw, "GROUP_AT_MESSAGE_CREATE", {"group_openid": "G1", "id": "M1", "author": {"member_role": "owner"}})
+    dispatch(gw, "GROUP_AT_MESSAGE_CREATE", {"group_openid": "G1", "id": "M1", "content": " 订阅",
+                                             "author": {"member_role": "owner"}})
     assert "本群已订阅：\n- A (YouTube / Twitch)\n- B (Twitch)\n" in fake.messages[-1][1]["markdown"]["content"]
