@@ -115,7 +115,10 @@ class GroupFileKeeper:
 
     async def run(self) -> None:
         """Pick up what a restart left, then download and upload forever (cancel to stop)."""
-        self._start()
+        try:
+            self._start()
+        except Exception:  # noqa: BLE001 - the loops still run; a leftover only takes room
+            log.exception("group files: the start's clean-up failed")
         await asyncio.gather(self._loop("download", self.download_next), self._loop("upload", self.upload_next))
 
     def _start(self) -> None:
@@ -124,9 +127,10 @@ class GroupFileKeeper:
         downloaded again. Temporary files that belong to no job are removed."""
         jobs = self.jobs.load()
         for job in jobs:
-            if job.uploading or (job.downloaded and self._downloaded_file(job) is None):
+            gone = job.downloaded and self._downloaded_file(job) is None
+            if job.uploading or gone:
                 job.uploading = False
-                if self._downloaded_file(job) is None:
+                if gone:
                     job.downloaded, job.downloaded_at = False, None
                 self.jobs.replace(job)
         if self.temp.is_dir():

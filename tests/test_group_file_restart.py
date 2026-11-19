@@ -94,6 +94,18 @@ def test_a_mark_left_by_a_kill_is_cleared_at_start_even_when_the_job_is_not_due(
     assert [j.uploading for j in jobs(s)] == [False] and s.drive.put == []
 
 
+def test_an_upload_tried_again_takes_the_local_file_under_the_name_the_last_try_gave_it(tmp_path):
+    s = make(tmp_path)
+    s.post("【待校】第3话.ass", b"subtitle")
+    asyncio.run(s.keeper.download_next())
+    (job,) = jobs(s)
+    (local,) = (s.temp / job.id).iterdir()
+    local.rename(local.with_name("【待校】第3话.2026-11-19-0541.ass"))  # named for the drive, then failed
+
+    s.settle()
+    assert [p[2] for p in s.drive.put] == [b"subtitle"] and jobs(s) == []
+
+
 def test_temporary_files_that_belong_to_no_job_are_removed_at_start(tmp_path):
     s = make(tmp_path)
     s.post("【待校】第3话.ass", b"subtitle")

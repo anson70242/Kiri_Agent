@@ -87,11 +87,13 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
     print(f"Auto-download: {len(auto.keep)} streamer(s)" if auto else "Auto-download: off")
     # Group files to the drive: the gateway hands them over. The drive is the one the
     # pipeline was given (None: files are ignored, with a warning); the jobs file sits beside
-    # the QQ groups file, local copies on the downloads volume.
+    # the QQ groups file, local copies on the downloads volume; failed files are retried
+    # with the pipeline's interval and maximum of errors.
     group_files = GroupFileKeeper(
         notifier.qq.groups, auto.drive if auto else None,
         jobs_file=notifier.qq.groups.path.parent / JOBS_FILE,
         temp=Downloads(load_settings(config)[0].output_dir).group_files,
+        **({"retry_interval": auto.retry_interval, "max_errors": auto.max_errors} if auto else {}),
     ) if notifier and notifier.qq else None
     # The QQ bot's event connection: keeps it online and learns which groups it is in.
     gateway = QQGateway(
