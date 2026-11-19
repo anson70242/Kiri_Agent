@@ -239,3 +239,21 @@ def test_a_file_message_is_logged_whole_so_a_folder_would_show_and_a_picture_kee
     assert "folder=subs" in caplog.text and '"message_type": 7' in caplog.text  # every field of a file message
     assert caplog.text.count("qq probe: file message") == 1  # the picture's message is not logged whole
     assert "a caption" not in caplog.text
+
+
+def test_a_mention_in_an_ordinary_message_is_logged_by_its_shape_and_never_its_words(tmp_path, caplog):
+    """Third question of the probe: how does `mentions` name the bot, and is the author's role there?"""
+    gw, _, _ = gateway(tmp_path, FakeQQ())
+    dispatch(gw, "READY", {"user": {"id": "BOT9", "username": "切片小助手"}})
+    with caplog.at_level("INFO", logger="backend.notify.qq_gateway"):
+        dispatch(gw, "GROUP_MESSAGE_CREATE", {
+            "group_openid": "G1", "id": "MSG1", "content": "<@!BOT9> secret words",
+            "author": {"member_openid": "MEMBER1", "member_role": "owner"},
+            "mentions": [{"id": "BOT9", "username": "切片小助手", "bot": True, "nick": "someone"}]})
+    text = caplog.text
+    assert "qq probe: mention" in text
+    assert '"bot": true' in text  # flags are shown as they are
+    assert "is the bot's id" in text and "is the bot's name" in text  # strings only say what they equal
+    assert "someone" not in text and "BOT9" not in text and "MEMBER1" not in text
+    assert "<@!xxxx> xxxxxx xxxxx" in text and "secret" not in text  # the text's shape, not its words
+    assert '"member_role": "owner"' in text  # the author's role is not private and decides who is answered
