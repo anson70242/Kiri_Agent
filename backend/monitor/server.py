@@ -124,7 +124,10 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
         install_open_me(app)
         print("Login: off")
     app.include_router(create_router(load_settings(config)[0].output_dir, visible))
-    app.include_router(create_notify_router(notifier, roster, gateway))
+    # The drive the pipeline was given (None without the Quark CLI, or with the automatic
+    # download off): until the service holds one Quark object, the page asks the pipeline.
+    app.include_router(create_notify_router(notifier, roster, gateway,
+                                            drive_available=bool(auto and auto.drive)))
 
     def snapshot(names: set[str] | None = None) -> dict:
         rows = []
