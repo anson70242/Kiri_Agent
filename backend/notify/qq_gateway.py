@@ -33,6 +33,8 @@ from .qq import KIND_LABELS, QQApi, QQError, QQGroups, QQSettings
 log = logging.getLogger(__name__)
 
 GROUP_EVENTS = 1 << 25
+HANDLED_EVENTS = ("GROUP_ADD_ROBOT", "GROUP_AT_MESSAGE_CREATE", "GROUP_DEL_ROBOT", "GROUP_MSG_REJECT",
+                  "GROUP_MSG_RECEIVE")
 
 
 PLATFORMS = {"youtube": "YouTube", "twitch": "Twitch"}
@@ -90,6 +92,7 @@ class QQGateway:
             return
         if not group:
             return
+        self.probe(t, d, group)
         if t in ("GROUP_ADD_ROBOT", "GROUP_AT_MESSAGE_CREATE"):
             g, new = self.groups.register(group)
             role = (d.get("author") or {}).get("member_role")
@@ -108,6 +111,21 @@ class QQGateway:
         elif t == "GROUP_MSG_RECEIVE":
             if self.groups.get(group):
                 self.groups.update(group, status="active")
+
+    def probe(self, t: Any, d: dict[str, Any], group: str) -> None:
+        """Temporary (2026-11-19), to be removed once the answer is known: log what QQ sends when a
+        member posts a file in a group, so we learn whether a group file reaches the bot as an
+        attachment (which event, which fields, how long its url lives). Logged: every group event
+        this module does not handle, and any message with attachments; the event's field names and
+        the attachments, never the message text."""
+        attachments = d.get("attachments") or []
+        if t in HANDLED_EVENTS and not attachments:
+            return
+        g = self.groups.get(group) or {}
+        log.info("qq probe: %s in %s, fields %s, %d attachment(s)", t, g.get("name") or group,
+                 sorted(d), len(attachments))
+        for a in attachments:
+            log.info("qq probe: attachment %s", json.dumps(a, ensure_ascii=False))
 
     def _set_status(self, group: str, status: str, why: str) -> None:
         g = self.groups.get(group) or self.groups.register(group)[0]

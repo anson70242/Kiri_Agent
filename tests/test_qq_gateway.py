@@ -191,3 +191,35 @@ def test_the_status_lists_each_person_once_with_their_platforms(tmp_path):
     groups.update("G1", streamers=["youtube:@a", "twitch:a_tw", "B"], enabled=True)
     dispatch(gw, "GROUP_AT_MESSAGE_CREATE", {"group_openid": "G1", "id": "M1", "author": {"member_role": "owner"}})
     assert "本群已订阅：\n- A (YouTube / Twitch)\n- B (Twitch)\n" in fake.messages[-1][1]["markdown"]["content"]
+
+
+def test_a_file_posted_in_a_group_is_logged_with_its_attachment_and_never_its_text(tmp_path, caplog):
+    """The probe of 2026-11-19: what QQ sends when a member posts a file (see QQGateway.probe)."""
+    fake = FakeQQ()
+    gw, groups, alerts = gateway(tmp_path, fake)
+    attachment = {"content_type": "file", "filename": "notes.zip", "size": 1234,
+                  "url": "https://files.example/notes.zip?rkey=K"}
+
+    with caplog.at_level("INFO", logger="backend.notify.qq_gateway"):
+        dispatch(gw, "GROUP_MESSAGE_CREATE", {"group_openid": "G1", "id": "MSG1", "content": "private words",
+                                              "attachments": [attachment]})
+        dispatch(gw, "GROUP_MESSAGE_CREATE", {"group_openid": "G1", "id": "MSG2", "content": "more words"})
+
+    assert "GROUP_MESSAGE_CREATE" in caplog.text and "1 attachment(s)" in caplog.text
+    for value in ("notes.zip", "1234", "https://files.example/notes.zip?rkey=K", "content_type"):
+        assert value in caplog.text
+    assert "0 attachment(s)" in caplog.text  # a plain message shows that the event arrives at all
+    assert "private words" not in caplog.text and "more words" not in caplog.text
+    assert fake.messages == [] and alerts == [] and groups.get("G1") is None  # the bot stays silent
+
+
+def test_a_mention_with_a_file_is_logged_too_and_a_plain_mention_is_not(tmp_path, caplog):
+    fake = FakeQQ()
+    gw, _, _ = gateway(tmp_path, fake)
+    with caplog.at_level("INFO", logger="backend.notify.qq_gateway"):
+        dispatch(gw, "GROUP_AT_MESSAGE_CREATE", {"group_openid": "G1", "id": "MSG1", "content": "hi"})
+        assert "qq probe" not in caplog.text
+        dispatch(gw, "GROUP_AT_MESSAGE_CREATE", {"group_openid": "G1", "id": "MSG2", "content": "hi",
+                                                 "attachments": [{"content_type": "file", "filename": "a.pdf"}]})
+    assert "a.pdf" in caplog.text
+    assert len(fake.messages) == 1  # the mention is answered as before (the second one is not from an admin)
