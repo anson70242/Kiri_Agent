@@ -12,7 +12,7 @@ from backend.notify import EventKind, StreamEvent
 from backend.notify.discord import DiscordNotifier
 from backend.notify.qq import COVERS_KEPT
 
-from .helpers import A, live
+from .helpers import A, live, up
 from .test_qq import COVER, SUBSCRIBED, FakeQQ, notifier, send
 
 ALL_KINDS = [str(k) for k in EventKind]
@@ -81,6 +81,38 @@ def test_the_stale_cover_address_is_not_fetched_again(tmp_path):
     fake.cover_ok = False  # the address now serves nothing of this live
     send(n, StreamEvent(EventKind.DOWNLOADED, live(A, thumbnail=COVER), detail="x"))
     assert "(qqbot-media://image/v1/COVER1)" in fake.texts("G1")[1]
+
+
+def scheduled(sid: str = "v1"):
+    """A scheduled live with a cover, as its 直播预告 reports it."""
+    status = up(A, sid)
+    status.thumbnail = COVER
+    return status
+
+
+def test_going_live_fetches_the_cover_again_and_the_later_messages_reuse_that_one(tmp_path):
+    """A streamer often schedules a live with a placeholder and sets the real cover later."""
+    fake = CoverQQ()
+    n = qq(tmp_path, fake)
+    send(n, StreamEvent(EventKind.UPCOMING, scheduled()))
+    send(n, StreamEvent(EventKind.LIVE, live(A, thumbnail=COVER)))
+    send(n, StreamEvent(EventKind.DOWNLOADED, live(A, thumbnail=COVER), detail="x"))
+    announced, went_live, downloaded = fake.texts("G1")
+    assert "COVER1)" in announced
+    assert "COVER2)" in went_live  # the cover as it is when the live starts
+    assert "COVER2)" in downloaded  # and not fetched a third time
+    assert fake.fetches == 2 and fake.uploads == 2
+
+
+def test_going_live_keeps_the_announced_cover_when_it_cannot_be_fetched_again(tmp_path):
+    fake = CoverQQ()
+    n = qq(tmp_path, fake)
+    send(n, StreamEvent(EventKind.UPCOMING, scheduled()))
+    fake.cover_ok = False  # the address answers nothing when the live starts
+    send(n, StreamEvent(EventKind.LIVE, live(A, thumbnail=COVER)))
+    send(n, StreamEvent(EventKind.DOWNLOADED, live(A, thumbnail=COVER), detail="x"))
+    _, went_live, downloaded = fake.texts("G1")
+    assert "COVER1)" in went_live and "COVER1)" in downloaded  # the one it has, not a message without a cover
 
 
 def test_another_live_gets_its_own_cover(tmp_path):

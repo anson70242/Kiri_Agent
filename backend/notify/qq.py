@@ -434,7 +434,9 @@ class QQNotifier(Notifier):
         targets = self.groups.targets(event)
         if not targets:
             return
-        cover, reused = await self.cover(event.status) if event.kind in COVER_KINDS else (None, False)
+        # Going live fetches the cover again: the 直播预告 often showed a placeholder.
+        cover, reused = (await self.cover(event.status, fresh=event.kind is EventKind.LIVE)
+                         if event.kind in COVER_KINDS else (None, False))
         text = message(event, cover.line if cover else None)
         summary = text.splitlines()[0].replace("**", "")
         for i, g in enumerate(targets):
@@ -464,24 +466,35 @@ class QQNotifier(Notifier):
         self.history.add("qq", group["openid"], summary, False, error)
         return False
 
-    async def cover(self, status: StreamStatus) -> tuple[Cover | None, bool]:
+    async def cover(self, status: StreamStatus, fresh: bool = False) -> tuple[Cover | None, bool]:
         """The live's cover in the media library (None: the message is text only), and
         whether it was uploaded for an earlier message. A live's cover is uploaded once
         and reused for its later messages: by then its address may show another picture
-        (a Twitch preview shows whatever the channel shows now)."""
+        (a Twitch preview shows whatever the channel shows now). `fresh`: fetch it again
+        all the same and keep the new one (a scheduled live's cover is often set late);
+        when that fails, the cover kept for the live is used after all."""
         key = live_key(status)
-        if key and (known := self._covers.get(key)):
+        known = self._covers.get(key) if key else None
+        if known and not fresh:
             self._covers.move_to_end(key)
             return known, True
-        if not status.thumbnail:
-            return None, False
+        cover = await self.fetch_cover(key, status.thumbnail) if status.thumbnail else None
+        if cover is None and known:
+            self._covers[key] = known  # a failed upload forgot it
+            self._covers.move_to_end(key)
+            return known, True
+        return cover, False
+
+    async def fetch_cover(self, key: tuple[str, str] | None, address: str) -> Cover | None:
+        """The picture at `address`, uploaded and kept for the live `key`; None when it cannot
+        be fetched or uploaded."""
         try:
-            r = await self.client.get(status.thumbnail, follow_redirects=True, timeout=20)
+            r = await self.client.get(address, follow_redirects=True, timeout=20)
             r.raise_for_status()
         except httpx.HTTPError as e:
             log.warning("qq: cover not used (%s)", e)
-            return None, False
-        return await self.upload_cover(key, r.content), False
+            return None
+        return await self.upload_cover(key, r.content)
 
     async def upload_cover(self, key: tuple[str, str] | None, data: bytes) -> Cover | None:
         """Upload a cover's image and keep it for the live `key` (None: not kept). A
