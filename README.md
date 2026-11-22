@@ -318,10 +318,11 @@ each live is also kept for good on the owner's Quark cloud drive: once it is ful
 is uploaded into the streamer's drive folder (written in the gear, counted from the top of the drive; blank means `录播/<主播>`, the streamer's name as their archives' folder has it; a missing folder is created).
 Then a drive link is made: a Quark share address with its extraction code inside, which does not expire.
 
-- For such a streamer, 「全部处理完成」 (all processing done) is sent when the upload ends, and its 「全部下载」 (download everything) link is the drive link.
-  The archive's page shows 「☁ 网盘链接」 (drive link).
-- Only the first attempt is waited for. If it fails, 「全部处理完成」 goes out at once with the site's own links, together with ❗ 「网盘上传失败」 (drive upload failed);
-  the upload is retried in the background, and ☁️ 「网盘上传完成」 (drive upload done) brings the drive link when it gets through.
+- 「全部处理完成」 (all processing done) does not wait for the upload: it goes out as for any streamer, with the site's own links.
+  When the upload ends, ☁️ 「网盘上传完成」 (drive upload done) brings the drive link, and the archive's page shows 「☁ 网盘链接」 (drive link).
+  A QQ group gets that message only when it ticks 「网盘上传完成」 on the 通知 page.
+- If the first attempt fails, ❗ 「网盘上传失败」 (drive upload failed) says so; the upload is retried in the background,
+  and 「网盘上传完成」 follows when it gets through.
 - An archive is not deleted from the server until its drive copy is uploaded or given up on.
 - The program never deletes or replaces anything on the drive. A zip whose name is already in the folder is neither built nor uploaded again.
 - When the drive's authorization lapses, the owner gets ⚠️ 「网盘授权失效」 (drive authorization lapsed) with the command to run; uploads wait up to 72 hours for it.

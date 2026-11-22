@@ -19,25 +19,24 @@ from backend.notify import EventKind
 from .helpers import B, live
 from .test_check_state import write_config
 from .test_drive_failures import ScriptedDrive
-from .test_drive_stage import DRIVE_LABEL, FakeDrive, kinds, links, make, processed, ready_as_today, rewrite_queue, step
+from .test_drive_stage import DRIVE_LINK, FakeDrive, kinds, links, make, processed, rewrite_queue, step
 
 
 # ---- a service without a drive finds a drive job ----
 
-def test_a_drive_job_found_without_a_drive_is_dropped_with_ready_as_today_and_drive_upload_failed(tmp_path):
+def test_a_drive_job_found_without_a_drive_is_dropped_with_drive_upload_failed(tmp_path):
     processed(tmp_path, FakeDrive())
     restarted, _, sent = make(tmp_path, drive=None)  # the CLI was removed, then a restart
     step(restarted, "drive")
 
     assert restarted.load() == []
-    assert kinds(sent) == [EventKind.READY, EventKind.DRIVE_FAILED]
-    ready_as_today(sent)
-    assert "不可用" in sent[1].detail and "取消" in sent[1].detail
+    assert kinds(sent) == [EventKind.DRIVE_FAILED]
+    assert "不可用" in sent[0].detail and "取消" in sent[0].detail
 
 
-def test_a_dropped_drive_job_whose_ready_went_out_only_tells_the_owner(tmp_path):
+def test_a_drive_job_waiting_for_a_retry_is_dropped_the_same_way(tmp_path):
     ad, clock, _, _ = processed(tmp_path, ScriptedDrive(DriveFailed("网络超时")))
-    step(ad, "drive")  # READY went out, the upload waits for a retry
+    step(ad, "drive")  # the upload waits for a retry
     restarted, clock2, sent = make(tmp_path, drive=None)
     clock2.t = clock.t + 900
     step(restarted, "drive")
@@ -71,7 +70,7 @@ def test_the_job_is_marked_uploading_in_the_queue_file_while_its_upload_runs(tmp
     ad, _, sent, _ = processed(tmp_path, drive)
     marks = []
     drive.during = lambda progress: marks.append([j.uploading for j in ad.load()])
-    run_until(ad, lambda: EventKind.READY in kinds(sent))
+    run_until(ad, lambda: kinds(sent)[-1] in (EventKind.DRIVE_UPLOADED, EventKind.DRIVE_FAILED))
 
     assert marks == [[True]]
     assert [j.uploading for j in ad.load()] == ([] if answer is None else [False])
@@ -89,15 +88,15 @@ def test_a_mark_left_by_a_kill_is_cleared_when_the_service_starts(tmp_path):
     run_until(ad, lambda: not ad.load()[0].uploading)
 
 
-def test_an_upload_a_kill_interrupted_is_done_again_and_ready_still_goes_out_once(tmp_path):
+def test_an_upload_a_kill_interrupted_is_done_again_and_drive_copy_uploaded_goes_out(tmp_path):
     killed_while_uploading(tmp_path)
     drive = FakeDrive()
     ad, _, sent = make(tmp_path, drive)
     run_until(ad, lambda: not ad.load())
 
     assert len(drive.calls) == 1
-    assert kinds(sent) == [EventKind.READY]
-    assert links(sent[0])[0] == ("https://drive.example/s/abc?pwd=x1y2", DRIVE_LABEL)
+    assert kinds(sent) == [EventKind.DRIVE_UPLOADED]
+    assert links(sent[0]) == [DRIVE_LINK]
 
 
 # ---- the deploy check ----

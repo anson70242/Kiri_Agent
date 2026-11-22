@@ -1,6 +1,6 @@
-"""The drive stage when an upload does not succeed: "全部处理完成" at once with the site's
-links and 网盘上传失败, retries in the background, 网盘上传完成 when one gets through, and a
-lapsed authorization told apart from an error. Through the automatic download with a fake
+"""The drive stage when an upload does not succeed: 网盘上传失败 for the first failure,
+retries in the background, 网盘上传完成 when one gets through, and a lapsed authorization
+told apart from an error. Through the automatic download with a fake
 clock, fake stages and a fake drive."""
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from backend.drive import DriveAuthorizationLapsed, DriveCopy, DriveFailed
 from backend.notify import EventKind
 
 from .helpers import A, B, bare_archive, later, live
-from .test_drive_stage import ReplaySource, downloaded, kinds, links, make, processed, ready_as_today, step
+from .test_drive_stage import ReplaySource, downloaded, kinds, links, make, processed, step
 
 HOUR = 3600
 LINK = "https://drive.example/s/abc?pwd=x1y2"
@@ -47,13 +47,12 @@ def after(sent, n):
 
 @pytest.mark.parametrize("error", [DriveFailed("32003 空间不足"), RuntimeError("32003 空间不足")],
                          ids=["failed", "a bug"])
-def test_a_failed_first_attempt_sends_ready_at_once_and_drive_upload_failed_and_keeps_the_job(tmp_path, error):
+def test_a_failed_first_attempt_sends_drive_upload_failed_and_keeps_the_job(tmp_path, error):
     drive = ScriptedDrive(error)
     ad, clock, sent, _ = processed(tmp_path, drive)
     step(ad, "drive")
 
-    assert after(sent, 1) == [EventKind.READY, EventKind.DRIVE_FAILED]
-    ready_as_today(sent)
+    assert after(sent, 2) == [EventKind.DRIVE_FAILED]
     failed = sent[-1]
     assert "32003 空间不足" in failed.detail and "自动重试" in failed.detail
     (job,) = ad.load()
@@ -77,19 +76,19 @@ def test_later_errors_are_silent_and_the_last_one_gives_up_with_a_second_drive_u
     retry(ad, clock)
 
     assert ad.load() == []  # given up: the archive goes by the usual rule at the next prune
-    assert after(sent, 1) == [EventKind.READY, EventKind.DRIVE_FAILED, EventKind.DRIVE_FAILED]
+    assert after(sent, 2) == [EventKind.DRIVE_FAILED, EventKind.DRIVE_FAILED]
     gave_up = sent[-1]
     assert "放弃" in gave_up.detail and "32004 单文件超限" in gave_up.detail and "3 次" in gave_up.detail
 
 
-def test_a_retry_that_gets_through_sends_drive_copy_uploaded_with_the_link_and_no_second_ready(tmp_path):
+def test_a_retry_that_gets_through_sends_drive_copy_uploaded_with_the_link(tmp_path):
     drive = ScriptedDrive(DriveFailed("网络超时"), COPY)
     ad, clock, sent, folder = processed(tmp_path, drive)
     step(ad, "drive")
     retry(ad, clock)
 
     assert ad.load() == []
-    assert after(sent, 1) == [EventKind.READY, EventKind.DRIVE_FAILED, EventKind.DRIVE_UPLOADED]
+    assert after(sent, 2) == [EventKind.DRIVE_FAILED, EventKind.DRIVE_UPLOADED]
     uploaded = sent[-1]
     assert links(uploaded) == [(LINK, "网盘链接")]
     assert uploaded.detail == "日期：2026-11-10"  # the live's date, not the zip's path on the drive
@@ -97,7 +96,7 @@ def test_a_retry_that_gets_through_sends_drive_copy_uploaded_with_the_link_and_n
     assert drive.calls == [(folder, "录播/A"), (folder, "录播/A")]
 
 
-def test_ready_is_not_sent_again_after_a_restart(tmp_path):
+def test_a_retry_after_a_restart_sends_only_drive_copy_uploaded(tmp_path):
     ad, clock, sent, _ = processed(tmp_path, ScriptedDrive(DriveFailed("网络超时")))
     step(ad, "drive")
     restarted, clock2, sent2 = make(tmp_path, ScriptedDrive(COPY))
@@ -113,12 +112,11 @@ def test_ready_is_not_sent_again_after_a_restart(tmp_path):
 LAPSED = DriveAuthorizationLapsed("-1408 授权已失效")
 
 
-def test_a_lapse_on_the_first_try_sends_ready_drive_upload_failed_and_authorization_lapsed(tmp_path):
+def test_a_lapse_on_the_first_try_sends_drive_upload_failed_and_authorization_lapsed(tmp_path):
     ad, clock, sent, _ = processed(tmp_path, ScriptedDrive(LAPSED))
     step(ad, "drive")
 
-    assert after(sent, 1) == [EventKind.READY, EventKind.DRIVE_FAILED, EventKind.DRIVE_AUTHORIZATION_LAPSED]
-    ready_as_today(sent)
+    assert after(sent, 2) == [EventKind.DRIVE_FAILED, EventKind.DRIVE_AUTHORIZATION_LAPSED]
     assert "授权" in sent[2].detail and "继续上传" in sent[2].detail
     assert "login" in sent[3].detail  # the command to run
     (job,) = ad.load()

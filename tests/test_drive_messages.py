@@ -1,5 +1,5 @@
 """The drive's messages: "☁️ 网盘上传完成", "❗ 网盘上传失败" and "⚠️ 网盘授权失效" on Discord and
-to the QQ groups that tick them, and "全部处理完成" carrying a drive link like any other link."""
+to the QQ groups that tick them, and "网盘上传完成" showing its drive link like any other link."""
 
 from __future__ import annotations
 
@@ -18,12 +18,10 @@ from .test_notify_api import app
 from .test_qq import COVER, SUBSCRIBED, FakeQQ, notifier, send
 
 DRIVE_LINK = "https://drive.example/s/abc?pwd=x1y2"
-DRIVE_LABEL = "全部下载（夸克网盘：影片、弹幕、中日字幕 SRT、路灯表）"
-PAGE = "https://kiri.example/archives#A%2F20261110%2F%E6%AD%8C%E6%9E%A0"
 UPLOADED = StreamEvent(EventKind.DRIVE_UPLOADED, live(A, thumbnail=COVER),
                        detail="网盘路径：`录播/A/v.zip`\n没有网盘链接：分享被拒绝")
-READY = StreamEvent(EventKind.READY, live(A), detail="影片 ✅ · 路灯表 ✅",
-                    links=(Link(DRIVE_LABEL, DRIVE_LINK), Link("录播页面", PAGE)))
+WITH_LINK = StreamEvent(EventKind.DRIVE_UPLOADED, live(A), detail="日期：2026-11-10",
+                        links=(Link("网盘链接", DRIVE_LINK),))
 
 
 def discord(event: StreamEvent) -> dict:
@@ -39,17 +37,16 @@ def discord(event: StreamEvent) -> dict:
     return payload
 
 
-def test_ready_shows_the_drive_link_like_any_link():
-    assert discord(READY)["embeds"][0]["description"] == \
-        f"影片 ✅ · 路灯表 ✅\n[{DRIVE_LABEL}]({DRIVE_LINK})\n[录播页面]({PAGE})"
+def test_drive_copy_uploaded_shows_the_drive_link_like_any_link():
+    assert discord(WITH_LINK)["embeds"][0]["description"] == f"日期：2026-11-10\n[网盘链接]({DRIVE_LINK})"
 
 
-def test_ready_shows_the_drive_link_like_any_link_on_qq(tmp_path):
+def test_drive_copy_uploaded_shows_the_drive_link_like_any_link_on_qq(tmp_path):
     fake = FakeQQ(cover_ok=False)
-    send(notifier(tmp_path, fake, {**SUBSCRIBED, "kinds": ["ready"]}), READY)
+    send(notifier(tmp_path, fake, {**SUBSCRIBED, "kinds": ["drive_uploaded"]}), WITH_LINK)
     (text,) = fake.texts("G1")
-    assert text == ("✅ **A** 全部处理完成\ntitle v1\n影片 ✅ · 路灯表 ✅\n"
-                    f"[{DRIVE_LABEL}]({DRIVE_LINK})\n[录播页面]({PAGE})\n切片小助手 自动下载")
+    assert text == ("☁️ **A** 网盘上传完成\ntitle v1\n日期：2026-11-10\n"
+                    f"[网盘链接]({DRIVE_LINK})\n切片小助手 自动下载")
 
 
 FAILED = StreamEvent(EventKind.DRIVE_FAILED, live(A, thumbnail=COVER), detail="网盘上传失败，之后会自动重试：\n32003 空间不足")

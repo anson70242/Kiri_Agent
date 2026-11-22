@@ -1,6 +1,7 @@
-"""The drive stage: a ticked streamer's finished live is uploaded to the cloud drive, and
-"全部处理完成" goes out when that upload is done, with the drive link. Through the automatic
-download with a fake clock, fake stages and a fake drive."""
+"""The drive stage: "全部处理完成" goes out as for any live, with the site's links, and a
+ticked streamer's finished live is then uploaded to the cloud drive; "网盘上传完成" brings
+the drive link. Through the automatic download with a fake clock, fake stages and a fake
+drive."""
 
 from __future__ import annotations
 
@@ -23,11 +24,11 @@ from backend.notify import EventKind, StreamEvent
 from .helpers import A, B, bare_archive, later, live
 
 SITE = "https://kiri.example"
-DRIVE_LABEL = "全部下载（夸克网盘：影片、弹幕、中日字幕 SRT、路灯表）"
+DRIVE_LINK = ("https://drive.example/s/abc?pwd=x1y2", "网盘链接")  # what 网盘上传完成 links to
 
 
 def site_links(creator="A"):
-    """READY's links today, for `<creator>/20261110/歌枠`: the site's zip, then the page."""
+    """READY's links, for `<creator>/20261110/歌枠`: the site's zip, then the page."""
     ref = f"{creator}%2F20261110%2F%E6%AD%8C%E6%9E%A0"
     return [(f"{SITE}/api/archives/zip?folder={ref}", "全部下载（影片、弹幕、中日字幕 SRT）"),
             (f"{SITE}/archives#{ref}", "录播页面")]
@@ -99,52 +100,53 @@ def links(event):
     return [(x.url, x.label) for x in event.links]
 
 
-# ---- queued in place of READY ----
+# ---- READY at once, the drive job beside it ----
 
-def test_a_ticked_streamers_processed_live_gets_a_drive_job_and_no_ready_yet(tmp_path):
+def ready_with_the_sites_links(sent, creator="A"):
+    (ready,) = [e for e in sent if e.kind is EventKind.READY]
+    assert links(ready) == site_links(creator)
+    return ready
+
+
+def test_a_ticked_streamers_processed_live_is_ready_at_once_with_the_sites_links_and_gets_a_drive_job(tmp_path):
     drive = FakeDrive()
     ad, _, sent = make(tmp_path, drive)
     downloaded(ad)
     step(ad, "transcribe")
 
     assert [j.stage for j in ad.load()] == ["drive"]
-    assert EventKind.READY not in kinds(sent)
+    assert kinds(sent) == [EventKind.DOWNLOADED, EventKind.READY]
+    ready_with_the_sites_links(sent)
     assert drive.calls == []
 
 
-def ready_as_today(sent, creator="A"):
-    (ready,) = [e for e in sent if e.kind is EventKind.READY]
-    assert links(ready) == site_links(creator)
-    return ready
-
-
-def test_ready_as_today_for_a_streamer_who_is_not_ticked(tmp_path):
+def test_no_drive_job_for_a_streamer_who_is_not_ticked(tmp_path):
     drive = FakeDrive()
     ad, _, sent = make(tmp_path, drive)
     downloaded(ad, B)
     step(ad, "transcribe")
 
     assert ad.load() == [] and drive.calls == []
-    ready_as_today(sent, "B")
+    ready_with_the_sites_links(sent, "B")
 
 
-def test_ready_as_today_when_the_drive_is_not_available(tmp_path):
+def test_no_drive_job_when_the_drive_is_not_available(tmp_path):
     ad, _, sent = make(tmp_path, drive=None)
     downloaded(ad)
     step(ad, "transcribe")
 
     assert ad.load() == []
-    ready_as_today(sent)
+    ready_with_the_sites_links(sent)
 
 
-def test_ready_as_today_for_an_archive_without_video(tmp_path):
+def test_no_drive_job_for_an_archive_without_video(tmp_path):
     drive = FakeDrive()
     ad, _, sent = make(tmp_path, drive, transcribe=lambda video, **_: video.unlink())  # the video is gone
     downloaded(ad)
     step(ad, "transcribe")
 
     assert ad.load() == [] and drive.calls == []
-    ready_as_today(sent)
+    ready_with_the_sites_links(sent)
 
 
 # ---- the upload ----
@@ -157,7 +159,7 @@ def processed(tmp_path, drive, **kw):
     return ad, clock, sent, folder
 
 
-def test_uploaded_with_a_drive_link_ready_goes_out_once_with_the_drive_link_first(tmp_path):
+def test_uploaded_with_a_drive_link_drive_copy_uploaded_brings_it_and_ready_is_not_sent_again(tmp_path):
     drive = FakeDrive(DriveCopy("录播/A/[20261110][A] 歌枠.zip", "https://drive.example/s/abc?pwd=x1y2"))
     ad, _, sent, folder = processed(tmp_path, drive)
     step(ad, "drive")
@@ -165,20 +167,21 @@ def test_uploaded_with_a_drive_link_ready_goes_out_once_with_the_drive_link_firs
     assert ad.load() == []
     ((archive, drive_folder),) = drive.calls
     assert archive.folder == folder and archive.video == folder / "v.mp4" and drive_folder == "录播/A"
-    assert kinds(sent) == [EventKind.DOWNLOADED, EventKind.READY]  # no 网盘上传完成
-    ready = sent[-1]
-    assert links(ready) == [("https://drive.example/s/abc?pwd=x1y2", DRIVE_LABEL), site_links()[1]]
+    assert kinds(sent) == [EventKind.DOWNLOADED, EventKind.READY, EventKind.DRIVE_UPLOADED]
+    ready = ready_with_the_sites_links(sent)
     assert ready.detail == "影片 ✅ · 弹幕 ✅ · 日文字幕 ❌ · 中文字幕 ❌ · 路灯表 ❌"
+    uploaded = sent[-1]
+    assert links(uploaded) == [DRIVE_LINK]
+    assert uploaded.detail == "日期：2026-11-10"  # the live's date, not the zip's path on the drive
 
 
-def test_uploaded_without_a_drive_link_ready_as_today_and_drive_copy_uploaded_says_why(tmp_path):
+def test_uploaded_without_a_drive_link_drive_copy_uploaded_says_where_it_is_and_why(tmp_path):
     drive = FakeDrive(DriveCopy("录播/A/[20261110][A] 歌枠.zip", None, "分享被拒绝：文件审核未通过"))
     ad, _, sent, _ = processed(tmp_path, drive)
     step(ad, "drive")
 
     assert ad.load() == []
     assert kinds(sent) == [EventKind.DOWNLOADED, EventKind.READY, EventKind.DRIVE_UPLOADED]
-    ready_as_today(sent)
     uploaded = sent[-1]
     assert "录播/A/[20261110][A] 歌枠.zip" in uploaded.detail
     assert "分享被拒绝：文件审核未通过" in uploaded.detail
@@ -204,7 +207,7 @@ class ChatSource:
 
 @pytest.mark.parametrize("chat_ready, give_up", [(True, 48 * 3600), (False, 0)],
                          ids=["the chat arrives", "the chat is given up on"])
-def test_the_drive_job_and_ready_wait_for_a_late_chat(tmp_path, monkeypatch, chat_ready, give_up):
+def test_the_drive_job_waits_for_a_late_chat_and_ready_does_not(tmp_path, monkeypatch, chat_ready, give_up):
     drive = FakeDrive()
     ad, clock, sent = make(tmp_path, drive)
     ad.on_ended(StreamEvent(EventKind.OFFLINE, live(A, sid="v1"), later(60)))
@@ -215,6 +218,7 @@ def test_the_drive_job_and_ready_wait_for_a_late_chat(tmp_path, monkeypatch, cha
               Outcome("done", result=DownloadResult(info, folder, video=Archive.from_folder(folder).video,
                                                     chat_queued=True)))
     step(ad, "transcribe")
+    assert kinds(sent) == [EventKind.DOWNLOADED, EventKind.READY] and "弹幕 ❌" in sent[-1].detail
 
     for _ in range(3):  # the chat is still awaited: nothing is uploaded, nothing counted
         step(ad, "drive")
@@ -222,7 +226,7 @@ def test_the_drive_job_and_ready_wait_for_a_late_chat(tmp_path, monkeypatch, cha
         clock.t += 900
     (job,) = ad.load()
     assert (job.stage, job.attempts, job.errors) == ("drive", 0, 0)
-    assert drive.calls == [] and EventKind.READY not in kinds(sent)
+    assert drive.calls == [] and len(sent) == 2
 
     monkeypatch.setattr(backend.downloader, "downloader_for", lambda *a: ChatSource(chat_ready))
     settings = ad.settings
@@ -231,21 +235,20 @@ def test_the_drive_job_and_ready_wait_for_a_late_chat(tmp_path, monkeypatch, cha
     step(ad, "drive")
 
     assert len(drive.calls) == 1 and ad.load() == []
-    assert kinds(sent).count(EventKind.READY) == 1
-    assert ("弹幕 ✅" in sent[-1].detail) is chat_ready
+    assert kinds(sent) == [EventKind.DOWNLOADED, EventKind.READY, EventKind.DRIVE_UPLOADED]
+    assert Archive.from_folder(folder).has(Artifact.CHAT) is chat_ready  # what the upload found
 
 
 # ---- unticked meanwhile ----
 
-def test_unticked_before_the_upload_starts_the_job_ends_and_ready_goes_out_as_today(tmp_path):
+def test_unticked_before_the_upload_starts_the_job_ends_without_a_message(tmp_path):
     drive = FakeDrive()
     ad, _, sent, _ = processed(tmp_path, drive)
     ad.drive_folders = {}  # the owner unticks the box in the gear
     step(ad, "drive")
 
     assert ad.load() == [] and drive.calls == []
-    assert kinds(sent) == [EventKind.DOWNLOADED, EventKind.READY]
-    ready_as_today(sent)
+    assert kinds(sent) == [EventKind.DOWNLOADED, EventKind.READY]  # as before the drive job's turn
 
 
 def test_unticked_while_uploading_the_upload_finishes(tmp_path):
@@ -255,7 +258,7 @@ def test_unticked_while_uploading_the_upload_finishes(tmp_path):
     step(ad, "drive")
 
     assert len(drive.calls) == 1 and ad.load() == []
-    assert links(sent[-1])[0] == ("https://drive.example/s/abc?pwd=x1y2", DRIVE_LABEL)
+    assert sent[-1].kind is EventKind.DRIVE_UPLOADED and links(sent[-1]) == [DRIVE_LINK]
 
 
 # ---- the queue view ----
@@ -279,7 +282,7 @@ def test_the_snapshot_shows_the_drive_job_waiting_then_uploading_with_its_progre
     assert ad.snapshot() == {"active": [], "queue": []}
 
 
-# ---- READY once, across a restart ----
+# ---- across a restart ----
 
 def rewrite_queue(tmp_path, change):
     """Edit the queue file's jobs as raw JSON, the way an earlier run could have left it."""
@@ -290,23 +293,24 @@ def rewrite_queue(tmp_path, change):
     path.write_text(json.dumps(jobs, ensure_ascii=False), encoding="utf-8")
 
 
-def test_a_restart_before_the_upload_loses_no_ready(tmp_path):
+def test_a_restart_before_the_upload_sends_no_second_ready(tmp_path):
     processed(tmp_path, FakeDrive())
     restarted, _, sent = make(tmp_path, FakeDrive())
     step(restarted, "drive")
 
-    assert kinds(sent) == [EventKind.READY]
-    assert links(sent[0])[0] == ("https://drive.example/s/abc?pwd=x1y2", DRIVE_LABEL)
+    assert kinds(sent) == [EventKind.DRIVE_UPLOADED]
+    assert links(sent[0]) == [DRIVE_LINK]
 
 
-def test_a_queue_file_from_before_drive_copies_loads(tmp_path):
+@pytest.mark.parametrize("ready_sent", [True, False])
+def test_a_queue_file_from_when_the_drive_job_sent_ready_loads(tmp_path, ready_sent):
     processed(tmp_path, FakeDrive())
-    rewrite_queue(tmp_path, lambda job: job.pop("ready_sent"))
+    rewrite_queue(tmp_path, lambda job: job.update(ready_sent=ready_sent))
     restarted, _, sent = make(tmp_path, FakeDrive())
 
     assert [j.stage for j in restarted.load()] == ["drive"]
     step(restarted, "drive")
-    assert kinds(sent) == [EventKind.READY]
+    assert kinds(sent) == [EventKind.DRIVE_UPLOADED]
 
 
 # ---- the archive stays until its drive job is over ----
@@ -360,7 +364,7 @@ def test_the_running_service_has_no_drive_yet(tmp_path):
         encoding="utf-8")
     ad = load_auto(cfg)
     assert ad.drive_folders == {"youtube:@a": "录播/A"}
-    assert ad.drive is None  # until the drive is wired in: every live is reported READY as today
+    assert ad.drive is None  # until the drive is wired in: no live gets a drive job
 
 
 # ---- its own worker ----
@@ -383,7 +387,7 @@ def test_an_upload_holds_up_no_other_stage(tmp_path):
                 if not any(j.stage == "transcribe" for j in ad.load()):
                     break
             assert [a["stage"] for a in ad.snapshot()["active"]] == ["drive"]
-            assert len(transcribed) == 2 and EventKind.READY in kinds(sent)  # B's READY, as today
+            assert len(transcribed) == 2 and kinds(sent).count(EventKind.READY) == 2  # B's too
             release.set()
             for _ in range(150):
                 await asyncio.sleep(0.02)

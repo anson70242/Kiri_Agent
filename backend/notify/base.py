@@ -48,8 +48,8 @@ class EventKind(StrEnum):
     UPLOADED = "uploaded"  # 路灯表 uploaded to Tencent Docs (detail: the sheet link)
     UPLOAD_FAILED = "upload_failed"  # Tencent Docs upload gave up
     READY = "ready"  # every stage of a stream is over (detail: what's done, the download links)
-    # a drive copy was uploaded, when "全部处理完成" did not carry its drive link (detail: the
-    # zip's path on the drive, and why there is no link when there is none)
+    # a drive copy was uploaded (the drive link; without one, detail: the zip's path on the
+    # drive and why there is no link)
     DRIVE_UPLOADED = "drive_uploaded"
     # a drive copy was not uploaded: the first try failed (retried) or the upload was given up
     DRIVE_FAILED = "drive_failed"

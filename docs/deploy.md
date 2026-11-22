@@ -212,7 +212,8 @@ docker compose exec kiri /app/.venv/bin/python -m backend.downloader --info <回
 ## 夸克网盘（网盘副本）
 
 主播的齿轮里勾了「自动上传到夸克网盘」，每场录播处理完，程序就把它的网盘副本（一个 zip：影片、弹幕、中日字幕 SRT、路灯表 Excel）
-传到夸克网盘，并做一个网盘链接（带提取码、永久有效），放进「全部处理完成」和录播页的「☁ 网盘链接」。
+传到夸克网盘，并做一个网盘链接（带提取码、永久有效），用「网盘上传完成」这条通知发出来，也放进录播页的「☁ 网盘链接」。
+「全部处理完成」不等上传，照常先发，用网站自己的下载链接。
 上传靠夸克官方的命令行工具（CLI，`quarkclouddrive` 1.0.25，一个 Node 程序）；为什么用它、要承担什么风险，见
 [ADR 0001](adr/0001-quark-drive-through-the-official-agent-cli.md)（英文）。
 
@@ -223,7 +224,7 @@ docker compose exec kiri /app/.venv/bin/python -m backend.downloader --info <回
   所以授权跟着数据卷走，部署、重建容器都不会丢。这个文件夹等于网盘账号的登录态：不要提交到 git，也不要发给别人。
 - **容器的主机名固定是 `kiri`**（`docker-compose.yml` 的 `hostname`，不要改）。第一次授权时，夸克认的设备 ID 是从主机名算出来的，
   之后就存在 `claudecode/` 里；主机名不变，以后重新授权也还是同一台设备。
-- **还没放 CLI** 时一切照旧：勾了网盘的主播只在日志里留一条警告，「全部处理完成」照常发、用网站自己的下载链接。
+- **还没放 CLI** 时一切照旧：勾了网盘的主播只在日志里留一条警告，不上传，也没有「网盘上传完成」。
   **放了 CLI 但还没授权**时，第一场要上传的录播会发「网盘授权失效」，照下面第 2 步授权即可。
 - **永远不要跑 CLI 自带的 `install.sh` 和 `uninstall.sh`**：`install.sh` 会联网下载别的版本覆盖它（还会自己装 Node），
   `uninstall.sh` 会撤销授权、删掉 `claudecode/`。所以第 1 步放进去时就把这两个文件删掉。程序也从不更新 CLI。
