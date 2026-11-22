@@ -16,7 +16,9 @@ config.json:
       "give_up_hours": 12,    # stop waiting for a VOD that isn't ready after this long
       "max_errors": 3,        # other failures (cookies, deleted video...) before giving up
       "state_file": "data/download_queue.json"
-    }}
+    }},
+    "drive": { "upload_hours": [3, 9] }   # a drive copy's upload starts only from 03:00 to
+                                          # 09:00, Hong Kong time; without it, at any time
 
 Rules:
 - Not ready yet (YouTube still processing, Twitch replay not listed): retried every
@@ -35,7 +37,10 @@ Rules:
   READY never waits for the upload. When its first try does not upload, 网盘上传失败 says
   so; it is retried like any stage and only its give-up is told again. A lapsed
   authorization is neither an attempt nor an error: 网盘授权失效 once per lapse, and each
-  job waits up to DRIVE_LAPSE_GIVE_UP for the owner to authorize again.
+  job waits up to DRIVE_LAPSE_GIVE_UP for the owner to authorize again. With drive upload
+  hours, an upload starts only inside them (a retry too): outside, the job waits for their
+  next beginning, which is neither an attempt nor an error and is not told; an upload that
+  is running when they end goes on to its end. READY and group files are not held by them.
 - Jobs live in `state_file`, so a restart resumes them (yt-dlp resumes partial files).
 """
 
@@ -50,6 +55,7 @@ import os
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import quote
@@ -153,6 +159,7 @@ class Outcome:
     # lapsed: the drive's authorization; unavailable: no drive any more for a drive job
     kind: Literal["done", "wait", "unpublished", "error", "lapsed", "unavailable"]
     message: str = ""
+    retry_at: float | None = None  # drive stage, wait: not to be tried again before this time
     result: DownloadResult | None = None
     pruned: list[Path] = field(default_factory=list)
     prune_error: str = ""  # done, but deleting old archives raised this (type: message)
@@ -179,9 +186,13 @@ class AutoDownloader:
         # (路灯表, spreadsheet id, streamer, title) -> sheet link; None: no credentials, skip
         upload: Callable[[Path, str, str, str], str] | None = None,
         drive: Drive | None = None,  # uploads drive copies; None: the drive is not available
+        # (from, until): the hours of Hong Kong time between which a drive copy's upload may
+        # start; None: at any time
+        drive_hours: tuple[int, int] | None = None,
     ):
         self.upload = upload
         self.drive = drive
+        self.drive_hours = drive_hours
         self.transcribe = transcribe
         self.analyze = analyze
         self.translate = translate
@@ -435,6 +446,8 @@ class AutoDownloader:
             return Outcome("unavailable")
         if self._awaits_chat(job):
             return Outcome("wait", "等待弹幕补抓")  # the zip gets the chat: wait until it is in or given up
+        if (begin := drive_hours_begin(self.clock(), self.drive_hours)) is not None:
+            return Outcome("wait", "等待网盘上传时段", retry_at=begin)  # outside the drive upload hours
         self._active["drive"] = {
             "name": s.streamer.name, "platform": s.streamer.platform, "title": s.title, "url": s.url,
             "started": self.clock(), "stage": "drive",
@@ -633,8 +646,8 @@ class AutoDownloader:
         name = job.status.streamer.name
         now = self.clock()
         current.uploading = False  # the attempt is over, whatever its outcome
-        if outcome.kind == "wait":  # the chat is still awaited: neither an attempt nor an error
-            current.next_try = now + self.retry_interval
+        if outcome.kind == "wait":  # the chat or the upload hours are awaited: neither an attempt nor an error
+            current.next_try = outcome.retry_at or now + self.retry_interval
             self.save(rest + [current])
             return
         first = current.attempts == 0 and current.lapsed_since is None  # its first try that is not a wait
@@ -748,6 +761,22 @@ class AutoDownloader:
             for folder in removed:
                 queue.drop_under(folder)
         return removed
+
+
+DRIVE_HOURS_ZONE = timezone(timedelta(hours=8))  # Hong Kong, whatever the server's clock is set to
+
+
+def drive_hours_begin(now: float, hours: tuple[int, int] | None) -> float | None:
+    """None when a drive copy's upload may start at `now` (inside the drive upload hours, or
+    there are none); else the time they next begin."""
+    if hours is None:
+        return None
+    start, end = hours
+    local = datetime.fromtimestamp(now, DRIVE_HOURS_ZONE)
+    if start <= local.hour < end:
+        return None
+    begin = local.replace(hour=start, minute=0, second=0, microsecond=0)
+    return (begin if local.hour < start else begin + timedelta(days=1)).timestamp()
 
 
 def ready_detail(video: Path) -> str:
@@ -882,11 +911,24 @@ def load_auto(config: Path, drive: Drive | None = None) -> AutoDownloader | None
         upload=load_uploader(config) if analyzer else None,  # uploads the analysis
         # None without the CLI: ticked streamers get no drive job
         drive=drive,
+        drive_hours=drive_upload_hours(cfg),
     )
     ad.uploads = roster.upload_map()
     ad.drive_folders = roster.drive_map()
     ad.site_url = os.getenv("SITE_URL", "").strip().rstrip("/")
     return ad
+
+
+def drive_upload_hours(cfg: dict[str, Any]) -> tuple[int, int] | None:
+    """config.json's `drive.upload_hours`: [from, until], the hours of Hong Kong time between
+    which a drive copy's upload may start; None without it. Raises on anything else."""
+    hours = (cfg.get("drive") or {}).get("upload_hours")
+    if hours is None:
+        return None
+    if not (isinstance(hours, list) and len(hours) == 2
+            and all(isinstance(h, int) and not isinstance(h, bool) for h in hours) and 0 <= hours[0] < hours[1] <= 24):
+        raise ValueError(f"drive.upload_hours must be [from, until] with 0 <= from < until <= 24, not {hours!r}")
+    return hours[0], hours[1]
 
 
 def load_uploader(config: Path) -> Callable[[Path, str, str, str], str] | None:

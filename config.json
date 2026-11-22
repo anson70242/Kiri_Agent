@@ -30,7 +30,7 @@
   "upload": {
     "tencent": { "token_env": "TENCENT_DOCS_MCP_TOKEN" }
   },
-  "drive": { "quark_cli": "data/quark/quarkclouddrive-1.0.25/scripts/quark-drive.cjs" },
+  "drive": { "quark_cli": "data/quark/quarkclouddrive-1.0.25/scripts/quark-drive.cjs", "upload_hours": [3, 9] },
   "download": {
     "output_dir": "downloads",
     "cookies_file": "data/youtube_cookies.txt",

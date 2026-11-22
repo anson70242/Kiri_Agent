@@ -328,6 +328,9 @@ Then a drive link is made: a Quark share address with its extraction code inside
 - The program never deletes or replaces anything on the drive. A zip whose name is already in the folder is neither built nor uploaded again.
 - When the drive's authorization lapses, the owner gets ⚠️ 「网盘授权失效」 (drive authorization lapsed) with the command to run; uploads wait up to 72 hours for it.
 - Uploads run one at a time (about 1.5–2.5 hours for a 10 GB live from the server), and a deploy waits for the one that is running.
+- `drive.upload_hours` in `config.json` (`[3, 9]`) keeps a drive copy's upload out of the busy hours: it starts only from 03:00 to 09:00 Hong Kong time
+  (whatever the server's clock is set to). A live processed outside them waits for the next 03:00, and so does a retry; an upload that is still
+  running at 09:00 goes on to its end. 「全部处理完成」 is not held back, and group files go to the drive at any time. Without the setting, an upload starts at any time.
 
 The drive is reached through Quark's official CLI (a Node program), run by `backend.quark`; why, and the risk it carries, is in
 [ADR 0001](docs/adr/0001-quark-drive-through-the-official-agent-cli.md). The CLI is in neither this repository nor the image: the owner copies it into the data volume and authorizes it once,
