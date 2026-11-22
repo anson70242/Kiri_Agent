@@ -44,6 +44,12 @@ def test_a_twitch_placeholder_is_reported_as_no_cover():
     assert info.cover == ""
 
 
+def test_a_twitch_cover_with_404_outside_its_path_is_still_a_cover():
+    cover = "https://static-cdn.example/cf_vods/abc123/thumb/thumb0-1280x720.jpg?v=_404"
+    info = TwitchDownloader(DownloadSettings()).parse_info(TWITCH_RAW | {"thumbnail": cover}, "u")
+    assert info.cover == cover
+
+
 @pytest.mark.parametrize("cls", [TwitchDownloader, YoutubeDownloader, TwitCastingDownloader])
 def test_metadata_without_a_cover_reports_none(cls):
     info = cls(DownloadSettings()).parse_info({"id": "x", "uploader_id": "b", "upload_date": "20261110"}, "u")

@@ -83,6 +83,8 @@ class VideoInfo:
     # The address of the replay's own cover (yt-dlp's `thumbnail`); empty when there is none.
     # Not an artifact: messages show it, the archive does not keep it.
     cover: str = ""
+    # The metadata offered one of the platform's placeholders as the cover (`cover` is then empty).
+    cover_placeholder: bool = False
 
     def __post_init__(self) -> None:
         if not self.creator:
@@ -204,6 +206,8 @@ class PlatformDownloader(ABC):
         channel_name = str(raw.get("channel") or raw.get("uploader") or channel or "Unknown")
         ts = raw.get("release_timestamp") or raw.get("timestamp")
         date = datetime.fromtimestamp(ts).strftime("%Y%m%d") if ts else raw.get("upload_date") or "19700101"
+        offered = str(raw.get("thumbnail") or "")  # the replay's cover in its metadata
+        placeholder = bool(offered) and self.placeholder_cover(offered)
         return VideoInfo(
             platform=self.platform,
             id=self.video_id(raw),
@@ -216,12 +220,14 @@ class PlatformDownloader(ABC):
             creator=self.match_creator(raw) or channel_name,
             live_status=raw.get("live_status"),
             extractor=raw.get("extractor_key") or "",
-            cover=self.replay_cover(raw),
+            cover="" if placeholder else offered,
+            cover_placeholder=placeholder,
         )
 
-    def replay_cover(self, raw: dict[str, Any]) -> str:
-        """The address of the replay's own cover in its metadata; empty when there is none."""
-        return str(raw.get("thumbnail") or "")
+    def placeholder_cover(self, address: str) -> bool:
+        """The address is one of the platform's pictures shown in place of a replay's cover,
+        which is no cover. None here."""
+        return False
 
     def video_id(self, raw: dict[str, Any]) -> str:
         return str(raw.get("id") or "")

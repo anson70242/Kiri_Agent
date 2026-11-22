@@ -574,8 +574,15 @@ class AutoDownloader:
             return
         if outcome.kind == "done":
             log.info("auto-download done: %s %s", name, outcome.result and outcome.result.video)
-            # `job` too: `finish` reports a live with no later stage ready with it
+            # Set on the passed-in `job` as well as on `current`, its copy from the queue file:
+            # when no stage follows the download, `finish` sends 「全部处理完成」 with `job`, not with
+            # `current`, and that message must show the replay's cover too.
             current.replay_cover = job.replay_cover = outcome.result.info.cover if outcome.result else ""
+            if outcome.result:  # what the owner checks at a Twitch live; never the address itself
+                info = outcome.result.info
+                log.info("replay of %s downloaded, its metadata offered %s", name,
+                         "a cover" if info.cover else
+                         "only a placeholder, taken as no cover" if info.cover_placeholder else "no cover")
             links: tuple[Link, ...] = ()
             if self.site_url and outcome.result:
                 ref = Downloads(self.settings.output_dir).ref(outcome.result.output_dir)

@@ -52,11 +52,10 @@ class TwitchDownloader(PlatformDownloader):
         vid = str(raw.get("id") or "")
         return vid[1:] if re.fullmatch(r"v\d+", vid) else vid
 
-    def replay_cover(self, raw: dict[str, Any]) -> str:
-        """The replay's cover; empty for one of Twitch's placeholders (the "processing" picture
-        it offers before it made the replay's own, `_404` in its path), which is no cover."""
-        cover = super().replay_cover(raw)
-        return "" if PLACEHOLDER_MARK in urlsplit(cover).path else cover
+    def placeholder_cover(self, address: str) -> bool:
+        """One of Twitch's placeholders: the "processing" picture it offers before it made the
+        replay's own cover, `_404` in its path."""
+        return PLACEHOLDER_MARK in urlsplit(address).path
 
     def add_cookies(self, ydl: yt_dlp.YoutubeDL) -> None:
         if self.settings.twitch_oauth:

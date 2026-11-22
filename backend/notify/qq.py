@@ -494,8 +494,9 @@ class QQNotifier(Notifier):
         try:
             r = await self.client.get(address, follow_redirects=True, timeout=20)
             r.raise_for_status()
-        except httpx.HTTPError as e:
-            log.warning("qq: cover not used (%s)", e)
+        except httpx.HTTPError as e:  # the kind of failure only: the error's text has the address
+            log.warning("qq: cover not used (%s%s)", type(e).__name__,
+                        f", status {e.response.status_code}" if isinstance(e, httpx.HTTPStatusError) else "")
             return None
         return await self.upload_cover(key, r.content, address)
 
