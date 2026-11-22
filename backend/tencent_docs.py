@@ -1,4 +1,5 @@
-"""Upload a 路灯表 to Tencent Docs (docs.qq.com) as a new sub-sheet of an existing spreadsheet.
+"""Upload a 路灯表 to Tencent Docs (docs.qq.com) as a new sub-sheet of an existing spreadsheet,
+and the calls on one tab that the source record sheet writes its rows with (SheetTabCalls).
 
     settings = load_credentials(Path("config.json"), file_id=parse_file_id(link))
     url = upload_table(table, settings, sheet_title=sheet_title(table, "20261111"))
@@ -21,6 +22,26 @@ MCP facts this relies on (checked against the live endpoint, 2026-11-12):
   as the Excel download.
 - Daily quota (MCP overview page): 2000 calls for a free account. One upload is about
   8 calls + 1 per run of same-coloured rows (~50 for a 5-hour stream).
+
+The source record sheet (backend/source_record_sheet) writes rows into an existing tab
+through SheetTabCalls. What it relies on (checked against the live endpoint, 2026-11-22):
+- The same token can read and write a sheet its account may edit.
+- sheet.insert_dimension with dimension_type "row", an `index` (0-based) and direction
+  "before" inserts a row there. The row keeps its neighbours' look (alignment, wrapping,
+  borders) but not their merges: it has none.
+- sheet.get_merged_cells answers reliably only when given a range (start_row, end_row,
+  start_col, end_col); without one it returned a single merge of a tab that has hundreds.
+  A merge is answered as `<tab id>$A3:B3` (1-based rows, column letters).
+- sheet.merge_cell with merge_type "all" merges a range and keeps its first cell's value.
+- sheet.set_range_value takes STRING values and RICH_STRING values (`rich_string`: a list
+  of runs `{"text", "link_url"?}`). A run with a link_url is a clickable link whose text
+  may be anything (a label); line breaks inside a run's text are kept.
+- sheet.get_cell_data (start_row, end_row, start_col, end_col inclusive, return_csv false)
+  answers `cells` with row, col, value_type and string_value (rich text also has rich_string).
+- A date written as the text `2026/11/22` stays text (the dates people type are date
+  numbers shown the same way).
+- Ranges up to column AB (index 27) were read on a live tab; a narrower sheet was not tried.
+One row costs four calls plus one per merged span (eight for a row merged in four spans).
 
 The newest stream becomes the first tab. Uploading the same title again replaces that
 sheet (unless it is the spreadsheet's only one).
@@ -257,6 +278,84 @@ def _json(resp: httpx.Response) -> dict[str, Any]:
         return json.loads(text)
     except ValueError:
         raise TencentDocsError(f"Tencent Docs answered HTTP {resp.status_code} without JSON") from None
+
+
+@dataclass(frozen=True)
+class Segment:
+    """One run of a rich text cell: its text and, for a link, the address behind the text."""
+
+    text: str
+    link: str = ""
+
+
+CellValue = str | list[Segment]
+MERGE_RE = re.compile(r"(?:.*\$)?([A-Z]+)(\d+):([A-Z]+)(\d+)")  # get_merged_cells' `<tab id>$A3:B3`
+
+
+def column_index(letters: str) -> int:
+    """`A` -> 0, `Z` -> 25, `AB` -> 27."""
+    n = 0
+    for ch in letters:
+        n = n * 26 + ord(ch) - 64
+    return n - 1
+
+
+class SheetTabCalls:
+    """The calls on one tab of a spreadsheet, in the sheet's terms: rows and columns 0-based,
+    ranges inclusive. Each method is one call to the endpoint (blocking). Inserting a row is
+    never sent twice: a timed-out insert may have happened."""
+
+    def __init__(self, settings: TencentSettings, tab_id: str, client: httpx.Client):
+        self.api = _Mcp(settings, client)
+        self.tab_id = tab_id
+
+    def texts(self, first_row: int, last_row: int, last_col: int) -> dict[tuple[int, int], str]:
+        """The text of each cell holding one, by (row, col); rich text has its runs joined."""
+        cells = self.api.call("sheet.get_cell_data", sheet_id=self.tab_id, start_row=first_row, end_row=last_row,
+                              start_col=0, end_col=last_col, return_csv=False).get("cells") or []
+        out: dict[tuple[int, int], str] = {}
+        for c in cells:
+            text = c.get("string_value")
+            if text is None and c.get("rich_string"):
+                text = "".join(s.get("text", "") for s in c["rich_string"])
+            if text is None and c.get("number_value") is not None:
+                text = str(c["number_value"])
+            if text:
+                out[int(c["row"]), int(c["col"])] = str(text)
+        return out
+
+    def row_merges(self, row: int, last_col: int) -> list[tuple[int, int]]:
+        """The column spans (first, last) merged within this one row. Asked with a range: the
+        endpoint answers only one merge of a whole tab when given none."""
+        found = self.api.call("sheet.get_merged_cells", sheet_id=self.tab_id, start_row=row, end_row=row,
+                              start_col=0, end_col=last_col).get("merged_cells") or []
+        spans = []
+        for ref in found:
+            m = MERGE_RE.fullmatch(str(ref))
+            if m and int(m[2]) == int(m[4]) == row + 1:
+                spans.append((column_index(m[1]), column_index(m[3])))
+        return sorted(spans)
+
+    def insert_row(self, index: int) -> None:
+        """One empty row before row `index`. It takes its neighbours' look but no merges."""
+        self.api.call("sheet.insert_dimension", retry=False, sheet_id=self.tab_id, dimension_type="row",
+                      index=index, direction="before", count=1)
+
+    def merge(self, row: int, first_col: int, last_col: int) -> None:
+        """Merge columns first_col..last_col of one row (the first cell's value is kept)."""
+        self.api.call("sheet.merge_cell", sheet_id=self.tab_id, start_row=row, end_row=row,
+                      start_col=first_col, end_col=last_col, merge_type="all")
+
+    def write(self, row: int, values: Mapping[int, CellValue]) -> None:
+        """Write cells of one row by column: text, or rich text whose linked runs are clickable."""
+        cells = []
+        for col, value in sorted(values.items()):
+            if isinstance(value, str):
+                cells.append({"row": row, "col": col, "value_type": "STRING", "string_value": value})
+            else:
+                runs = [{"text": s.text, **({"link_url": s.link} if s.link else {})} for s in value]
+                cells.append({"row": row, "col": col, "value_type": "RICH_STRING", "rich_string": runs})
+        self.api.call("sheet.set_range_value", sheet_id=self.tab_id, values=cells)
 
 
 def upload_table(table: dict[str, Any], settings: TencentSettings, *, sheet_title: str,
