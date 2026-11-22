@@ -312,6 +312,7 @@ class Cover:
 
     data: bytes  # the image, to upload it again if QQ refuses the reference
     line: str  # the markdown image line with its qqbot-media:// reference
+    address: str  # where the image was fetched from
 
 
 def live_key(status: StreamStatus) -> tuple[str, str] | None:
@@ -447,7 +448,7 @@ class QQNotifier(Notifier):
             # QQ may not take a reference from an earlier message (never checked live):
             # upload the kept image again, or send the text alone.
             log.info("qq: a reused cover was refused; uploading it again")
-            cover, reused = await self.upload_cover(live_key(event.status), cover.data), False
+            cover, reused = await self.upload_cover(live_key(event.status), cover.data, cover.address), False
             text = message(event, cover.line if cover else None)
             await self.deliver(g, text, summary)
 
@@ -470,12 +471,14 @@ class QQNotifier(Notifier):
         """The live's cover in the media library (None: the message is text only), and
         whether it was uploaded for an earlier message. A live's cover is uploaded once
         and reused for its later messages: by then its address may show another picture
-        (a Twitch preview shows whatever the channel shows now). `fresh`: fetch it again
-        all the same and keep the new one (a scheduled live's cover is often set late);
-        when that fails, the cover kept for the live is used after all."""
+        (a Twitch preview shows whatever the channel shows now). It is fetched again and
+        the new one kept when the address differs from the one the kept cover was fetched
+        from (an ended Twitch live carries the replay's cover), or when `fresh` (a
+        scheduled live's cover is often set late); when that fails, the cover kept for
+        the live is used after all."""
         key = live_key(status)
         known = self._covers.get(key) if key else None
-        if known and not fresh:
+        if known and not fresh and status.thumbnail == known.address:
             self._covers.move_to_end(key)
             return known, True
         cover = await self.fetch_cover(key, status.thumbnail) if status.thumbnail else None
@@ -494,11 +497,11 @@ class QQNotifier(Notifier):
         except httpx.HTTPError as e:
             log.warning("qq: cover not used (%s)", e)
             return None
-        return await self.upload_cover(key, r.content)
+        return await self.upload_cover(key, r.content, address)
 
-    async def upload_cover(self, key: tuple[str, str] | None, data: bytes) -> Cover | None:
-        """Upload a cover's image and keep it for the live `key` (None: not kept). A
-        failed upload forgets what was kept for that live."""
+    async def upload_cover(self, key: tuple[str, str] | None, data: bytes, address: str) -> Cover | None:
+        """Upload a cover's image, fetched from `address`, and keep it for the live `key`
+        (None: not kept). A failed upload forgets what was kept for that live."""
         try:
             ref = await self.api.upload_image(data, "image/png" if data[:4] == b"\x89PNG" else "image/jpeg")
         except (QQError, httpx.HTTPError, KeyError) as e:
@@ -508,7 +511,7 @@ class QQNotifier(Notifier):
             return None
         w, h = image_size(data) or (480, 270)
         scale = min(1.0, 480 / w) if w else 1.0
-        cover = Cover(data, f"![封面 #{round(w * scale)}px #{round(h * scale)}px]({ref})")
+        cover = Cover(data, f"![封面 #{round(w * scale)}px #{round(h * scale)}px]({ref})", address)
         if key:
             self._covers[key] = cover
             while len(self._covers) > COVERS_KEPT:
