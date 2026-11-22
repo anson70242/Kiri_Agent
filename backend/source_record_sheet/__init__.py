@@ -12,7 +12,8 @@ One concern a file:
 - writing.py  writing one row into one tab: headers, position, merges (the only place that knows them)
 - jobs.py     the rows waiting (the jobs file, `source_record_jobs.json`): the only place a link is kept
 - record.py   the rows written (`source_record_rows.json`): each row of a live goes into a tab once
-- worker.py   SourceRecordKeeper: is told about lives, finds the tabs, writes the rows
+- worker.py   SourceRecordKeeper: is told about lives, finds the tabs, writes the rows, tries again
+- give_up.py  the owner's message when a row is given up on (no link in it)
 
 The Tencent Docs calls themselves are backend/tencent_docs.py's (SheetTabCalls).
 """

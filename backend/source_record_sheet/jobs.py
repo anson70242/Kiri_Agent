@@ -3,8 +3,9 @@ told, in the runtime state file `source_record_jobs.json` beside the QQ groups f
 damaged one is set aside, the owner alerted, and the service goes on empty). A job is the
 only place a link is kept, and only while it waits.
 
-The worker writes the oldest job first, in the order told; a job leaves the file when its
-row is written or given up on.
+The worker writes the oldest job that is due first, in the order told; a job leaves the file
+when its row is written or given up on. A failed try keeps the job, with its count of
+failed tries and the time it is tried again.
 """
 
 from __future__ import annotations
@@ -47,7 +48,10 @@ class RowJob:
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     errors: int = 0  # failed tries
     next_try: float = 0.0  # not tried again before this time (epoch seconds)
-    inserted: bool = False  # a try inserted the row and failed after it: the retry looks for that empty row
+    inserted: bool = False  # a try got to the insert (noted before it is sent): the next looks for its row first
+
+    def due(self, now: float) -> bool:
+        return self.next_try <= now
 
     @property
     def key(self) -> RowKey:
@@ -86,6 +90,11 @@ class RowJobs:
                 return False
             self._file.save([*jobs, job])
             return True
+
+    def replace(self, job: RowJob) -> None:
+        """Save `job` in place of the job with its id (gone: nothing)."""
+        with self._lock:
+            self._file.save([job if j.id == job.id else j for j in self._file.load()])
 
     def drop(self, job: RowJob) -> None:
         with self._lock:
