@@ -97,16 +97,6 @@ def test_after_the_last_failed_try_the_job_is_dropped_and_the_owner_told_once(tm
     ])]
 
 
-def test_a_job_waiting_for_its_retry_does_not_hold_up_the_next(tmp_path):
-    s, clock, _ = setup(tmp_path)
-    s.docs.fail("sheet.get_cell_data")
-    processed(s.keeper, title="第一场", stream_id="v1")
-    processed(s.keeper, title="第二场", stream_id="v2")
-    s.settle()
-    assert [t.split("（")[0] for t in ours(s)] == ["第二场"]
-    assert [j.row.title for j in waiting(tmp_path)] == ["第一场"]
-
-
 def test_the_running_worker_tries_again_on_its_own_when_the_retry_is_due(tmp_path):
     s = make(groups=store(tmp_path, RECORDING), retry_interval=0.2, max_errors=3)
     s.docs.fail("sheet.get_cell_data")

@@ -5,7 +5,9 @@ SourceRecordKeeper. Every source record sheet test imports from here.
 The endpoint answers the calls the module makes, the way the live endpoint did on
 2026-11-22: reading cells, reading the merges of a range (answered as `<tab id>$A3:B3`),
 inserting a row (the new row has no merges), merging (the first cell's value is kept) and
-writing cells (STRING and RICH_STRING). `fail` makes a call answer an error.
+writing cells (STRING and RICH_STRING). `fail` makes a call answer an error;
+`forbidden` answers every call HTTP 403; `links_read_back_as_addresses` reads rich text back
+other than it was written.
 
 File ids, tab ids, names and links are invented."""
 
@@ -149,6 +151,14 @@ class FakeTab:
         return {}
 
 
+def read_back_as_address(cell: dict[str, Any]) -> dict[str, Any]:
+    """A rich cell as the endpoint might answer it: no plain text, linked runs as their address."""
+    if "rich_string" not in cell:
+        return cell
+    runs = [{**r, "text": r["link_url"]} if r.get("link_url") else r for r in cell["rich_string"]]
+    return {**cell, "string_value": "", "rich_string": runs}
+
+
 class FakeRefusal(Exception):
     """A call the fake answers with a JSON-RPC error carrying this message."""
 
@@ -169,6 +179,10 @@ class FakeTencentDocs:
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.failures: list[Failure] = []
         self.expired = False  # the token is refused with HTTP 401
+        self.forbidden = False  # every call is refused with HTTP 403
+        # How the live endpoint reads a RICH_STRING cell back was never seen: in this mode a
+        # rich cell comes back without its plain text, and a linked run's text is its address.
+        self.links_read_back_as_addresses = False
 
     def tab(self, file_id: str = FILE_ID, tab_id: str = TAB_ID) -> FakeTab:
         """The tab, made empty the first time it is asked for."""
@@ -186,6 +200,8 @@ class FakeTencentDocs:
     def handle(self, request: httpx.Request) -> httpx.Response:
         if self.expired:
             return httpx.Response(401, json={"error": "invalid_token", "error_description": "invalid or expired token"})
+        if self.forbidden:
+            return httpx.Response(403, json={"error": "forbidden"})
         assert request.headers["Authorization"] == TOKEN
         body = json.loads(request.content)
         assert body["method"] == "tools/call"
@@ -213,6 +229,8 @@ class FakeTencentDocs:
             return error(str(e))
         if failure:
             return error(failure.message)
+        if tool == "sheet.get_cell_data" and self.links_read_back_as_addresses:
+            result = {"cells": [read_back_as_address(c) for c in result["cells"]]}
         return httpx.Response(200, json={"jsonrpc": "2.0", "id": body["id"], "result": {
             "content": [{"type": "text", "text": json.dumps({"error": "", "trace_id": "t", **result},
                                                             ensure_ascii=False)}]}})

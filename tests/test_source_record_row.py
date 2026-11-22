@@ -125,7 +125,7 @@ def test_the_log_says_the_row_was_written_and_never_the_link(caplog):
     assert LINK not in caplog.text and "AbCdEf1234" not in caplog.text
 
 
-def test_a_failed_call_is_logged_without_the_link_and_the_next_row_is_still_written(caplog):
+def test_a_failed_call_is_logged_without_the_link_and_the_next_row_of_the_tab_waits_for_it(caplog):
     now = [1_800_000_000.0]
     s = make(clock=lambda: now[0], retry_interval=900)
     s.docs.fail("sheet.get_cell_data", "code:400007, msg:internal error")
@@ -135,11 +135,11 @@ def test_a_failed_call_is_logged_without_the_link_and_the_next_row_is_still_writ
         s.settle()
     assert "row not written" in caplog.text and "400007" in caplog.text
     assert "AbCdEf1234" not in caplog.text
-    assert s.tab.text(2, 6).startswith("第二场")
-    assert not asyncio.run(s.keeper.write_next())  # the failed row waits for its retry
+    assert s.tab.text(2, 0) == "主播1"  # nothing written yet: a tab's rows go in the order told
+    assert not asyncio.run(s.keeper.write_next())  # the failed row waits for its retry, the next behind it
     now[0] += 900
-    s.settle()  # and is written then, on top
-    assert [s.tab.text(r, 6).split("（")[0] for r in (2, 3)] == ["第一场", "第二场"]
+    s.settle()  # both are written then, the later on top
+    assert [s.tab.text(r, 6).split("（")[0] for r in (2, 3)] == ["第二场", "第一场"]
 
 
 def test_rows_told_one_after_another_are_both_written_the_later_on_top():

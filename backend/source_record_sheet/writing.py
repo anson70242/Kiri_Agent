@@ -13,7 +13,10 @@ A try that may have inserted its row (it got to step 3, whatever the answer) lea
 next try to look before it inserts again, so that one job never fills two rows:
 
 - the row is already there, written by that try although its answer was lost: one of the
-  rows from the third down holds this row's four cells. Nothing more is written.
+  rows from the third down holds this row's three text cells, and its link cell's first line
+  is this row's (the live's title, and a short download link's expiry). The label line
+  behind the link is not compared: how the endpoint reads rich text back was never seen.
+  Nothing more is written.
 - the third row is still empty under the four headers: the row that try inserted. It is
   merged like the row below it (the spans not merged yet) and written, from step 4.
 - else (somebody typed into it, or inserted a row above it; or the insert never happened)
@@ -68,10 +71,18 @@ def write_row(tab: SheetTabCalls, row: SheetRow, *, again: bool = False,
     cells = {columns[h]: value for h, value in row.cells().items()}
     if again:
         below = tab.texts(NEW_ROW, NEW_ROW + LOOK_DOWN - 1, LAST_COL)
-        expected = {col: value if isinstance(value, str) else "".join(s.text for s in value)
+        expected = {col: value if isinstance(value, str) else first_line("".join(s.text for s in value))
                     for col, value in cells.items()}
-        if any(all(below.get((r, col)) == text for col, text in expected.items())
-               for r in range(NEW_ROW, NEW_ROW + LOOK_DOWN)):
+
+        def ours(r: int) -> bool:
+            """Row `r` holds the three text cells, and the link cell's first line."""
+            for col, text in expected.items():
+                got = below.get((r, col), "")
+                if (got if isinstance(cells[col], str) else first_line(got)) != text:
+                    return False
+            return True
+
+        if any(ours(r) for r in range(NEW_ROW, NEW_ROW + LOOK_DOWN)):
             return  # written by the earlier try
         if not any(below.get((NEW_ROW, col)) for col in columns.values()):
             done = tab.row_merges(NEW_ROW, LAST_COL)
@@ -82,6 +93,11 @@ def write_row(tab: SheetTabCalls, row: SheetRow, *, again: bool = False,
     inserting()
     tab.insert_row(NEW_ROW)
     fill(tab, spans, cells)
+
+
+def first_line(text: str) -> str:
+    """A link cell's first line: the live's title (and a short download link's expiry)."""
+    return text.split("\n", 1)[0].strip()
 
 
 def fill(tab: SheetTabCalls, spans: list[tuple[int, int]], cells: dict[int, CellValue]) -> None:

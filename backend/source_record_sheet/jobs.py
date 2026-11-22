@@ -3,9 +3,10 @@ told, in the runtime state file `source_record_jobs.json` beside the QQ groups f
 damaged one is set aside, the owner alerted, and the service goes on empty). A job is the
 only place a link is kept, and only while it waits.
 
-The worker writes the oldest job that is due first, in the order told; a job leaves the file
-when its row is written or given up on. A failed try keeps the job, with its count of
-failed tries and the time it is tried again.
+The file keeps the order told, and the worker writes a tab's jobs in that order (the later
+ones of a tab wait while its oldest waits for its retry); a job leaves the file when its row
+is written or given up on. A failed try keeps the job in its place, with its count of failed
+tries and the time it is tried again.
 """
 
 from __future__ import annotations

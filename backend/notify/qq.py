@@ -103,12 +103,14 @@ SWITCHES = ("group_files_to_drive", "group_file_notices")  # a group's two group
 def decode_groups(raw: Any) -> dict[str, dict[str, Any]]:
     """The file's list of groups, keyed by openid; raises on anything else."""
     for g in expect_list(raw, "groups"):
+        # The reason is logged and told the owner: without the sheet's ids (its address).
+        shown = {k: v for k, v in g.items() if k != SHEET} if isinstance(g, dict) else g
         if not (isinstance(g, dict) and isinstance(g.get("openid"), str)):
-            raise ValueError(f"not a group (needs an openid): {g!r}")
+            raise ValueError(f"not a group (needs an openid): {shown!r}")
         if bad := [k for k in SWITCHES if not isinstance(g.get(k, False), bool)]:
-            raise ValueError(f"not a group ({', '.join(bad)} must be true or false): {g!r}")
+            raise ValueError(f"not a group ({', '.join(bad)} must be true or false): {shown!r}")
         if SHEET in g and SourceRecordSheet.of(g) is None:
-            raise ValueError(f"not a group ({SHEET} must be {{file_id, tab_id}}): {g!r}")
+            raise ValueError(f"not a group ({SHEET} must be {{file_id, tab_id}}): {shown!r}")
     return {g["openid"]: g for g in raw}
 
 
@@ -247,10 +249,9 @@ class QQGroups:
             new.pop(SHEET, None)
         elif isinstance(source_record_sheet, SourceRecordSheet):
             new[SHEET] = {"file_id": source_record_sheet.file_id, "tab_id": source_record_sheet.tab_id}
-        g.clear()
-        g.update(new)
+        self._groups[openid] = new  # one step: a reader in another thread sees the old or the new
         self.save()
-        return dict(g)
+        return dict(new)
 
     def remove(self, openid: str) -> None:
         del self._groups[openid]

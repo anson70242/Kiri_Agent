@@ -8,7 +8,7 @@ The link cell never shows the address: the address is behind its label.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import StrEnum
 
@@ -42,7 +42,7 @@ class SheetRow:
     streamer: str  # the streamer's roster name
     date: str  # the archive's date, `YYYYMMDD` (its date folder)
     title: str  # the live's title
-    link: str  # the short download link or the drive link: never logged
+    link: str = field(repr=False)  # the short download link or the drive link: never logged
     expires: float | None = None  # when a short download link stops working (epoch seconds)
     stream_id: str = ""  # with the streamer, tells lives apart (the record of rows written)
 

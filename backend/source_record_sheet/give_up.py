@@ -1,7 +1,8 @@
 """The owner's message when a row is given up on (the operator alert, Discord): which group's
 sheet, which live, which kind of row, and why, so that the row can be added by hand. In
 Chinese, like the other operator messages. It carries no link: not the row's, and not an
-address that Tencent Docs' reason may hold. No QQ group is ever told about a row.
+address that Tencent Docs' reason may hold (`without_addresses`, which the log uses too). No
+QQ group is ever told about a row.
 """
 
 from __future__ import annotations
@@ -26,7 +27,13 @@ def given_up_message(job: RowJob, reason: str, *, denied: bool = False) -> str:
              f"日期：{slashed(row.date)}",
              f"直播：{row.title}",
              f"项目类型：{row.kind}",
-             f"原因：{ADDRESS.sub('（地址略）', reason)[:REASON_KEPT]}"]
+             f"原因：{without_addresses(reason)[:REASON_KEPT]}"]
     if denied:
         lines.append(SHARE_HINT)
     return "\n".join(lines)
+
+
+def without_addresses(reason: str) -> str:
+    """Tencent Docs' reason with every address in it left out: an error may echo the link it
+    was given (a run's link_url), and a link never reaches the log or the owner's message."""
+    return ADDRESS.sub("（地址略）", reason)
