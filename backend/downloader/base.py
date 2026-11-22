@@ -80,6 +80,9 @@ class VideoInfo:
     creator: str = ""  # config streamer name, or channel_name when not in config
     live_status: str | None = None  # yt-dlp's: not_live / was_live / is_live / ...
     extractor: str = ""  # yt-dlp extractor_key, e.g. Youtube, TwitchVod, TwitchClips
+    # The address of the replay's own cover (yt-dlp's `thumbnail`); empty when there is none.
+    # Not an artifact: messages show it, the archive does not keep it.
+    cover: str = ""
 
     def __post_init__(self) -> None:
         if not self.creator:
@@ -213,7 +216,12 @@ class PlatformDownloader(ABC):
             creator=self.match_creator(raw) or channel_name,
             live_status=raw.get("live_status"),
             extractor=raw.get("extractor_key") or "",
+            cover=self.replay_cover(raw),
         )
+
+    def replay_cover(self, raw: dict[str, Any]) -> str:
+        """The address of the replay's own cover in its metadata; empty when there is none."""
+        return str(raw.get("thumbnail") or "")
 
     def video_id(self, raw: dict[str, Any]) -> str:
         return str(raw.get("id") or "")

@@ -27,6 +27,9 @@ VIEWERS_RE = re.compile(r"for ([\d,]+) viewers")
 
 class TwitchMonitor(PlatformMonitor):
     platform = "twitch"
+    # The cover is the channel's live preview: once the live ended, Twitch answers it with its
+    # offline placeholder (a camera).
+    cover_outlives_live = False
 
     @staticmethod
     def login(channel: str) -> str:
