@@ -29,7 +29,8 @@ Rules:
 - Any other failure: retried until `max_errors`, then a failure message on Discord.
 - Success: a Discord message, then the streamer folder is trimmed to `keep` archives; an
   archive that still has a job in the queue, at any stage, is spared until a later prune.
-- Every stage over: "全部处理完成" (READY), with what the live has and the site's links. For
+- Every stage over: "全部处理完成" (READY), with what the live has and the site's links; the
+  source record sheet is told the 全部下载 link it carries (`source_record`). For
   a streamer whose gear ticks 自动上传到夸克网盘, when the drive is available and the archive
   has a video, a drive job is queued in the same save. While the live's chat is still in
   the chat retry queue, both READY and the upload wait; then READY goes out, the drive copy
@@ -57,7 +58,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import quote
 
 from backend.analysis import AnalysisSettings, analyze, is_singing_live, song_naming
@@ -79,6 +80,9 @@ from backend.state_file import StateFile, expect_list
 from . import REPO_ROOT, download, downloader_for, load_settings
 from .base import DownloadError, DownloadResult, DownloadSettings, ReplayUnpublished
 from .pending import PendingChats
+
+if TYPE_CHECKING:
+    from backend.source_record_sheet import SourceRecordKeeper
 
 log = logging.getLogger(__name__)
 
@@ -209,9 +213,11 @@ class AutoDownloader:
         self.uploads: dict[str, str] = {}  # streamer id -> Tencent Docs spreadsheet id (the gear)
         self.drive_folders: dict[str, str] = {}  # streamer id -> folder on the Quark drive (the gear)
         self.site_url = ""  # the dashboard's address (SITE_URL in .env): links in messages
-        # The path of a new short download link for the archive at a folder reference, so that
-        # the 全部下载 address downloads without logging in; None when the dashboard has no login.
-        self.download_link: Callable[[str], str] | None = None
+        # A new short download link for the archive at a folder reference, so that the 全部下载
+        # address downloads without logging in; None when the dashboard has no login.
+        self.download_link: Callable[[str], ShortDownloadLink] | None = None
+        # Told when "全部处理完成" goes out with a 全部下载 link; None: nobody records lives.
+        self.source_record: SourceRecordKeeper | None = None
         # The owner was told the drive's authorization lapsed; any try that is not lapsed (a
         # failure as well as a success) ends the lapse. Not saved: after a restart a lapse is
         # told once more.
@@ -500,8 +506,20 @@ class AutoDownloader:
         self.send_waiting_ready()
 
     def _send_ready(self, job: Job, video: Path) -> None:
-        self._send(EventKind.READY, job, ready_detail(video),
-                   ready_links(video, self.site_url, self.settings.output_dir, self.download_link))
+        """READY with the site's links; the source record sheet is told the 全部下载 link it
+        carries (none without SITE_URL: then nothing is told)."""
+        short = (self.download_link(Downloads(self.settings.output_dir).ref(video.parent))
+                 if self.site_url and self.download_link else None)
+        links = ready_links(video, self.site_url, self.settings.output_dir, short)
+        self._send(EventKind.READY, job, ready_detail(video), links)
+        if self.source_record and links:
+            s = job.status
+            try:
+                self.source_record.processed(
+                    s.streamer, date=Archive.from_video(video).date_folder, title=s.title or "",
+                    link=links[0].url, expires=short.expires if short else None, stream_id=s.stream_id or s.url or "")
+            except Exception:  # noqa: BLE001 - the sheet is bookkeeping: it never holds up a message
+                log.exception("telling the source record sheet failed: %s", s.streamer.name)
 
     def send_waiting_ready(self) -> None:
         """Report ready each live that has a drive job and was not reported yet, unless its
@@ -660,10 +678,8 @@ class AutoDownloader:
         assert current.video  # a drive job is only queued for a live with a video
         video = Path(current.video)
         events: list[tuple[EventKind, str, tuple[Link, ...]]] = []
-        if not current.ready_sent:
-            current.ready_sent = True
-            events.append((EventKind.READY, ready_detail(video),
-                           ready_links(video, self.site_url, self.settings.output_dir, self.download_link)))
+        ready_due = not current.ready_sent  # READY goes first, before the events below
+        current.ready_sent = True
         if outcome.kind == "lapsed":
             log.warning("drive copy not uploaded, the drive's authorization lapsed: %s: %s", name, outcome.message)
             if current.lapsed_since is None:
@@ -703,6 +719,8 @@ class AutoDownloader:
                            (Link(DRIVE_LINK_LABEL, copy.link),) if copy.link else ()))
         current.next_try = now + self.retry_interval
         self.save(rest + [current] if keep else rest)
+        if ready_due:
+            self._send_ready(job, video)
         for kind, detail, links in events:
             self._send(kind, job, detail, links)
 
@@ -792,15 +810,23 @@ def live_date(video: Path) -> str:
     return f"{date[:4]}-{date[4:6]}-{date[6:]}" if len(date) == 8 and date.isdigit() else date
 
 
+@dataclass(frozen=True)
+class ShortDownloadLink:
+    """A short download link the dashboard made for one archive."""
+
+    path: str  # the address without the site's, `/d/<code>`
+    expires: float  # when it stops working (epoch seconds)
+
+
 def ready_links(video: Path, site_url: str, output_dir: Path,
-                download_link: Callable[[str], str] | None = None) -> tuple[Link, ...]:
+                short: ShortDownloadLink | None = None) -> tuple[Link, ...]:
     """With SITE_URL, the 全部下载 zip of a finished stream and its page; else none.
-    `download_link` makes the zip's address a short download link, which downloads without
+    `short` makes the zip's address that short download link, which downloads without
     logging in (the page still asks for the login)."""
     if not site_url:
         return ()
     ref = Downloads(output_dir).ref(video.parent)
-    zip_path = download_link(ref) if download_link else f"/api/archives/zip?folder={quote(ref, safe='')}"
+    zip_path = short.path if short else f"/api/archives/zip?folder={quote(ref, safe='')}"
     return (Link("全部下载（影片、弹幕、中日字幕 SRT）", site_url.rstrip("/") + zip_path),
             Link(PAGE_LABEL, archive_link(site_url, ref)))
 

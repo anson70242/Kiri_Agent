@@ -364,6 +364,12 @@ class DownloadLinks:
         self.file.save(state)
         return code
 
+    def expires(self, code: str) -> float:
+        """When the link with this code stops working (epoch seconds); 0 for a code that was
+        never given."""
+        link = self._load()["links"].get(_token_key(code))
+        return link["expires"] if link else 0.0
+
     def folder(self, code: str) -> str | None:
         """The folder reference of the archive this code downloads; None for a code that
         was never given or whose link has expired."""

@@ -24,12 +24,13 @@ from pydantic import BaseModel, Field
 from backend.archive import Downloads
 from backend.auth import auth_enabled, is_admin, load_auth
 from backend.downloader import load_settings
-from backend.downloader.auto import attach
+from backend.downloader.auto import ShortDownloadLink, attach
 from backend.group_files import GroupFileKeeper
 from backend.group_files.report import GroupFileReport
 from backend.notify.incidents import IncidentAlerts
 from backend.notify.qq_gateway import QQGateway
 from backend.quark import load_quark
+from backend.source_record_sheet import SourceRecordKeeper
 from backend.state_file import StateFileError, set_incident_hook
 from backend.tencent_docs import TencentDocsError, load_credentials
 
@@ -117,6 +118,12 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
         names=lambda: {entry_id(e): e.get("name") or e["channel"] for e in roster.entries},
         take_group_file=group_files.posted if group_files else None,
     ) if notifier and notifier.qq else None
+    # The source record sheets: with QQ (the groups say whose lives go to which sheet) and the
+    # Tencent Docs token, the pipeline tells the module each processed live; else nothing.
+    source_record = (SourceRecordKeeper(load_credentials(config), groups=notifier.qq.groups)
+                     if notifier and notifier.qq and has_tencent_docs_token(config) else None)
+    if auto:
+        auto.source_record = source_record
 
     @contextlib.asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -125,6 +132,7 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
         auto_task = asyncio.create_task(auto.run()) if auto else None
         qq_task = asyncio.create_task(gateway.run()) if gateway else None
         files_task = asyncio.create_task(group_files.run()) if group_files else None
+        records_task = asyncio.create_task(source_record.run()) if source_record else None
         yield
         task.cancel()
         if auto_task:
@@ -136,6 +144,10 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
             files_task.cancel()
             await asyncio.gather(files_task, return_exceptions=True)
             await group_files.aclose()
+        if records_task:
+            records_task.cancel()
+            await asyncio.gather(records_task, return_exceptions=True)
+            source_record.close()
         await mon.aclose()
         alerts.stop()
         if notifier:
@@ -147,6 +159,7 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
     app.state.drive = drive
     app.state.gateway = gateway
     app.state.group_files = group_files
+    app.state.source_record = source_record
     def streamer_names() -> set[str]:
         return {e.get("name") or e["channel"] for e in roster.entries}
 
@@ -158,7 +171,11 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
     if auth:
         install_auth(app, auth, streamer_names)
         if auto:  # the 全部下载 address of a message downloads without logging in
-            auto.download_link = lambda folder: short_link(auth.download_links.create(folder))
+            def short_download_link(folder: str) -> ShortDownloadLink:
+                code = auth.download_links.create(folder)
+                return ShortDownloadLink(short_link(code), auth.download_links.expires(code))
+
+            auto.download_link = short_download_link
         print("Login: on")
     else:
         install_open_me(app)
