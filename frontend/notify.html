@@ -61,6 +61,8 @@
   .opts .label { font-size: 13px; color: var(--muted); margin-bottom: 4px; }
   .checks { display: flex; flex-wrap: wrap; gap: 6px 14px; }
   .checks label { display: inline-flex; align-items: center; gap: 4px; font-size: 14px; white-space: nowrap; }
+  .opts label.sheet { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+  .opts label.sheet input { flex: 1; min-width: 0; }
   .switch { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; }
   .saved { font-size: 13px; color: var(--ok); }
   .empty { color: var(--muted); padding: 20px; text-align: center; background: var(--card); border: 1px dashed var(--border);
@@ -150,6 +152,12 @@ function groupHtml(g) {
         ? "需要群主在手机 QQ 里给机器人打开「接收所有消息」（群成员列表里点机器人），否则机器人看不到群文件"
         : "⚠️ 这台服务器上没有夸克网盘（找不到 CLI），群文件不会上传"}</div>
     </div>
+    <div class="opts">
+      <label class="sheet">录播源记录表 <input type="text" name="source_record_sheet" value="${esc(g.source_record_sheet)}"
+        placeholder="https://docs.qq.com/sheet/…?tab=…" ${data.tencent_docs_available ? "" : "disabled"}></label>
+      <div class="meta">录播和网盘的链接会自动登记到这张腾讯文档</div>
+      ${data.tencent_docs_available ? "" : `<div class="meta">⚠️ 这台服务器上没有腾讯文档的令牌（.env 里的 TENCENT_DOCS_MCP_TOKEN），不能登记</div>`}
+    </div>
     <div class="actions">
       <button class="primary" data-save>保存</button>
       <button data-test="${esc(g.openid)}">发测试消息</button>
@@ -218,11 +226,13 @@ document.addEventListener("click", async e => {
       await load();
     } else if (b.hasAttribute("data-save")) {
       const pick = key => [...f.querySelectorAll(`[data-${key}]`)].filter(x => x.checked).map(x => x.dataset[key]);
+      const sheet = f.querySelector("[name=source_record_sheet]");  // disabled without the token: left as saved
       await api("PATCH", `/api/notify/groups?id=${encodeURIComponent(f.dataset.id)}`, {
         name: f.querySelector("[name=name]").value, enabled: f.querySelector("[name=enabled]").checked,
         streamers: pick("streamer"), kinds: pick("kind"),
         group_files_to_drive: f.querySelector("[name=group_files_to_drive]").checked,
-        group_file_notices: f.querySelector("[name=group_file_notices]").checked });
+        group_file_notices: f.querySelector("[name=group_file_notices]").checked,
+        ...(sheet.disabled ? {} : { source_record_sheet: sheet.value }) });
       dirty.delete(f.dataset.id);
       await load();
       say("已保存 ✅");

@@ -3,7 +3,8 @@
     GET    /notify                      the page
     GET    /api/notify                  everything the page shows
     PATCH  /api/notify/groups?id=<openid>   {name?, enabled?, streamers? (people's names), kinds?,
-                                             group_files_to_drive?, group_file_notices?}
+                                             group_files_to_drive?, group_file_notices?,
+                                             source_record_sheet? (a sheet tab's address; "" clears it)}
     DELETE /api/notify/groups?id=<openid>
     POST   /api/notify/test             {target: "discord" | <group openid>}
 """
@@ -18,14 +19,16 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from backend.notify import EventKind, LiveNotifier
-from backend.notify.qq import KIND_LABELS, GroupFiles, QQError
+from backend.notify.qq import KIND_LABELS, GroupFiles, QQError, SourceRecordSheet
 from backend.notify.qq_gateway import QQGateway
+from backend.tencent_docs import TOKEN_ENV, parse_sheet_tab, sheet_tab_url
 
 from .__main__ import REPO_ROOT
 from .roster import Roster, entry_id
 
 PAGE = REPO_ROOT / "frontend" / "notify.html"
 TEST_TEXT = "🧪 测试消息：切片小助手的通知正常 ✅"
+NO_TENCENT_DOCS = f"这台服务器上没有腾讯文档的令牌（.env 里的 {TOKEN_ENV}），不能登记到录播源记录表"
 
 
 class GroupSettings(BaseModel):
@@ -35,6 +38,7 @@ class GroupSettings(BaseModel):
     kinds: list[str] | None = None
     group_files_to_drive: bool | None = None  # 群文件上传到夸克网盘
     group_file_notices: bool | None = None  # 群文件上传通知
+    source_record_sheet: str | None = None  # 录播源记录表: docs.qq.com/sheet/…?tab=…; "" clears it
 
 
 class TestTarget(BaseModel):
@@ -42,9 +46,11 @@ class TestTarget(BaseModel):
 
 
 def create_notify_router(notifier: LiveNotifier | None, roster: Roster, gateway: QQGateway | None,
-                         drive_available: bool = False) -> APIRouter:
+                         drive_available: bool = False, tencent_docs_available: bool = False) -> APIRouter:
     """`drive_available`: the Quark drive can be used on this server (the page says so when
-    not, next to the switch that sends group files there)."""
+    not, next to the switch that sends group files there). `tencent_docs_available`: the
+    service has a Tencent Docs token, so a group's source record sheet can be written (without
+    it the page shows the field as unavailable and a sheet is not saved)."""
     router = APIRouter()
     qq = notifier.qq if notifier else None
     discord = next((n for n in notifier.notifiers if n.name == "discord"), None) if notifier else None
@@ -69,7 +75,13 @@ def create_notify_router(notifier: LiveNotifier | None, roster: Roster, gateway:
                 # As saved (a removed group keeps them); older saves have neither: off.
                 "group_files_to_drive": bool(group.get("group_files_to_drive")),
                 "group_file_notices": bool(group.get("group_file_notices")),
-                "group_folder": GroupFiles.of(group).folder}
+                "group_folder": GroupFiles.of(group).folder,
+                "source_record_sheet": sheet_address(group)}
+
+    def sheet_address(group: dict[str, Any]) -> str:
+        """The group's source record sheet as the address the page shows; "" for none."""
+        sheet = SourceRecordSheet.of(group)
+        return sheet_tab_url(sheet.file_id, sheet.tab_id) if sheet else ""
 
     @router.get("/api/notify")
     def status() -> dict[str, Any]:
@@ -81,6 +93,7 @@ def create_notify_router(notifier: LiveNotifier | None, roster: Roster, gateway:
                    "last_error": gateway.last_error if gateway else ""},
             "groups": [as_people(g) for g in qq.groups.all()] if qq else [],
             "drive_available": drive_available,
+            "tencent_docs_available": tencent_docs_available,
             "streamers": [{"id": name, "name": name} for name in people()],
             "kinds": [{"id": str(k), "label": KIND_LABELS.get(str(k), str(k))} for k in EventKind],
             "log": notifier.history.entries() if notifier else [],
@@ -97,11 +110,25 @@ def create_notify_router(notifier: LiveNotifier | None, roster: Roster, gateway:
         if body.streamers is not None and not set(body.streamers) <= set(people()):
             raise HTTPException(422, "名单里没有这个主播")
         name = body.name.strip()[:40] if body.name is not None else None
+        sheet = source_record_sheet(body.source_record_sheet)
         try:
             return as_people(store.update(id, name=name, enabled=body.enabled, streamers=body.streamers,
                                           kinds=body.kinds, group_files_to_drive=body.group_files_to_drive,
-                                          group_file_notices=body.group_file_notices))
+                                          group_file_notices=body.group_file_notices,
+                                          source_record_sheet=sheet))
         except ValueError as e:  # the name cannot be the group folder while files go to the drive
+            raise HTTPException(422, str(e)) from None
+
+    def source_record_sheet(address: str | None) -> SourceRecordSheet | str | None:
+        """The sheet an address names, "" for an empty field (no sheet), None when not sent.
+        Raises 422 for an address that is not a sheet tab's, or while there is no token."""
+        if address is None or not address.strip():
+            return None if address is None else ""
+        if not tencent_docs_available:
+            raise HTTPException(422, NO_TENCENT_DOCS)
+        try:
+            return SourceRecordSheet(*parse_sheet_tab(address))
+        except ValueError as e:
             raise HTTPException(422, str(e)) from None
 
     @router.delete("/api/notify/groups")

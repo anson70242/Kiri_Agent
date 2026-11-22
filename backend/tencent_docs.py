@@ -106,6 +106,26 @@ def parse_file_id(text: str) -> str | None:
     return text if re.fullmatch(r"[A-Za-z0-9]{6,}", text) else None
 
 
+def parse_sheet_tab(text: str) -> tuple[str, str]:
+    """(file id, tab id) from the address a browser shows for one tab of a spreadsheet,
+    docs.qq.com/sheet/<file id>?tab=<tab id> (other query parts and a fragment are ignored).
+    Raises ValueError with the reason, in Chinese: not a spreadsheet's address, or no tab."""
+    text = (text or "").strip()
+    file_id = parse_file_id(text)
+    if file_id is None:
+        raise ValueError("不是腾讯文档表格的链接（应为 docs.qq.com/sheet/…?tab=…）")
+    query = text.partition("#")[0].partition("?")[2]
+    tab = re.search(r"(?:^|&)tab=([A-Za-z0-9_-]+)(?:&|$)", query)
+    if not tab:
+        raise ValueError("链接里没有 ?tab=…：在腾讯文档里点开要登记的那个工作表，再复制浏览器里的地址")
+    return file_id, tab.group(1)
+
+
+def sheet_tab_url(file_id: str, tab_id: str) -> str:
+    """The address of one tab of a spreadsheet, as parse_sheet_tab reads it."""
+    return SHEET_URL.format(file_id=file_id, sheet_id=tab_id)
+
+
 def sheet_title(table: dict[str, Any], date: str = "") -> str:
     """`<YYYYMMDD> <creator> <title>`, made safe for a sheet name and cut to MAX_TITLE."""
     text = " ".join(p for p in (date, table.get("streamer") or "", table.get("title") or "") if p)
