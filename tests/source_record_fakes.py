@@ -13,11 +13,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import httpx
 
+from backend.notify.qq import QQGroups
 from backend.source_record_sheet import SheetTab, SourceRecordKeeper
 from backend.tencent_docs import TencentSettings
 
@@ -252,9 +255,19 @@ async def settle(keeper: SourceRecordKeeper) -> None:
         pass
 
 
+_DATA = tempfile.TemporaryDirectory(prefix="source-record-")  # removed when the test run ends
+
+
+def no_groups() -> QQGroups:
+    """An empty groups store in a fresh folder of its own (the keeper's state files go beside it)."""
+    return QQGroups(Path(tempfile.mkdtemp(dir=_DATA.name)) / "qq_groups.json")
+
+
 def make(docs: FakeTencentDocs | None = None, **kw: Any) -> Setup:
-    """A keeper writing through a fake endpoint that holds one record sheet tab (FILE_ID, TAB_ID)."""
+    """A keeper writing through a fake endpoint that holds one record sheet tab (FILE_ID, TAB_ID).
+    Without `groups`, an empty groups store of its own: no group records anybody."""
     docs = docs or FakeTencentDocs()
     tab = docs.tabs.get((FILE_ID, TAB_ID)) or record_sheet(docs)
+    kw.setdefault("groups", no_groups())
     keeper = SourceRecordKeeper(settings(), client=docs.client(), **kw)
     return Setup(keeper, docs, tab, SheetTab(FILE_ID, TAB_ID))

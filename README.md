@@ -319,6 +319,8 @@ When a live of a streamer ticked for that group is fully processed and 「全部
 then the label 「全部下载」 linking to the message's short download link, under the headers 配信者, 日期, 项目类型 and 闪传链接. The address itself is never shown in the sheet.
 Only the field and the ticked streamer count (not the group's switch or notification types); a group the bot was removed from gets nothing, and so does a live whose message has no link (no `SITE_URL`).
 Rows are written one at a time beside the pipeline, which never waits for them; a row that cannot be written is logged (never with its link).
+A row waiting to be written is kept in `data/source_record_jobs.json` (the only place its link is kept), so it is written after a restart and a deploy never waits for it.
+Each live (streamer and stream id) gets each kind of row at most once in a tab, also when it is told again or two groups name the same tab: `data/source_record_rows.json` remembers the newest 2000 rows written.
 It needs QQ and `TENCENT_DOCS_MCP_TOKEN`, and the token's account must be able to edit the sheet. The code is in [backend/source_record_sheet](backend/source_record_sheet);
 turning it on: 「录播源记录表」 in [docs/deploy.md](docs/deploy.md) (in Chinese).
 
