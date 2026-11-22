@@ -26,6 +26,11 @@ class Recorder:
         if self.error:
             raise self.error
 
+    def uploaded(self, streamer, **values) -> None:
+        self.told.append(("uploaded", streamer, values))
+        if self.error:
+            raise self.error
+
 
 def recorded(tmp_path, drive=None, **kw):
     ad, clock, sent = make(tmp_path, drive, **kw)
@@ -77,7 +82,7 @@ def test_without_a_public_address_the_message_has_no_link_and_nothing_is_told(tm
     assert record.told == []
 
 
-def test_a_live_with_a_drive_job_is_told_once_when_ready_goes_out_not_again_at_the_upload(tmp_path):
+def test_a_live_with_a_drive_job_is_told_processed_once_when_ready_goes_out_not_again_at_the_upload(tmp_path):
     ad, _, sent, record = recorded(tmp_path, FakeDrive())
     downloaded(ad)
     step(ad, "transcribe")
@@ -86,7 +91,7 @@ def test_a_live_with_a_drive_job_is_told_once_when_ready_goes_out_not_again_at_t
 
     step(ad, "drive")
     assert kinds(sent)[-1] is EventKind.DRIVE_UPLOADED
-    assert [what for what, _, _ in record.told] == ["processed"]
+    assert [what for what, _, _ in record.told] == ["processed", "uploaded"]
 
 
 def test_a_drive_job_whose_ready_went_out_only_with_its_drive_message_is_told_then(tmp_path):
@@ -98,7 +103,8 @@ def test_a_drive_job_whose_ready_went_out_only_with_its_drive_message_is_told_th
 
     step(restarted, "drive")
     assert kinds(sent) == [EventKind.READY, EventKind.DRIVE_UPLOADED]
-    assert record.told == [("processed", A, {
+    assert [what for what, _, _ in record.told] == ["processed", "uploaded"]
+    assert record.told[:1] == [("processed", A, {
         "date": "20261110", "title": "title v1", "link": ready(sent).links[0].url, "expires": None,
         "stream_id": "v1"})]
 

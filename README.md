@@ -317,6 +317,8 @@ On the 通知 page, paste the address of one tab of it (`docs.qq.com/sheet/…?t
 When a live of a streamer ticked for that group is fully processed and 「全部处理完成」 goes out, the service adds a 录播 row to that tab: the sheet's third row
 (the first two stay on top), merged like the row below it, with the streamer, the archive's date (`2026/11/5`), 录播, and the live's title with the short download link's expiry,
 then the label 「全部下载」 linking to the message's short download link, under the headers 配信者, 日期, 项目类型 and 闪传链接. The address itself is never shown in the sheet.
+When that live's drive copy is uploaded and 「网盘上传完成」 goes out with a drive link (also after a retry), a second row is added the same way, with 网盘 and the live's title (no expiry),
+then the label 「网盘链接」 linking to the drive link with its extraction code inside; an upload without a drive link, or a streamer without drive copies, gets no 网盘 row.
 Only the field and the ticked streamer count (not the group's switch or notification types); a group the bot was removed from gets nothing, and so does a live whose message has no link (no `SITE_URL`).
 Rows are written one at a time beside the pipeline, which never waits for them; a row that cannot be written is logged (never with its link).
 A row waiting to be written is kept in `data/source_record_jobs.json` (the only place its link is kept), so it is written after a restart and a deploy never waits for it.
