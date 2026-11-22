@@ -64,6 +64,10 @@ _Avoid_: share link, pan link
 An address of the dashboard that downloads one archive's zip without logging in, until it expires. A message carries it for the people of a group, who have no account.
 _Avoid_: public link, temporary link
 
+**Source record sheet**:
+A subtitle group's own sheet on Tencent Docs (录播源记录表) where its editors look up where the files of a live can be fetched. The service adds a row to it for an archive's short download link, and another for its drive link.
+_Avoid_: annotation sheet, link sheet
+
 ### Group files
 
 **Group file**:
