@@ -14,7 +14,7 @@ from typing import TypeVar
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, PlainTextResponse, Response, StreamingResponse
 
 from backend.archive import Archive, ArchiveNotFound, ArtifactDamaged, ArtifactMissing, Artifact, Downloads
 from backend.sheet import highlights_xlsx
@@ -165,9 +165,12 @@ def read_or_answer(read: Callable[[], T], missing: str, damaged: str) -> T:
 
 
 def create_router(output_dir: Path,
-                  visible: Callable[[Request], set[str] | None] = lambda request: None) -> APIRouter:
+                  visible: Callable[[Request], set[str] | None] = lambda request: None,
+                  linked: Callable[[str], str | None] | None = None) -> APIRouter:
     """`visible(request)`: the streamer (creator folder) names that request may see, or
-    None for everyone (no login, admins, members allowed "all")."""
+    None for everyone (no login, admins, members allowed "all"). `linked(code)`: the folder
+    reference of the archive a short download link's code downloads, or None (no such
+    link, or expired); without it no code downloads anything."""
     router = APIRouter()
     downloads = Downloads(output_dir)
     root = downloads.root
@@ -262,10 +265,24 @@ def create_router(output_dir: Path,
     def zip_download(folder: str, request: Request) -> StreamingResponse:
         """What editors use, zipped on the fly (no temp file): the video, the cleaned chat,
         and the Chinese and Japanese subtitles as SRT (made from the transcripts)."""
-        archive = open_archive(folder, request)
+        return zip_response(open_archive(folder, request))
+
+    def zip_response(archive: Archive) -> StreamingResponse:
         files, extra = zip_contents(archive)
         return StreamingResponse(stream_zip(files, extra), media_type="application/zip",
                                  headers={"Content-Disposition": attachment(archive.title + ".zip")})
+
+    @router.get("/d/{code}", include_in_schema=False, response_model=None)
+    def short_download(code: str) -> Response:
+        """A short download link: the same zip, for whoever holds the code (no login, and
+        whatever streamers a logged-in member is shown)."""
+        folder = linked(code) if linked else None
+        if folder is None:
+            return PlainTextResponse("下载链接无效或已过期。", status_code=404)
+        try:
+            return zip_response(downloads.open(folder))
+        except ArchiveNotFound:
+            return PlainTextResponse("这场录播已经不在服务器上了。", status_code=404)
 
     @router.get("/api/archives/transcript")
     def transcript(folder: str, request: Request, lang: str = "ja") -> dict:

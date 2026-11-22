@@ -52,7 +52,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import quote, urlencode
+from urllib.parse import quote
 
 from backend.analysis import AnalysisSettings, analyze, is_singing_live, song_naming
 from backend.archive import Archive, Artifact, ArtifactDamaged, ArtifactMissing, Downloads, file_date, read_file
@@ -198,9 +198,9 @@ class AutoDownloader:
         self.uploads: dict[str, str] = {}  # streamer id -> Tencent Docs spreadsheet id (the gear)
         self.drive_folders: dict[str, str] = {}  # streamer id -> folder on the Quark drive (the gear)
         self.site_url = ""  # the dashboard's address (SITE_URL in .env): links in messages
-        # Signs the 全部下载 address (backend.auth.DownloadLinks.sign), so that it downloads
-        # without logging in; None when the dashboard has no login.
-        self.sign_download: Callable[[str], dict[str, str]] | None = None
+        # The path of a new short download link for the archive at a folder reference, so that
+        # the 全部下载 address downloads without logging in; None when the dashboard has no login.
+        self.download_link: Callable[[str], str] | None = None
         # The owner was told the drive's authorization lapsed; any try that is not lapsed (a
         # failure as well as a success) ends the lapse. Not saved: after a restart a lapse is
         # told once more.
@@ -488,7 +488,7 @@ class AutoDownloader:
 
     def _send_ready(self, job: Job, video: Path) -> None:
         self._send(EventKind.READY, job, ready_detail(video),
-                   ready_links(video, self.site_url, self.settings.output_dir, self.sign_download))
+                   ready_links(video, self.site_url, self.settings.output_dir, self.download_link))
 
     def send_waiting_ready(self) -> None:
         """Report ready each live that has a drive job and was not reported yet, unless its
@@ -650,7 +650,7 @@ class AutoDownloader:
         if not current.ready_sent:
             current.ready_sent = True
             events.append((EventKind.READY, ready_detail(video),
-                           ready_links(video, self.site_url, self.settings.output_dir, self.sign_download)))
+                           ready_links(video, self.site_url, self.settings.output_dir, self.download_link)))
         if outcome.kind == "lapsed":
             log.warning("drive copy not uploaded, the drive's authorization lapsed: %s: %s", name, outcome.message)
             if current.lapsed_since is None:
@@ -764,15 +764,15 @@ def live_date(video: Path) -> str:
 
 
 def ready_links(video: Path, site_url: str, output_dir: Path,
-                sign: Callable[[str], dict[str, str]] | None = None) -> tuple[Link, ...]:
-    """With SITE_URL, the 全部下载 zip of a finished stream and its page; else none. `sign`
-    gives the zip address the parameters of a signed download link, so that it downloads
-    without logging in (the page still asks for the login)."""
+                download_link: Callable[[str], str] | None = None) -> tuple[Link, ...]:
+    """With SITE_URL, the 全部下载 zip of a finished stream and its page; else none.
+    `download_link` makes the zip's address a short download link, which downloads without
+    logging in (the page still asks for the login)."""
     if not site_url:
         return ()
     ref = Downloads(output_dir).ref(video.parent)
-    query = urlencode({"folder": ref} | (sign(ref) if sign else {}), quote_via=quote)
-    return (Link("全部下载（影片、弹幕、中日字幕 SRT）", f"{site_url.rstrip('/')}/api/archives/zip?{query}"),
+    zip_path = download_link(ref) if download_link else f"/api/archives/zip?folder={quote(ref, safe='')}"
+    return (Link("全部下载（影片、弹幕、中日字幕 SRT）", site_url.rstrip("/") + zip_path),
             Link(PAGE_LABEL, archive_link(site_url, ref)))
 
 

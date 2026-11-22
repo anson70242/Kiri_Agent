@@ -1,4 +1,4 @@
-"""Dashboard accounts: users, password hashing, login sessions, login rate limit, signed
+"""Dashboard accounts: users, password hashing, login sessions, login rate limit, short
 download links, and the CLI.
 
     uv run -m backend.auth add-user <name> --admin    # asks for the password twice
@@ -33,10 +33,9 @@ and the CLI refuse to run); damaged while the server runs, the server keeps the 
 last read, alerts the owner and refuses account changes until the file is repaired. The
 sessions file is runtime state: damaged, it is kept as a backup and everyone logs in again.
 
-A signed download link (`DownloadLinks`) lets the 全部下载 address of a message download
-one archive's zip without logging in, until it expires. Its key is runtime state in the
-download links file: damaged or deleted, a new key is made and the links sent so far stop
-working.
+A short download link (`DownloadLinks`) lets the 全部下载 address of a message download
+one archive's zip without logging in, until it expires. The links are runtime state in the
+download links file: damaged or deleted, the links sent so far stop working.
 """
 
 from __future__ import annotations
@@ -50,6 +49,7 @@ import ipaddress
 import json
 import re
 import secrets
+import string
 import sys
 import time
 from dataclasses import dataclass, field
@@ -64,6 +64,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 ROLES = ("admin", "member")
 SESSION_DAYS = 30
 DOWNLOAD_LINK_DAYS = 31
+LINK_CODE_CHARACTERS = string.ascii_letters + string.digits  # nothing a chat or a redirect rewrites
+LINK_CODE_LENGTH = 10  # about 59 bits: not to be guessed over the network within a link's life
 COOKIE = "kiri_session"
 DEFAULT_PROXIES = ["172.29.70.10"]  # Caddy's fixed address on the docker network `edge`
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_.\-぀-ヿ㐀-䶿一-鿿]{2,32}$")
@@ -310,59 +312,71 @@ class SessionStore:
 
 # --- login rate limit ------------------------------------------------------------------
 
-def decode_link_key(raw: Any) -> bytes | None:
-    """The download links file's key (None: none made yet); raises on anything else."""
-    if raw == {}:
-        return None
-    if not (isinstance(raw, dict) and isinstance(raw.get("key"), str)):
-        raise ValueError("expected {\"key\": text}")
-    key = base64.urlsafe_b64decode(raw["key"])
-    if len(key) < 32:
-        raise ValueError("the key is too short")
-    return key
+def decode_download_links(raw: Any) -> dict[str, Any]:
+    """The download links file: {"links": {sha256(code): {folder, expires}}}, with the "key"
+    of the signed addresses when the service made such; raises on anything else."""
+    if not isinstance(raw, dict):
+        raise ValueError(f"expected a map, got {type(raw).__name__}")
+    links = raw.get("links", {})
+    if not isinstance(links, dict):
+        raise ValueError("expected a map of links")
+    for link in links.values():
+        if not (isinstance(link, dict) and isinstance(link.get("folder"), str)
+                and isinstance(link.get("expires"), (int, float)) and not isinstance(link.get("expires"), bool)):
+            raise ValueError("not a link (needs folder and expires)")
+    state: dict[str, Any] = {"links": links}
+    if "key" in raw:
+        if not isinstance(raw["key"], str) or len(base64.urlsafe_b64decode(raw["key"])) < 32:
+            raise ValueError("not a key")
+        state["key"] = raw["key"]
+    return state
 
 
 class DownloadLinks:
-    """Signs the address of one archive's zip so that it downloads without logging in until
-    it expires, and checks such an address. Whoever holds the address can download that
-    archive and nothing else: the signature covers the archive's folder reference and the
-    expiry time, under a key only the server has (made at the first signature). The key
-    is re-read whenever its file changes on disk, so a command line tool signs with the
-    running service's key, and deleting the file cancels every address signed so far."""
+    """Short download links: `create` gives the archive at a folder reference a code, and
+    until the link expires `folder` leads from the code back to that archive. Whoever
+    holds the code can download that archive's zip without logging in, and nothing else.
+    The file holds only the codes' hashes. It is re-read whenever it changes on disk, so a
+    command line tool's link works in the running service, and deleting the file cancels
+    every link made so far.
+
+    The addresses in the messages of 2026-11-22 carried a signature instead of a code;
+    `signed` accepts them until they expire, the last on 2026-12-23. After that day
+    `signed`, the file's key and auth_api.signed_download can be deleted."""
 
     def __init__(self, path: Path, days: int = DOWNLOAD_LINK_DAYS, clock: Callable[[], float] = time.time):
-        self.file: StateFile[bytes | None] = StateFile(
-            path, default=lambda: None, policy="recover", decode=decode_link_key,
-            encode=lambda key: {"key": base64.urlsafe_b64encode(key).decode()} if key else {})
-        self._key = self.file.load()
+        self.file: StateFile[dict[str, Any]] = StateFile(path, default=lambda: {"links": {}}, policy="recover",
+                                                         decode=decode_download_links)
+        self._state = self.file.load()
         self.ttl = days * 86400
         self.clock = clock
 
-    def _load(self) -> bytes | None:
-        self._key = self.file.reload(self._key)
-        return self._key
+    def _load(self) -> dict[str, Any]:
+        self._state = self.file.reload(self._state)
+        return self._state
 
-    def sign(self, folder: str) -> dict[str, str]:
-        """The query parameters to add to the zip address of the archive at `folder`."""
-        key = self._load()
-        if key is None:
-            key = self._key = secrets.token_bytes(32)
-            self.file.save(key)
-        expires = str(int(self.clock() + self.ttl))
-        return {"expires": expires, "sig": self._signature(key, folder, expires)}
+    def create(self, folder: str) -> str:
+        """A new link's code for the archive at `folder`. Expired links are forgotten here."""
+        state, now = self._load(), self.clock()
+        code = "".join(secrets.choice(LINK_CODE_CHARACTERS) for _ in range(LINK_CODE_LENGTH))
+        state["links"] = {k: link for k, link in state["links"].items() if link["expires"] > now}
+        state["links"][_token_key(code)] = {"folder": folder, "expires": now + self.ttl}
+        self.file.save(state)
+        return code
 
-    def valid(self, folder: str | None, expires: str | None, sig: str | None) -> bool:
-        """Whether these are the parameters `sign` gave for `folder`, not yet expired."""
-        if not (folder and expires and sig and expires.isascii() and expires.isdigit()):
+    def folder(self, code: str) -> str | None:
+        """The folder reference of the archive this code downloads; None for a code that
+        was never given or whose link has expired."""
+        link = self._load()["links"].get(_token_key(code))
+        return link["folder"] if link and self.clock() < link["expires"] else None
+
+    def signed(self, folder: str | None, expires: str | None, sig: str | None) -> bool:
+        """Whether these are the parameters of a signed address for `folder`, not yet expired."""
+        key = self._load().get("key")
+        if not (key and folder and expires and sig and expires.isascii() and expires.isdigit()):
             return False
-        key = self._load()
-        if key is None or not hmac.compare_digest(sig.encode(), self._signature(key, folder, expires).encode()):
-            return False
-        return self.clock() < int(expires)
-
-    @staticmethod
-    def _signature(key: bytes, folder: str, expires: str) -> str:
-        return _b64(hmac.new(key, f"{expires}\n{folder}".encode(), hashlib.sha256).digest())
+        expected = hmac.new(base64.urlsafe_b64decode(key), f"{expires}\n{folder}".encode(), hashlib.sha256).digest()
+        return hmac.compare_digest(sig.encode(), _b64(expected).encode()) and self.clock() < int(expires)
 
 
 class LoginLimiter:

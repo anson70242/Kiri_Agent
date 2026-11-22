@@ -35,7 +35,7 @@ from backend.state_file import StateFileError, set_incident_hook
 from . import StreamMonitor
 from .__main__ import REPO_ROOT, load_config
 from .archives import create_router
-from .auth_api import install_auth, install_open_me, visible_streamers
+from .auth_api import install_auth, install_open_me, short_link, visible_streamers
 from .notify_api import create_notify_router
 from .base import LiveState, Streamer, StreamStatus
 from .roster import RosterError, entry_id, load_roster
@@ -144,16 +144,17 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
         """Streamer names this request may see; None = everyone (see auth_api.visible_streamers)."""
         return visible_streamers(request, streamer_names())
 
-    if auth_enabled(config) and not dev:
-        auth = load_auth(config)
+    auth = load_auth(config) if auth_enabled(config) and not dev else None
+    if auth:
         install_auth(app, auth, streamer_names)
         if auto:  # the 全部下载 address of a message downloads without logging in
-            auto.sign_download = auth.download_links.sign
+            auto.download_link = lambda folder: short_link(auth.download_links.create(folder))
         print("Login: on")
     else:
         install_open_me(app)
         print("Login: off")
-    app.include_router(create_router(load_settings(config)[0].output_dir, visible))
+    app.include_router(create_router(load_settings(config)[0].output_dir, visible,
+                                     auth.download_links.folder if auth else None))
     app.include_router(create_notify_router(notifier, roster, gateway, drive_available=drive is not None))
 
     def snapshot(names: set[str] | None = None) -> dict:

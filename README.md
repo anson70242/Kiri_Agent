@@ -427,10 +427,12 @@ Until the first admin exists, every page shows only this command. A login lasts 
 disabling a person or changing their password logs them out at once. Accounts are stored in `data/users.json` (passwords as scrypt hashes) and logins in `data/sessions.json`.
 See [auth.py](backend/auth.py) and [auth_api.py](backend/monitor/auth_api.py) (all permission rules are in `required_role`).
 
-One thing works without an account: the 「全部下载」 (download everything) address in 「全部处理完成」 (all processing done) is a signed download link.
+One thing works without an account: the 「全部下载」 (download everything) address in 「全部处理完成」 (all processing done) is a short download link,
+`<SITE_URL>/d/<code>` with a random code of ten letters and digits.
 Whoever holds it can download that one archive's zip for 31 days, and nothing else; the 「录播页面」 (archive page) link beside it still asks for the login.
-The link stops working when the archive is deleted from the server (see `keep`). The signing key is in `data/download_links.json`:
+The link stops working when the archive is deleted from the server (see `keep`). The links are kept in `data/download_links.json` (the codes only as hashes):
 delete that file to cancel every link sent so far.
+The first messages (2026-11-22) carried a longer, signed address instead; those keep working until they expire on 2026-12-23.
 
 ### Public HTTPS
 

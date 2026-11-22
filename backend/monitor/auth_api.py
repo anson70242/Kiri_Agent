@@ -5,8 +5,9 @@ Roles: `admin` may do everything. `member` may look at and download everything e
 the 通知 page, and may not change anything (the one write a member may do is
 POST /api/refresh, which only re-polls live status).
 
-One request needs no login: an archive's zip asked for with a signed download link
-(`signed_download`), the 全部下载 address a message carries.
+One request needs no login: an archive's zip asked for with a short download link, the
+全部下载 address a message carries (`SHORT_LINK`; the route checks the code). The signed
+addresses of the first messages still open the zip until they expire (`signed_download`).
 """
 
 from __future__ import annotations
@@ -32,7 +33,8 @@ HEALTH = "/healthz"
 PUBLIC = {("GET", "/login"), ("HEAD", "/login"), ("POST", "/api/login"), ("POST", "/api/logout")}
 ADMIN_ONLY_PREFIXES = ("/notify", "/api/notify", "/users", "/api/users")
 MEMBER_WRITES = {("POST", "/api/refresh")}
-SIGNED_DOWNLOAD = "/api/archives/zip"  # the one address a signed download link opens
+SHORT_LINK = "/d/"  # followed by a short download link's code
+SIGNED_DOWNLOAD = "/api/archives/zip"  # the one address a signed address opens
 
 NO_USERS = ("还没有任何账号。请在服务器上创建第一个管理员: "
             "uv run -m backend.auth add-user <名字> --admin"
@@ -43,8 +45,8 @@ def required_role(method: str, path: str) -> str | None:
     """The role a request needs: None (anyone, logged in or not), "member" (any logged-in
     user) or "admin". The single place that decides access."""
     method = method.upper()
-    if (method, path) in PUBLIC:
-        return None
+    if (method, path) in PUBLIC or (method in SAFE_METHODS and path.startswith(SHORT_LINK)):
+        return None  # a short download link: its route checks the code
     if any(path == p or path.startswith(p + "/") for p in ADMIN_ONLY_PREFIXES):
         return "admin"  # the 通知 and 用户 pages and their APIs: even reading them
     if method in SAFE_METHODS or (method, path) in MEMBER_WRITES:
@@ -61,11 +63,16 @@ def is_api(path: str) -> bool:
     return path.startswith("/api/")
 
 
+def short_link(code: str) -> str:
+    """The path of the short download link with this code."""
+    return SHORT_LINK + code
+
+
 def signed_download(request: Request, links: DownloadLinks) -> bool:
-    """The request reads an archive's zip with a signed download link that still holds."""
+    """The request reads an archive's zip with a signed address that still holds."""
     q = request.query_params
     return (request.method.upper() in SAFE_METHODS and request.url.path == SIGNED_DOWNLOAD
-            and links.valid(q.get("folder"), q.get("expires"), q.get("sig")))
+            and links.signed(q.get("folder"), q.get("expires"), q.get("sig")))
 
 
 def proxied(request: Request, header: str, trusted: list[str]) -> str:
@@ -126,8 +133,8 @@ def install_auth(app: FastAPI, auth: Auth, streamer_names: Callable[[], set[str]
         if method not in SAFE_METHODS and not same_origin(request, auth.trusted_proxies):
             return _deny(request, 403, "跨站请求被拒绝")
         need = required_role(method, path)
-        # A signed link opens its archive for whoever holds it, logged in or not: a member
-        # who is shown only some streamers downloads it too.
+        # A link opens its archive for whoever holds it, logged in or not: a member who is
+        # shown only some streamers downloads it too.
         if need is None or signed_download(request, auth.download_links):
             return await call_next(request)
         user = auth.user_for(request.cookies.get(COOKIE))
