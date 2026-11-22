@@ -120,9 +120,13 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
     ) if notifier and notifier.qq else None
     # The source record sheets: with QQ (the groups say whose lives go to which sheet) and the
     # Tencent Docs token, the pipeline tells the module each processed live; else nothing. Its
-    # state files (the rows waiting, the rows written) sit beside the QQ groups file.
-    source_record = (SourceRecordKeeper(load_credentials(config), groups=notifier.qq.groups)
-                     if notifier and notifier.qq and has_tencent_docs_token(config) else None)
+    # state files (the rows waiting, the rows written) sit beside the QQ groups file. A row that
+    # cannot be written is tried again with the pipeline's interval and maximum of errors; the
+    # owner is told of one given up on through the operator alert.
+    source_record = (SourceRecordKeeper(
+        load_credentials(config), groups=notifier.qq.groups, alert=notifier.alert,
+        **({"retry_interval": auto.retry_interval, "max_errors": auto.max_errors} if auto else {}),
+    ) if notifier and notifier.qq and has_tencent_docs_token(config) else None)
     if auto:
         auto.source_record = source_record
 

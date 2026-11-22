@@ -126,8 +126,9 @@ def test_the_log_says_the_row_was_written_and_never_the_link(caplog):
 
 
 def test_a_failed_call_is_logged_without_the_link_and_the_next_row_is_still_written(caplog):
-    s = make()
-    s.docs.fail("sheet.set_range_value", "code:400007, msg:internal error")
+    now = [1_800_000_000.0]
+    s = make(clock=lambda: now[0], retry_interval=900)
+    s.docs.fail("sheet.get_cell_data", "code:400007, msg:internal error")
     s.keeper.add(s.sheet, archive_row(title="第一场", stream_id="v1"))
     s.keeper.add(s.sheet, archive_row(title="第二场", link=LINK + "X", stream_id="v2"))
     with caplog.at_level(logging.DEBUG):
@@ -135,7 +136,10 @@ def test_a_failed_call_is_logged_without_the_link_and_the_next_row_is_still_writ
     assert "row not written" in caplog.text and "400007" in caplog.text
     assert "AbCdEf1234" not in caplog.text
     assert s.tab.text(2, 6).startswith("第二场")
-    assert not asyncio.run(s.keeper.write_next())  # one try: the failed row is not written again
+    assert not asyncio.run(s.keeper.write_next())  # the failed row waits for its retry
+    now[0] += 900
+    s.settle()  # and is written then, on top
+    assert [s.tab.text(r, 6).split("（")[0] for r in (2, 3)] == ["第一场", "第二场"]
 
 
 def test_rows_told_one_after_another_are_both_written_the_later_on_top():

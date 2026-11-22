@@ -5,9 +5,15 @@ never race for the third row. A row in the record of rows written (record.py), o
 already, is not saved again: each row of a live goes into a tab once. The jobs file
 survives a restart: the rows waiting are written after it.
 
+A failed try is one error of its job, tried again after the retry interval (a job waiting
+for its retry does not hold up the next); at the maximum of errors, or at once for a missing
+header, the job is dropped and the owner told once (give_up.py). A try that may have
+inserted its row is noted in the job before the insert is sent, so that the next try looks
+for that row first (writing.py): one job never fills two rows.
+
 Everything outside comes in from the caller: the Tencent Docs settings (the token; the file
-id comes with each tab), the QQ groups store (the module's state files sit beside its file)
-and the HTTP client.
+id comes with each tab), the QQ groups store (the module's state files sit beside its file),
+the HTTP client, the clock, the operator alert and the pipeline's retry settings.
 """
 
 from __future__ import annotations
@@ -15,12 +21,16 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import logging
-from typing import TYPE_CHECKING
+import time
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
+from backend.downloader.auto import MAX_ERRORS, RETRY_INTERVAL
 from backend.tencent_docs import SheetTabCalls, TencentDocsError, TencentSettings
 
+from .give_up import given_up_message
 from .jobs import RowJob, RowJobs, SheetTab, state_files
 from .record import RowRecord
 from .row import RowKind, SheetRow
@@ -39,13 +49,21 @@ class SourceRecordKeeper:
     """`groups`: the QQ groups store, asked which groups record a streamer; the jobs file and
     the record of rows written sit beside its file."""
 
-    def __init__(self, settings: TencentSettings, *, groups: QQGroups, client: httpx.Client | None = None) -> None:
+    def __init__(self, settings: TencentSettings, *, groups: QQGroups, client: httpx.Client | None = None,
+                 clock: Callable[[], float] = time.time, alert: Callable[[str], Any] | None = None,
+                 retry_interval: float = RETRY_INTERVAL, max_errors: int = MAX_ERRORS) -> None:
         self.settings = settings
         self.groups = groups
         jobs_file, rows_file = state_files(groups.path)
         self.jobs = RowJobs(jobs_file)
         self.record = RowRecord(rows_file)  # the rows written
         self.client = client or httpx.Client()
+        self.clock = clock
+        self.alert = alert  # the operator alert (LiveNotifier.alert: Discord); None: the log only
+        # The automatic download's (download.auto.retry_minutes, max_errors): the server
+        # passes the pipeline's, so the module has no settings of its own.
+        self.retry_interval = retry_interval
+        self.max_errors = max_errors
         self._wake = asyncio.Event()
 
     def processed(self, streamer: Streamer, *, date: str, title: str, link: str, expires: float | None,
@@ -87,32 +105,67 @@ class SourceRecordKeeper:
             except Exception:  # noqa: BLE001 - keep the worker alive
                 log.exception("source record sheet worker error")
             try:
-                await asyncio.wait_for(self._wake.wait(), IDLE_CHECK)
+                await asyncio.wait_for(self._wake.wait(), self._sleep())
             except TimeoutError:
                 pass
 
+    def _sleep(self) -> float:
+        """How long the loop may sleep: until the next job waiting for a retry is due."""
+        try:
+            due = min((j.next_try for j in self.jobs.load()), default=None)
+        except Exception:  # noqa: BLE001 - keep the worker alive
+            log.exception("source record sheet worker error")
+            due = None
+        return IDLE_CHECK if due is None else min(IDLE_CHECK, max(1.0, due - self.clock()))
+
     async def write_next(self) -> bool:
-        """Write the oldest job's row; False when there was none. One try: the job ends either way."""
-        jobs = self.jobs.load()
-        if not jobs:
+        """Write the oldest due job's row; False when there was none. A failed try keeps the
+        job for a later one, until the last (see `_failed`)."""
+        now = self.clock()
+        job = next((j for j in self.jobs.load() if j.due(now)), None)
+        if job is None:
             return False
-        job = jobs[0]
         if self.record.written(job.key):  # written before a stop that came before the job was dropped
             self.jobs.drop(job)
             return True
         calls = SheetTabCalls(dataclasses.replace(self.settings, file_id=job.tab.file_id), job.tab.tab_id, self.client)
         row = job.row
         live = f"{job.group}: {row.streamer} - {row.title}" if job.group else f"{row.streamer} - {row.title}"
+        def inserting() -> None:
+            """Saved before the insert is sent: whatever its answer, a later try looks first."""
+            if not job.inserted:
+                job.inserted = True
+                self.jobs.replace(job)
+
         try:
-            await asyncio.to_thread(write_row, calls, row)
-        except (MissingHeader, TencentDocsError) as e:
-            log.warning("source record sheet: %s row not written for %s: %s", row.kind, live, e)
-            self.jobs.drop(job)
+            await asyncio.to_thread(write_row, calls, row, again=job.inserted, inserting=inserting)
+        except Exception as e:  # noqa: BLE001 - any failure is a failed try
+            reason = str(e) or type(e).__name__
+            log.warning("source record sheet: %s row not written for %s: %s", row.kind, live, reason)
+            self._failed(job, reason, final=isinstance(e, MissingHeader),
+                         denied=isinstance(e, TencentDocsError) and e.denied)
             return True
         self.record.note(job.key)  # first: a stop between the two leaves a job the record skips
         self.jobs.drop(job)
         log.info("source record sheet: %s row written for %s", row.kind, live)
         return True
+
+    def _failed(self, job: RowJob, reason: str, *, final: bool = False, denied: bool = False) -> None:
+        """A failed try: one error of the job, tried again after the retry interval; given up
+        on (dropped) at the maximum of errors, or at once when trying again cannot help
+        (`final`: a missing header), and the owner told once. `denied`: the token's account
+        may not edit the sheet."""
+        job = dataclasses.replace(job, errors=job.errors + 1, next_try=self.clock() + self.retry_interval)
+        if job.errors < self.max_errors and not final:
+            self.jobs.replace(job)
+            return
+        self.jobs.drop(job)
+        if self.alert is None:
+            return
+        try:
+            self.alert(given_up_message(job, reason, denied=denied))
+        except Exception:  # noqa: BLE001 - an alert never touches the worker
+            log.exception("source record sheet: the owner was not told of a row given up on")
 
     def close(self) -> None:
         self.client.close()

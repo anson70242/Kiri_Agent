@@ -86,12 +86,24 @@ BAD_TITLE_CHARS = re.compile(r'[\[\]:*?/\\]')  # not allowed in Excel sheet name
 LAST_COL = len(HEADER) - 1
 
 
+# Words of a refused permission in a failure's message (English or Chinese, lower case).
+PERMISSION_WORDS = ("permission", "forbidden", "access denied", "权限")
+
+
 class TencentDocsError(Exception):
     """Bad settings, or Tencent Docs refused a request (`code`: HTTP status or business code)."""
 
     def __init__(self, message: str, code: int | None = None):
         super().__init__(message)
         self.code = code
+
+    @property
+    def denied(self) -> bool:
+        """The token's account may not do this to the file (it was not shared with it, or
+        not for editing). Told by the words of the message: the business code Tencent Docs
+        gives a refused permission has not been seen on the live endpoint."""
+        message = str(self).lower()
+        return any(word in message for word in PERMISSION_WORDS)
 
 
 @dataclass

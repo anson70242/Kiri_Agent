@@ -320,7 +320,11 @@ then the label 「全部下载」 linking to the message's short download link, 
 When that live's drive copy is uploaded and 「网盘上传完成」 goes out with a drive link (also after a retry), a second row is added the same way, with 网盘 and the live's title (no expiry),
 then the label 「网盘链接」 linking to the drive link with its extraction code inside; an upload without a drive link, or a streamer without drive copies, gets no 网盘 row.
 Only the field and the ticked streamer count (not the group's switch or notification types); a group the bot was removed from gets nothing, and so does a live whose message has no link (no `SITE_URL`).
-Rows are written one at a time beside the pipeline, which never waits for them; a row that cannot be written is logged (never with its link).
+Rows are written one at a time beside the pipeline, which never waits for them; the log names the group, streamer, live and kind of a row, never its link.
+A row that cannot be written is tried again with the pipeline's retry settings (`download.auto.retry_minutes` and `max_errors`: three tries, fifteen minutes apart);
+after the last, or at once when the tab lacks one of the four headers, it is given up on and the owner gets one Discord alert naming the group, the streamer,
+the live's title, the kind of row and Tencent Docs' reason (with a hint to share the sheet with the token's account when its account may not edit it), without a link. No QQ group is told.
+A try that failed after inserting its row never leads to a second row: the retry takes that empty third row, or finds the row written when only the answer was lost.
 A row waiting to be written is kept in `data/source_record_jobs.json` (the only place its link is kept), so it is written after a restart and a deploy never waits for it.
 Each live (streamer and stream id) gets each kind of row at most once in a tab, also when it is told again or two groups name the same tab: `data/source_record_rows.json` remembers the newest 2000 rows written.
 It needs QQ and `TENCENT_DOCS_MCP_TOKEN`, and the token's account must be able to edit the sheet. The code is in [backend/source_record_sheet](backend/source_record_sheet);
