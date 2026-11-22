@@ -29,12 +29,13 @@ Rules:
   archive that still has a job in the queue, at any stage, is spared until a later prune.
 - Every stage over: "全部处理完成" (READY), with what the live has and the site's links. For
   a streamer whose gear ticks 自动上传到夸克网盘, when the drive is available and the archive
-  has a video, a drive job is queued in the same save: it waits while the live's chat is
-  still in the chat retry queue, uploads the drive copy, and sends 网盘上传完成 with the drive
-  link (backend/drive.py is the drive's side). When its first try does not upload,
-  网盘上传失败 says so; it is retried like any stage and only its give-up is told again. A
-  lapsed authorization is neither an attempt nor an error: 网盘授权失效 once per lapse, and
-  each job waits up to DRIVE_LAPSE_GIVE_UP for the owner to authorize again.
+  has a video, a drive job is queued in the same save. While the live's chat is still in
+  the chat retry queue, both READY and the upload wait; then READY goes out, the drive copy
+  is uploaded, and 网盘上传完成 brings the drive link (backend/drive.py is the drive's side):
+  READY never waits for the upload. When its first try does not upload, 网盘上传失败 says
+  so; it is retried like any stage and only its give-up is told again. A lapsed
+  authorization is neither an attempt nor an error: 网盘授权失效 once per lapse, and each
+  job waits up to DRIVE_LAPSE_GIVE_UP for the owner to authorize again.
 - Jobs live in `state_file`, so a restart resumes them (yt-dlp resumes partial files).
 """
 
@@ -99,6 +100,7 @@ class Job:
     video: str | None = None  # set once downloaded
     live_ended_at: float | None = None  # when the live ended (epoch seconds); None: not known
     unpublished_notice_sent: bool = False  # the owner was told the replay is not published
+    ready_sent: bool = False  # drive stage: "全部处理完成" went out for this live
     lapsed_since: float | None = None  # drive stage: its first try of the current lapse
     uploading: bool = False  # drive stage: its upload is running (a deploy waits for it)
 
@@ -131,15 +133,14 @@ class Job:
             "video": self.video,
             "live_ended_at": self.live_ended_at,
             "unpublished_notice_sent": self.unpublished_notice_sent,
+            "ready_sent": self.ready_sent,
             "lapsed_since": self.lapsed_since,
             "uploading": self.uploading,
         }
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Job:
-        # "ready_sent": a queue file from when the drive job sent "全部处理完成" still has it
-        fields = {k: v for k, v in d.items() if k != "ready_sent"}
-        return cls(**fields | {"status": StreamStatus.from_dict(d["status"])})
+        return cls(**d | {"status": StreamStatus.from_dict(d["status"])})
 
 
 def decode_jobs(raw: Any) -> list[Job]:
@@ -429,7 +430,7 @@ class AutoDownloader:
         if not self.drive:  # gone since the job was queued (the CLI was removed, then a restart)
             log.warning("drive copies are on for %s, but the drive is not available: dropped", s.streamer.name)
             return Outcome("unavailable")
-        if (chats := PendingChats.from_settings(self.settings)) and chats.holds(Path(job.video).parent):
+        if self._awaits_chat(job):
             return Outcome("wait", "等待弹幕补抓")  # the zip gets the chat: wait until it is in or given up
         self._active["drive"] = {
             "name": s.streamer.name, "platform": s.streamer.platform, "title": s.title, "url": s.url,
@@ -470,17 +471,39 @@ class AutoDownloader:
         )
 
     def finish(self, job: Job, outcome: Outcome) -> None:
-        """Record an attempt's outcome and send its message. Once nothing but the drive job
-        is left for the live (every other stage done or given up), report it ready with
-        what it has."""
+        """Record an attempt's outcome and send its message. Once nothing is left for the
+        live (every stage done or given up), report it ready with what it has; a live with a
+        drive job is reported ready by `send_waiting_ready`."""
         if job.stage == "drive":
             self._finish_drive(job, outcome)
             return
         self._finish(job, outcome)
         video = job.video or (str(outcome.result.video) if outcome.result and outcome.result.video else None)
-        if video and not any(j.stream_key == job.stream_key and j.stage != "drive" for j in self.load()):
-            self._send(EventKind.READY, job, ready_detail(Path(video)),
-                       ready_links(Path(video), self.site_url, self.settings.output_dir))
+        if video and not any(j.stream_key == job.stream_key for j in self.load()):
+            self._send_ready(job, Path(video))
+        self.send_waiting_ready()
+
+    def _send_ready(self, job: Job, video: Path) -> None:
+        self._send(EventKind.READY, job, ready_detail(video), ready_links(video, self.site_url, self.settings.output_dir))
+
+    def send_waiting_ready(self) -> None:
+        """Report ready each live that has a drive job and was not reported yet, unless its
+        chat is still awaited: READY waits for a late chat, never for the upload."""
+        jobs = self.load()
+        due = [j for j in jobs if j.stage == "drive" and not j.ready_sent and not self._awaits_chat(j)]
+        if not due:
+            return
+        for j in due:
+            j.ready_sent = True
+        self.save(jobs)
+        for j in due:
+            assert j.video  # a drive job is only queued for a live with a video
+            self._send_ready(j, Path(j.video))
+
+    def _awaits_chat(self, job: Job) -> bool:
+        """The live's chat is still in the chat retry queue (neither downloaded nor given up)."""
+        chats = PendingChats.from_settings(self.settings)
+        return bool(chats and job.video and chats.holds(Path(job.video).parent))
 
     def _finish(self, job: Job, outcome: Outcome) -> None:
         jobs = self.load()  # reload: on_ended may have added jobs meanwhile
@@ -598,7 +621,8 @@ class AutoDownloader:
     def _finish_drive(self, job: Job, outcome: Outcome) -> None:
         """A drive copy that is uploaded is told with 网盘上传完成 (the drive link, or the zip's
         path and why there is no link). A failed upload is retried; only its first failure
-        and its give-up are told. READY went out before the drive job's turn."""
+        and its give-up are told. READY goes first when the live was not reported ready yet
+        (the job's turn came before `send_waiting_ready` saw its chat was no longer awaited)."""
         jobs = self.load()
         current = next((j for j in jobs if j.key == job.key), job)
         rest = [j for j in jobs if j.key != job.key]
@@ -619,6 +643,9 @@ class AutoDownloader:
         assert current.video  # a drive job is only queued for a live with a video
         video = Path(current.video)
         events: list[tuple[EventKind, str, tuple[Link, ...]]] = []
+        if not current.ready_sent:
+            current.ready_sent = True
+            events.append((EventKind.READY, ready_detail(video), ready_links(video, self.site_url, self.settings.output_dir)))
         if outcome.kind == "lapsed":
             log.warning("drive copy not uploaded, the drive's authorization lapsed: %s: %s", name, outcome.message)
             if current.lapsed_since is None:
@@ -697,12 +724,12 @@ class AutoDownloader:
             self.notify(StreamEvent(kind, job.status, detail=detail, links=links))
 
     async def retry_chats(self) -> None:
+        """Retry the late chats that are due, then report ready the lives that waited for theirs."""
         queue = PendingChats.from_settings(self.settings)
-        if not queue:
-            return
-        due = queue.next_due()
-        if due is not None and due <= time.time():
+        due = queue.next_due() if queue else None
+        if queue and due is not None and due <= time.time():
             await asyncio.to_thread(queue.retry, self.streamers, self.settings)
+        self.send_waiting_ready()
 
     # ---- retention ----
 

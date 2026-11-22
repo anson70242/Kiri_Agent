@@ -1,7 +1,7 @@
-"""The drive stage: "全部处理完成" goes out as for any live, with the site's links, and a
-ticked streamer's finished live is then uploaded to the cloud drive; "网盘上传完成" brings
-the drive link. Through the automatic download with a fake clock, fake stages and a fake
-drive."""
+"""The drive stage: "全部处理完成" goes out with the site's links without waiting for the
+upload (only for a late chat), and a ticked streamer's finished live is then uploaded to
+the cloud drive; "网盘上传完成" brings the drive link. Through the automatic download with
+a fake clock, fake stages and a fake drive."""
 
 from __future__ import annotations
 
@@ -205,10 +205,8 @@ class ChatSource:
         return Archive.from_folder(out_dir).save(Artifact.CHAT, [])
 
 
-@pytest.mark.parametrize("chat_ready, give_up", [(True, 48 * 3600), (False, 0)],
-                         ids=["the chat arrives", "the chat is given up on"])
-def test_the_drive_job_waits_for_a_late_chat_and_ready_does_not(tmp_path, monkeypatch, chat_ready, give_up):
-    drive = FakeDrive()
+def late_chat(tmp_path, drive):
+    """A's live, downloaded without its chat (queued for a retry) and transcribed."""
     ad, clock, sent = make(tmp_path, drive)
     ad.on_ended(StreamEvent(EventKind.OFFLINE, live(A, sid="v1"), later(60)))
     folder = bare_archive(ad.settings.output_dir, "A", "20261110", "歌枠", stem="v", video=b"x")
@@ -218,25 +216,39 @@ def test_the_drive_job_waits_for_a_late_chat_and_ready_does_not(tmp_path, monkey
               Outcome("done", result=DownloadResult(info, folder, video=Archive.from_folder(folder).video,
                                                     chat_queued=True)))
     step(ad, "transcribe")
-    assert kinds(sent) == [EventKind.DOWNLOADED, EventKind.READY] and "弹幕 ❌" in sent[-1].detail
+    return ad, clock, sent
 
-    for _ in range(3):  # the chat is still awaited: nothing is uploaded, nothing counted
+
+@pytest.mark.parametrize("chat_ready, give_up", [(True, 48 * 3600), (False, 0)],
+                         ids=["the chat arrives", "the chat is given up on"])
+def test_ready_and_the_drive_job_wait_for_a_late_chat_and_ready_goes_out_before_the_upload(
+        tmp_path, monkeypatch, chat_ready, give_up):
+    drive = FakeDrive()
+    source = ChatSource(False)
+    monkeypatch.setattr(backend.downloader, "downloader_for", lambda *a: source)
+    ad, clock, sent = late_chat(tmp_path, drive)
+
+    for _ in range(3):  # the chat is still awaited: nothing is uploaded, nothing counted, nothing said
         step(ad, "drive")
+        asyncio.run(ad.retry_chats())
         assert ad.next_due("drive") is None
         clock.t += 900
     (job,) = ad.load()
     assert (job.stage, job.attempts, job.errors) == ("drive", 0, 0)
-    assert drive.calls == [] and len(sent) == 2
+    assert drive.calls == [] and kinds(sent) == [EventKind.DOWNLOADED]
 
-    monkeypatch.setattr(backend.downloader, "downloader_for", lambda *a: ChatSource(chat_ready))
+    source.ready = chat_ready
     settings = ad.settings
     settings.chat_retry_give_up = give_up
     PendingChats.from_settings(settings).retry([A], settings, force=True)
-    step(ad, "drive")
+    asyncio.run(ad.retry_chats())  # the download worker's pass after a chat retry
 
+    assert kinds(sent) == [EventKind.DOWNLOADED, EventKind.READY] and drive.calls == []  # before the upload
+    ready = ready_with_the_sites_links(sent)
+    assert ("弹幕 ✅" in ready.detail) is chat_ready
+    step(ad, "drive")
     assert len(drive.calls) == 1 and ad.load() == []
     assert kinds(sent) == [EventKind.DOWNLOADED, EventKind.READY, EventKind.DRIVE_UPLOADED]
-    assert Archive.from_folder(folder).has(Artifact.CHAT) is chat_ready  # what the upload found
 
 
 # ---- unticked meanwhile ----
@@ -249,6 +261,17 @@ def test_unticked_before_the_upload_starts_the_job_ends_without_a_message(tmp_pa
 
     assert ad.load() == [] and drive.calls == []
     assert kinds(sent) == [EventKind.DOWNLOADED, EventKind.READY]  # as before the drive job's turn
+
+
+def test_unticked_while_the_chat_is_awaited_the_job_ends_and_ready_goes_out(tmp_path):
+    drive = FakeDrive()
+    ad, _, sent = late_chat(tmp_path, drive)
+    ad.drive_folders = {}  # the owner unticks the box in the gear
+    step(ad, "drive")
+
+    assert ad.load() == [] and drive.calls == []
+    assert kinds(sent) == [EventKind.DOWNLOADED, EventKind.READY]
+    ready_with_the_sites_links(sent)
 
 
 def test_unticked_while_uploading_the_upload_finishes(tmp_path):
@@ -302,15 +325,16 @@ def test_a_restart_before_the_upload_sends_no_second_ready(tmp_path):
     assert links(sent[0]) == [DRIVE_LINK]
 
 
-@pytest.mark.parametrize("ready_sent", [True, False])
-def test_a_queue_file_from_when_the_drive_job_sent_ready_loads(tmp_path, ready_sent):
+@pytest.mark.parametrize("noted", [False, None], ids=["not sent", "from before drive copies"])
+def test_a_drive_job_whose_ready_never_went_out_gets_it_before_the_drive_message(tmp_path, noted):
     processed(tmp_path, FakeDrive())
-    rewrite_queue(tmp_path, lambda job: job.update(ready_sent=ready_sent))
+    rewrite_queue(tmp_path, lambda job: job.pop("ready_sent") if noted is None else job.update(ready_sent=noted))
     restarted, _, sent = make(tmp_path, FakeDrive())
 
     assert [j.stage for j in restarted.load()] == ["drive"]
     step(restarted, "drive")
-    assert kinds(sent) == [EventKind.DRIVE_UPLOADED]
+    assert kinds(sent) == [EventKind.READY, EventKind.DRIVE_UPLOADED]
+    ready_with_the_sites_links(sent)
 
 
 # ---- the archive stays until its drive job is over ----

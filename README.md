@@ -318,7 +318,8 @@ each live is also kept for good on the owner's Quark cloud drive: once it is ful
 is uploaded into the streamer's drive folder (written in the gear, counted from the top of the drive; blank means `录播/<主播>`, the streamer's name as their archives' folder has it; a missing folder is created).
 Then a drive link is made: a Quark share address with its extraction code inside, which does not expire.
 
-- 「全部处理完成」 (all processing done) does not wait for the upload: it goes out as for any streamer, with the site's own links.
+- 「全部处理完成」 (all processing done) does not wait for the upload: it goes out with the site's own links, as for any streamer.
+  Only a chat that is still being fetched holds it back (and the upload with it), until the chat is in or given up on.
   When the upload ends, ☁️ 「网盘上传完成」 (drive upload done) brings the drive link, and the archive's page shows 「☁ 网盘链接」 (drive link).
   A QQ group gets that message only when it ticks 「网盘上传完成」 on the 通知 page.
 - If the first attempt fails, ❗ 「网盘上传失败」 (drive upload failed) says so; the upload is retried in the background,

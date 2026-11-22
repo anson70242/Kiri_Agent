@@ -213,7 +213,7 @@ docker compose exec kiri /app/.venv/bin/python -m backend.downloader --info <回
 
 主播的齿轮里勾了「自动上传到夸克网盘」，每场录播处理完，程序就把它的网盘副本（一个 zip：影片、弹幕、中日字幕 SRT、路灯表 Excel）
 传到夸克网盘，并做一个网盘链接（带提取码、永久有效），用「网盘上传完成」这条通知发出来，也放进录播页的「☁ 网盘链接」。
-「全部处理完成」不等上传，照常先发，用网站自己的下载链接。
+「全部处理完成」不等上传，照常先发，用网站自己的下载链接；只有弹幕还在补抓时，它和上传都会等弹幕补完（或放弃）。
 上传靠夸克官方的命令行工具（CLI，`quarkclouddrive` 1.0.25，一个 Node 程序）；为什么用它、要承担什么风险，见
 [ADR 0001](adr/0001-quark-drive-through-the-official-agent-cli.md)（英文）。
 
