@@ -128,8 +128,8 @@ def test_the_log_says_the_row_was_written_and_never_the_link(caplog):
 def test_a_failed_call_is_logged_without_the_link_and_the_next_row_is_still_written(caplog):
     s = make()
     s.docs.fail("sheet.set_range_value", "code:400007, msg:internal error")
-    s.keeper.add(s.sheet, archive_row(title="第一场"))
-    s.keeper.add(s.sheet, archive_row(title="第二场", link=LINK + "X"))
+    s.keeper.add(s.sheet, archive_row(title="第一场", stream_id="v1"))
+    s.keeper.add(s.sheet, archive_row(title="第二场", link=LINK + "X", stream_id="v2"))
     with caplog.at_level(logging.DEBUG):
         s.settle()
     assert "row not written" in caplog.text and "400007" in caplog.text
@@ -140,8 +140,8 @@ def test_a_failed_call_is_logged_without_the_link_and_the_next_row_is_still_writ
 
 def test_rows_told_one_after_another_are_both_written_the_later_on_top():
     s = make()
-    s.keeper.add(s.sheet, archive_row(title="第一场"))
-    s.keeper.add(s.sheet, archive_row(title="第二场"))
+    s.keeper.add(s.sheet, archive_row(title="第一场", stream_id="v1"))
+    s.keeper.add(s.sheet, archive_row(title="第二场", stream_id="v2"))
     s.settle()
     assert [s.tab.text(r, 6).split("（")[0] for r in (2, 3)] == ["第二场", "第一场"]
     assert s.tab.merges_of(2) == s.tab.merges_of(3) == s.tab.merges_of(4)

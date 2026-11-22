@@ -14,7 +14,8 @@ the one whose upload is running: a waiting upload is done again after the restar
 running one would start over from zero. Group files (posted in a QQ group, on their way to
 the drive) count the same way: only the one whose upload is running holds a deploy; one
 waiting is uploaded after the restart from the copy on the server, and one downloading is
-continued or downloaded again.
+continued or downloaded again. Rows waiting for a source record sheet never hold a deploy:
+they are written after the restart.
 """
 
 from __future__ import annotations
@@ -31,6 +32,8 @@ from backend.group_files import GroupFileJob, GroupFileJobs, state_files
 from backend.group_files.record import GroupFileUploads
 from backend.monitor.roster import load_roster
 from backend.notify import load_notifier
+from backend.source_record_sheet import RowJobs, RowRecord
+from backend.source_record_sheet import state_files as source_record_files
 from backend.state_file import Damage, dry_run
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -56,6 +59,9 @@ def check(config: Path) -> tuple[list[Damage], list[Job], list[GroupFileJob]]:
             jobs_file, uploads_file = state_files(notifier.qq.groups.path)
             group_files = GroupFileJobs(jobs_file).load()
             GroupFileUploads(uploads_file).load()  # the record of uploads
+            rows_jobs, rows_file = source_record_files(notifier.qq.groups.path)  # the source record sheets
+            RowJobs(rows_jobs).load()
+            RowRecord(rows_file).load()  # the record of rows written
     unique = {d.path: d for d in damaged}  # the roster is loaded twice (load_auto reads it too)
     return list(unique.values()), jobs, group_files
 

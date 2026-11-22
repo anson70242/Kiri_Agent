@@ -119,7 +119,8 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
         take_group_file=group_files.posted if group_files else None,
     ) if notifier and notifier.qq else None
     # The source record sheets: with QQ (the groups say whose lives go to which sheet) and the
-    # Tencent Docs token, the pipeline tells the module each processed live; else nothing.
+    # Tencent Docs token, the pipeline tells the module each processed live; else nothing. Its
+    # state files (the rows waiting, the rows written) sit beside the QQ groups file.
     source_record = (SourceRecordKeeper(load_credentials(config), groups=notifier.qq.groups)
                      if notifier and notifier.qq and has_tencent_docs_token(config) else None)
     if auto:
