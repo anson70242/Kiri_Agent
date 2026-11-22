@@ -4,6 +4,9 @@ request (`install_auth`), and the endpoints /login, /api/login, /api/logout, /ap
 Roles: `admin` may do everything. `member` may look at and download everything except
 the 通知 page, and may not change anything (the one write a member may do is
 POST /api/refresh, which only re-polls live status).
+
+One request needs no login: an archive's zip asked for with a signed download link
+(`signed_download`), the 全部下载 address a message carries.
 """
 
 from __future__ import annotations
@@ -17,8 +20,8 @@ from fastapi import APIRouter, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
-from backend.auth import (COOKIE, SESSION_DAYS, Auth, AuthError, client_ip, is_trusted_proxy, public_user,
-                          streamers_of)
+from backend.auth import (COOKIE, SESSION_DAYS, Auth, AuthError, DownloadLinks, client_ip, is_trusted_proxy,
+                          public_user, streamers_of)
 
 from .__main__ import REPO_ROOT
 
@@ -29,6 +32,7 @@ HEALTH = "/healthz"
 PUBLIC = {("GET", "/login"), ("HEAD", "/login"), ("POST", "/api/login"), ("POST", "/api/logout")}
 ADMIN_ONLY_PREFIXES = ("/notify", "/api/notify", "/users", "/api/users")
 MEMBER_WRITES = {("POST", "/api/refresh")}
+SIGNED_DOWNLOAD = "/api/archives/zip"  # the one address a signed download link opens
 
 NO_USERS = ("还没有任何账号。请在服务器上创建第一个管理员: "
             "uv run -m backend.auth add-user <名字> --admin"
@@ -55,6 +59,13 @@ def allowed(role: str, method: str, path: str) -> bool:
 
 def is_api(path: str) -> bool:
     return path.startswith("/api/")
+
+
+def signed_download(request: Request, links: DownloadLinks) -> bool:
+    """The request reads an archive's zip with a signed download link that still holds."""
+    q = request.query_params
+    return (request.method.upper() in SAFE_METHODS and request.url.path == SIGNED_DOWNLOAD
+            and links.valid(q.get("folder"), q.get("expires"), q.get("sig")))
 
 
 def proxied(request: Request, header: str, trusted: list[str]) -> str:
@@ -115,7 +126,9 @@ def install_auth(app: FastAPI, auth: Auth, streamer_names: Callable[[], set[str]
         if method not in SAFE_METHODS and not same_origin(request, auth.trusted_proxies):
             return _deny(request, 403, "跨站请求被拒绝")
         need = required_role(method, path)
-        if need is None:
+        # A signed link opens its archive for whoever holds it, logged in or not: a member
+        # who is shown only some streamers downloads it too.
+        if need is None or signed_download(request, auth.download_links):
             return await call_next(request)
         user = auth.user_for(request.cookies.get(COOKIE))
         if user is None:

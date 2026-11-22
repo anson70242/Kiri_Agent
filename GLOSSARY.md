@@ -60,6 +60,10 @@ _Avoid_: final result, cloud backup
 The address editors download a drive copy from (网盘链接), with its extraction code. It is noted in the archive, so the archive's page can show it.
 _Avoid_: share link, pan link
 
+**Signed download link**:
+An address of the dashboard that downloads one archive's zip without logging in, until it expires. A message carries it for the people of a group, who have no account.
+_Avoid_: public link, temporary link
+
 ### Group files
 
 **Group file**:

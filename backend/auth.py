@@ -1,4 +1,5 @@
-"""Dashboard accounts: users, password hashing, login sessions, login rate limit, and the CLI.
+"""Dashboard accounts: users, password hashing, login sessions, login rate limit, signed
+download links, and the CLI.
 
     uv run -m backend.auth add-user <name> --admin    # asks for the password twice
     uv run -m backend.auth add-user <name>            # a member
@@ -13,6 +14,7 @@ config.json:
         "enabled": true,                      # off (or no "auth" section): no login at all
         "users_file": "data/users.json",      # relative to the config's folder
         "sessions_file": "data/sessions.json",
+        "download_links_file": "data/download_links.json",
         "trusted_proxies": ["172.29.70.10"]
     }
 
@@ -30,6 +32,11 @@ The users file is operator data: damaged at start, it raises StateFileError (the
 and the CLI refuse to run); damaged while the server runs, the server keeps the users it
 last read, alerts the owner and refuses account changes until the file is repaired. The
 sessions file is runtime state: damaged, it is kept as a backup and everyone logs in again.
+
+A signed download link (`DownloadLinks`) lets the 全部下载 address of a message download
+one archive's zip without logging in, until it expires. Its key is runtime state in the
+download links file: damaged or deleted, a new key is made and the links sent so far stop
+working.
 """
 
 from __future__ import annotations
@@ -56,6 +63,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 ROLES = ("admin", "member")
 SESSION_DAYS = 30
+DOWNLOAD_LINK_DAYS = 31
 COOKIE = "kiri_session"
 DEFAULT_PROXIES = ["172.29.70.10"]  # Caddy's fixed address on the docker network `edge`
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_.\-぀-ヿ㐀-䶿一-鿿]{2,32}$")
@@ -302,6 +310,61 @@ class SessionStore:
 
 # --- login rate limit ------------------------------------------------------------------
 
+def decode_link_key(raw: Any) -> bytes | None:
+    """The download links file's key (None: none made yet); raises on anything else."""
+    if raw == {}:
+        return None
+    if not (isinstance(raw, dict) and isinstance(raw.get("key"), str)):
+        raise ValueError("expected {\"key\": text}")
+    key = base64.urlsafe_b64decode(raw["key"])
+    if len(key) < 32:
+        raise ValueError("the key is too short")
+    return key
+
+
+class DownloadLinks:
+    """Signs the address of one archive's zip so that it downloads without logging in until
+    it expires, and checks such an address. Whoever holds the address can download that
+    archive and nothing else: the signature covers the archive's folder reference and the
+    expiry time, under a key only the server has (made at the first signature). The key
+    is re-read whenever its file changes on disk, so a command line tool signs with the
+    running service's key, and deleting the file cancels every address signed so far."""
+
+    def __init__(self, path: Path, days: int = DOWNLOAD_LINK_DAYS, clock: Callable[[], float] = time.time):
+        self.file: StateFile[bytes | None] = StateFile(
+            path, default=lambda: None, policy="recover", decode=decode_link_key,
+            encode=lambda key: {"key": base64.urlsafe_b64encode(key).decode()} if key else {})
+        self._key = self.file.load()
+        self.ttl = days * 86400
+        self.clock = clock
+
+    def _load(self) -> bytes | None:
+        self._key = self.file.reload(self._key)
+        return self._key
+
+    def sign(self, folder: str) -> dict[str, str]:
+        """The query parameters to add to the zip address of the archive at `folder`."""
+        key = self._load()
+        if key is None:
+            key = self._key = secrets.token_bytes(32)
+            self.file.save(key)
+        expires = str(int(self.clock() + self.ttl))
+        return {"expires": expires, "sig": self._signature(key, folder, expires)}
+
+    def valid(self, folder: str | None, expires: str | None, sig: str | None) -> bool:
+        """Whether these are the parameters `sign` gave for `folder`, not yet expired."""
+        if not (folder and expires and sig and expires.isascii() and expires.isdigit()):
+            return False
+        key = self._load()
+        if key is None or not hmac.compare_digest(sig.encode(), self._signature(key, folder, expires).encode()):
+            return False
+        return self.clock() < int(expires)
+
+    @staticmethod
+    def _signature(key: bytes, folder: str, expires: str) -> str:
+        return _b64(hmac.new(key, f"{expires}\n{folder}".encode(), hashlib.sha256).digest())
+
+
 class LoginLimiter:
     """`limit` failed logins from one IP within `window` seconds -> locked for `lockout` seconds."""
 
@@ -369,6 +432,7 @@ def _in_networks(ip: str, networks: list[str]) -> bool:
 class Auth:
     users: UserStore
     sessions: SessionStore
+    download_links: DownloadLinks
     trusted_proxies: list[str] = field(default_factory=lambda: list(DEFAULT_PROXIES))
     limiter: LoginLimiter = field(default_factory=LoginLimiter)
     fail_delay: float = 0.5  # seconds added to every failed login
@@ -397,6 +461,7 @@ def load_auth(config: Path) -> Auth:
     return Auth(
         users=UserStore(_resolve(config, cfg.get("users_file"), "data/users.json")),
         sessions=SessionStore(_resolve(config, cfg.get("sessions_file"), "data/sessions.json")),
+        download_links=DownloadLinks(_resolve(config, cfg.get("download_links_file"), "data/download_links.json")),
         trusted_proxies=list(cfg.get("trusted_proxies") or DEFAULT_PROXIES),
     )
 

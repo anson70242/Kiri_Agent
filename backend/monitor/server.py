@@ -145,7 +145,10 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
         return visible_streamers(request, streamer_names())
 
     if auth_enabled(config) and not dev:
-        install_auth(app, load_auth(config), streamer_names)
+        auth = load_auth(config)
+        install_auth(app, auth, streamer_names)
+        if auto:  # the 全部下载 address of a message downloads without logging in
+            auto.sign_download = auth.download_links.sign
         print("Login: on")
     else:
         install_open_me(app)
