@@ -110,8 +110,8 @@ class Job:
     lapsed_since: float | None = None  # drive stage: its first try of the current lapse
     uploading: bool = False  # drive stage: its upload is running (a deploy waits for it)
     # The address of the replay's own cover, from its metadata ("" when it has none); None
-    # until the replay is downloaded. The messages from then on show the picture
-    # `StreamStatus.as_ended` picks with it.
+    # until the replay is downloaded. The messages show the picture `StreamStatus.as_ended`
+    # picks with it.
     replay_cover: str | None = None
 
     @property
@@ -745,11 +745,10 @@ class AutoDownloader:
         self._wake[stage].set()
 
     def _send(self, kind: EventKind, job: Job, detail: str, links: tuple[Link, ...] = ()) -> None:
-        """Send one message of the job's live. Once its replay is downloaded, the message
-        shows the ended live's picture (`StreamStatus.as_ended`); before that, the monitor's."""
+        """Send one message of the job's live, which has ended: it shows the ended live's
+        picture (`StreamStatus.as_ended`), with the replay's cover once the replay is downloaded."""
         if self.notify:
-            status = job.status if job.replay_cover is None else job.status.as_ended(job.replay_cover)
-            self.notify(StreamEvent(kind, status, detail=detail, links=links))
+            self.notify(StreamEvent(kind, job.status.as_ended(job.replay_cover), detail=detail, links=links))
 
     async def retry_chats(self) -> None:
         """Retry the late chats that are due, then report ready the lives that waited for theirs."""
