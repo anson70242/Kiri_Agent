@@ -310,6 +310,18 @@ Details: the sub-sheet name is `<YYYYMMDD> <主播> <标题>` (date, creator, ti
 sub-sheet in the whole spreadsheet does the new one get ` (2)` appended. Uploading one archive takes about 10 seconds and about 10 API calls, plus one per run of consecutive rows with the same colour
 (about 50 calls for a 5-hour live). A free account gets 2000 calls a day (according to the official MCP page), enough for dozens of archives a day.
 
+### Source record sheets
+
+A QQ group's source record sheet (录播源记录表) is the group's own Tencent Docs sheet where its editors look up where the files of a live can be fetched.
+On the 通知 page, paste the address of one tab of it (`docs.qq.com/sheet/…?tab=…`) into the group's field 「录播源记录表」; an empty field switches it off.
+When a live of a streamer ticked for that group is fully processed and 「全部处理完成」 goes out, the service adds a 录播 row to that tab: the sheet's third row
+(the first two stay on top), merged like the row below it, with the streamer, the archive's date (`2026/11/5`), 录播, and the live's title with the short download link's expiry,
+then the label 「全部下载」 linking to the message's short download link, under the headers 配信者, 日期, 项目类型 and 闪传链接. The address itself is never shown in the sheet.
+Only the field and the ticked streamer count (not the group's switch or notification types); a group the bot was removed from gets nothing, and so does a live whose message has no link (no `SITE_URL`).
+Rows are written one at a time beside the pipeline, which never waits for them; a row that cannot be written is logged (never with its link).
+It needs QQ and `TENCENT_DOCS_MCP_TOKEN`, and the token's account must be able to edit the sheet. The code is in [backend/source_record_sheet](backend/source_record_sheet);
+turning it on: 「录播源记录表」 in [docs/deploy.md](docs/deploy.md) (in Chinese).
+
 ## Drive copies on Quark
 
 The server keeps only the newest `keep` archives of each streamer. For the streamers whose gear ⚙ has 「自动上传到夸克网盘」 (auto-upload to the Quark drive) ticked,
