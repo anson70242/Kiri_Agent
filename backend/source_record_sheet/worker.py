@@ -67,6 +67,12 @@ class SourceRecordKeeper:
         `expires` when the link stops working (None: it does not). Returns at once."""
         self._tell(streamer, SheetRow(RowKind.ARCHIVE, streamer.name, date, title, link, expires, stream_id))
 
+    def uploaded(self, streamer: Streamer, *, date: str, title: str, link: str, stream_id: str) -> None:
+        """This live's drive copy is uploaded ("网盘上传完成"), here is its drive link (with its
+        extraction code inside): a 网盘 row for every tab that records the streamer. `date` is
+        the archive's (`YYYYMMDD`). Returns at once."""
+        self._tell(streamer, SheetRow(RowKind.DRIVE_COPY, streamer.name, date, title, link, None, stream_id))
+
     def _tell(self, streamer: Streamer, row: SheetRow) -> None:
         """One job per tab that records the streamer: two groups naming one tab share it."""
         tabs: dict[SheetTab, list[str]] = {}

@@ -34,7 +34,8 @@ Rules:
   a streamer whose gear ticks 自动上传到夸克网盘, when the drive is available and the archive
   has a video, a drive job is queued in the same save. While the live's chat is still in
   the chat retry queue, both READY and the upload wait; then READY goes out, the drive copy
-  is uploaded, and 网盘上传完成 brings the drive link (backend/drive.py is the drive's side):
+  is uploaded, and 网盘上传完成 brings the drive link, which the source record sheet is told
+  too (backend/drive.py is the drive's side):
   READY never waits for the upload. When its first try does not upload, 网盘上传失败 says
   so; it is retried like any stage and only its give-up is told again. A lapsed
   authorization is neither an attempt nor an error: 网盘授权失效 once per lapse, and each
@@ -678,6 +679,7 @@ class AutoDownloader:
         assert current.video  # a drive job is only queued for a live with a video
         video = Path(current.video)
         events: list[tuple[EventKind, str, tuple[Link, ...]]] = []
+        drive_link = ""  # the link 网盘上传完成 carries: told to the source record sheet after it
         ready_due = not current.ready_sent  # READY goes first, before the events below
         current.ready_sent = True
         if outcome.kind == "lapsed":
@@ -713,6 +715,7 @@ class AutoDownloader:
             self._lapse_alerted = False  # a try that is not lapsed ends the lapse: a later one is new
             if copy.link:  # the link leads to the zip: the live's date is enough
                 detail = f"日期：{live_date(video)}"
+                drive_link = copy.link
             else:  # without a link, the path is the only way to the zip
                 detail = f"网盘路径：`{copy.path}`\n没有网盘链接：{copy.reason}"
             events.append((EventKind.DRIVE_UPLOADED, detail,
@@ -723,6 +726,13 @@ class AutoDownloader:
             self._send_ready(job, video)
         for kind, detail, links in events:
             self._send(kind, job, detail, links)
+        if self.source_record and drive_link:
+            s = job.status
+            try:
+                self.source_record.uploaded(s.streamer, date=Archive.from_video(video).date_folder, title=s.title or "",
+                                            link=drive_link, stream_id=s.stream_id or s.url or "")
+            except Exception:  # noqa: BLE001 - the sheet is bookkeeping: it never holds up a message
+                log.exception("telling the source record sheet failed: %s", name)
 
     def _settle(self, job: Job, jobs: list[Job]) -> None:
         """Save `jobs`, the queue without `job`. When that leaves nothing for its live and the
