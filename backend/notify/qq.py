@@ -33,7 +33,7 @@ from typing import Any
 
 import httpx
 
-from backend.monitor import StreamStatus
+from backend.monitor import Streamer, StreamStatus
 from backend.monitor.roster import drive_folder_as_typed
 from backend.state_file import StateFile, expect_list
 
@@ -107,7 +107,39 @@ def decode_groups(raw: Any) -> dict[str, dict[str, Any]]:
             raise ValueError(f"not a group (needs an openid): {g!r}")
         if bad := [k for k in SWITCHES if not isinstance(g.get(k, False), bool)]:
             raise ValueError(f"not a group ({', '.join(bad)} must be true or false): {g!r}")
+        if SHEET in g and SourceRecordSheet.of(g) is None:
+            raise ValueError(f"not a group ({SHEET} must be {{file_id, tab_id}}): {g!r}")
     return {g["openid"]: g for g in raw}
+
+
+SHEET = "source_record_sheet"  # a group's key for its source record sheet; absent: none
+
+
+@dataclass(frozen=True)
+class SourceRecordSheet:
+    """A group's source record sheet (录播源记录表): one tab of a Tencent Docs spreadsheet,
+    saved with the group as {"file_id": ..., "tab_id": ...}."""
+
+    file_id: str
+    tab_id: str
+
+    @classmethod
+    def of(cls, group: dict[str, Any]) -> SourceRecordSheet | None:
+        """The group's sheet; None when it has none or its saved value is not one."""
+        saved = group.get(SHEET)
+        if not (isinstance(saved, dict) and set(saved) == {"file_id", "tab_id"}
+                and all(isinstance(v, str) and v for v in saved.values())):
+            return None
+        return cls(saved["file_id"], saved["tab_id"])
+
+
+@dataclass(frozen=True)
+class RecordingGroup:
+    """A group whose source record sheet gets a streamer's lives (QQGroups.recording)."""
+
+    openid: str
+    name: str
+    sheet: SourceRecordSheet
 
 
 def group_folder(name: str) -> str:
@@ -152,8 +184,10 @@ class QQGroups:
     A group: {openid, name, enabled, streamers: [streamer name: a person, every platform;
     older saves hold channel ids, still honoured], kinds: [event kind],
     status: "active" | "removed" (bot kicked) | "muted" (proactive messages turned off),
-    added_at, group_files_to_drive, group_file_notices}. New groups start switched off with
-    no streamers. The two group-file switches don't depend on `enabled`, the streamers or
+    added_at, group_files_to_drive, group_file_notices, source_record_sheet: {file_id, tab_id}
+    (absent: none)}. New groups start switched off with no streamers. The source record sheet
+    gets the ticked streamers' lives whatever `enabled` and the kinds say (see `recording`).
+    The two group-file switches don't depend on `enabled`, the streamers or
     the kinds; a group saved before they existed has neither and reads as off and off
     (read them through `group_files`).
 
@@ -200,13 +234,20 @@ class QQGroups:
         g = self._groups.get(openid)
         return GroupFiles.of(g) if g else None
 
-    def update(self, openid: str, **fields: Any) -> dict[str, Any]:
-        """Change a group's settings; None values are left alone. Raises ValueError (nothing
-        saved) when its files would go to the drive while its name cannot be their folder."""
+    def update(self, openid: str, source_record_sheet: SourceRecordSheet | str | None = None,
+               **fields: Any) -> dict[str, Any]:
+        """Change a group's settings; None values are left alone, `source_record_sheet` ""
+        removes the group's sheet. Raises ValueError (nothing saved) when its files would go
+        to the drive while its name cannot be their folder."""
         g = self._groups[openid]
         new = g | {k: v for k, v in fields.items() if v is not None}
         if new.get("group_files_to_drive"):
             group_folder(new.get("name") or "")
+        if source_record_sheet == "":
+            new.pop(SHEET, None)
+        elif isinstance(source_record_sheet, SourceRecordSheet):
+            new[SHEET] = {"file_id": source_record_sheet.file_id, "tab_id": source_record_sheet.tab_id}
+        g.clear()
         g.update(new)
         self.save()
         return dict(g)
@@ -214,6 +255,18 @@ class QQGroups:
     def remove(self, openid: str) -> None:
         del self._groups[openid]
         self.save()
+
+    def recording(self, streamer: Streamer) -> list[RecordingGroup]:
+        """The groups whose source record sheet gets this streamer's lives: the sheet is set,
+        the streamer is ticked (by person; an older save's channel id counts for that channel)
+        and the bot was not removed. Not `enabled`, not the kinds: those are for messages."""
+        found = []
+        for g in self._groups.values():
+            ticked = g.get("streamers") or []
+            sheet = SourceRecordSheet.of(g)
+            if sheet and g.get("status") != "removed" and (streamer.name in ticked or streamer.id in ticked):
+                found.append(RecordingGroup(g["openid"], g.get("name") or "", sheet))
+        return found
 
     def targets(self, event: StreamEvent) -> list[dict[str, Any]]:
         s, kind = event.status.streamer, str(event.kind)

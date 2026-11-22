@@ -31,6 +31,7 @@ from backend.notify.incidents import IncidentAlerts
 from backend.notify.qq_gateway import QQGateway
 from backend.quark import load_quark
 from backend.state_file import StateFileError, set_incident_hook
+from backend.tencent_docs import TencentDocsError, load_credentials
 
 from . import StreamMonitor
 from .__main__ import REPO_ROOT, load_config
@@ -62,6 +63,15 @@ class StreamerSettings(BaseModel):
     upload_sheet: str | None = None  # docs.qq.com/sheet/... link or id; "" clears it
     drive: bool | None = None  # upload each live's drive copy to Quark once it is processed
     drive_folder: str | None = None  # folder on the drive; "" means the default 录播/<name>
+
+
+def has_tencent_docs_token(config: Path) -> bool:
+    """The service has a Tencent Docs token (.env), so a source record sheet can be written."""
+    try:
+        load_credentials(config)
+    except TencentDocsError:
+        return False
+    return True
 
 
 def create_app(config: Path, interval: float | None = None, dev: bool = False,
@@ -155,7 +165,8 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
         print("Login: off")
     app.include_router(create_router(load_settings(config)[0].output_dir, visible,
                                      auth.download_links.folder if auth else None))
-    app.include_router(create_notify_router(notifier, roster, gateway, drive_available=drive is not None))
+    app.include_router(create_notify_router(notifier, roster, gateway, drive_available=drive is not None,
+                                            tencent_docs_available=has_tencent_docs_token(config)))
 
     def snapshot(names: set[str] | None = None) -> dict:
         rows = []
