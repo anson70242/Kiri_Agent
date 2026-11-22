@@ -5,8 +5,10 @@ never race for the third row. A row in the record of rows written (record.py), o
 already, is not saved again: each row of a live goes into a tab once. The jobs file
 survives a restart: the rows waiting are written after it.
 
-A failed try is one error of its job, tried again after the retry interval (a job waiting
-for its retry does not hold up the next); at the maximum of errors, or at once for a missing
+A failed try is one error of its job, tried again after the retry interval. A job waiting
+for its retry holds back the later jobs of its own tab (a tab's rows go in the order told, so
+that its retry still finds the empty row it may have left as the third), not those of other
+tabs. At the maximum of errors, or at once for a missing
 header, the job is dropped and the owner told once (give_up.py). A try that may have
 inserted its row is noted in the job before the insert is sent, so that the next try looks
 for that row first (writing.py): one job never fills two rows.
@@ -30,7 +32,7 @@ import httpx
 from backend.downloader.auto import MAX_ERRORS, RETRY_INTERVAL
 from backend.tencent_docs import SheetTabCalls, TencentDocsError, TencentSettings
 
-from .give_up import given_up_message
+from .give_up import given_up_message, without_addresses
 from .jobs import RowJob, RowJobs, SheetTab, state_files
 from .record import RowRecord
 from .row import RowKind, SheetRow
@@ -110,19 +112,20 @@ class SourceRecordKeeper:
                 pass
 
     def _sleep(self) -> float:
-        """How long the loop may sleep: until the next job waiting for a retry is due."""
+        """How long the loop may sleep: until the next job first of its tab is due (the jobs
+        behind it wait for it, whatever their own time)."""
         try:
-            due = min((j.next_try for j in self.jobs.load()), default=None)
+            due = min((j.next_try for j in heads(self.jobs.load())), default=None)
         except Exception:  # noqa: BLE001 - keep the worker alive
             log.exception("source record sheet worker error")
             due = None
         return IDLE_CHECK if due is None else min(IDLE_CHECK, max(1.0, due - self.clock()))
 
     async def write_next(self) -> bool:
-        """Write the oldest due job's row; False when there was none. A failed try keeps the
-        job for a later one, until the last (see `_failed`)."""
+        """Write the row of the oldest job that is due and first of its tab; False when there
+        was none. A failed try keeps the job for a later one, until the last (see `_failed`)."""
         now = self.clock()
-        job = next((j for j in self.jobs.load() if j.due(now)), None)
+        job = next((j for j in heads(self.jobs.load()) if j.due(now)), None)
         if job is None:
             return False
         if self.record.written(job.key):  # written before a stop that came before the job was dropped
@@ -140,8 +143,11 @@ class SourceRecordKeeper:
         try:
             await asyncio.to_thread(write_row, calls, row, again=job.inserted, inserting=inserting)
         except Exception as e:  # noqa: BLE001 - any failure is a failed try
-            reason = str(e) or type(e).__name__
-            log.warning("source record sheet: %s row not written for %s: %s", row.kind, live, reason)
+            reason = str(e) or type(e).__name__  # the owner's (Chinese for a missing header)
+            # The log's: in English, and without an address Tencent Docs' reason may echo.
+            logged = (f"the tab's first row has no header {e.header}" if isinstance(e, MissingHeader)
+                      else without_addresses(reason))
+            log.warning("source record sheet: %s row not written for %s: %s", row.kind, live, logged)
             self._failed(job, reason, final=isinstance(e, MissingHeader),
                          denied=isinstance(e, TencentDocsError) and e.denied)
             return True
@@ -169,3 +175,13 @@ class SourceRecordKeeper:
 
     def close(self) -> None:
         self.client.close()
+
+
+def heads(jobs: list[RowJob]) -> list[RowJob]:
+    """The oldest job of each tab, oldest first: the only one of its tab that may be written
+    (a tab's rows go in the order told). The later jobs of a tab wait behind it, also while
+    it waits for its retry."""
+    first: dict[SheetTab, RowJob] = {}
+    for job in jobs:
+        first.setdefault(job.tab, job)
+    return list(first.values())

@@ -100,8 +100,11 @@ class TencentDocsError(Exception):
     @property
     def denied(self) -> bool:
         """The token's account may not do this to the file (it was not shared with it, or
-        not for editing). Told by the words of the message: the business code Tencent Docs
-        gives a refused permission has not been seen on the live endpoint."""
+        not for editing). Told by HTTP 403 (a bad or expired token answers 401) or by the
+        words of the message: the business code Tencent Docs gives a refused permission has
+        not been seen on the live endpoint."""
+        if self.code == 403:
+            return True
         message = str(self).lower()
         return any(word in message for word in PERMISSION_WORDS)
 
@@ -322,13 +325,15 @@ class SheetTabCalls:
         self.tab_id = tab_id
 
     def texts(self, first_row: int, last_row: int, last_col: int) -> dict[tuple[int, int], str]:
-        """The text of each cell holding one, by (row, col); rich text has its runs joined."""
+        """The text of each cell holding one, by (row, col); rich text has its runs joined
+        when its plain text is not answered (how the live endpoint reads rich text back was
+        not seen)."""
         cells = self.api.call("sheet.get_cell_data", sheet_id=self.tab_id, start_row=first_row, end_row=last_row,
                               start_col=0, end_col=last_col, return_csv=False).get("cells") or []
         out: dict[tuple[int, int], str] = {}
         for c in cells:
             text = c.get("string_value")
-            if text is None and c.get("rich_string"):
+            if not text and c.get("rich_string"):
                 text = "".join(s.get("text", "") for s in c["rich_string"])
             if text is None and c.get("number_value") is not None:
                 text = str(c["number_value"])
