@@ -18,6 +18,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 import yt_dlp
@@ -39,6 +40,7 @@ COMMENTS_QUERY = (
 )
 RETRIES = 5
 VOD_MATCH_SECONDS = 30 * 60  # archive start vs. the start time the monitor saw
+PLACEHOLDER_MARK = "_404"  # in the path of a picture Twitch shows in place of a replay's cover
 
 
 class TwitchDownloader(PlatformDownloader):
@@ -49,6 +51,11 @@ class TwitchDownloader(PlatformDownloader):
         # yt-dlp reports VOD ids as "v123456".
         vid = str(raw.get("id") or "")
         return vid[1:] if re.fullmatch(r"v\d+", vid) else vid
+
+    def placeholder_cover(self, address: str) -> bool:
+        """One of Twitch's placeholders: the "processing" picture it offers before it made the
+        replay's own cover, `_404` in its path."""
+        return PLACEHOLDER_MARK in urlsplit(address).path
 
     def add_cookies(self, ydl: yt_dlp.YoutubeDL) -> None:
         if self.settings.twitch_oauth:

@@ -284,13 +284,14 @@ class LiveNotifier:
 
     def _end_sitting(self, sid: str, last: StreamStatus, ended_at: datetime) -> None:
         """The sitting whose last live is `last` is over: the listeners get `last`, the
-        "ended" notification the announced live's id and start time with `last`'s details."""
+        "ended" notification the announced live's id and start time with `last`'s details,
+        and the picture of the ended live (`StreamStatus.as_ended`)."""
         self._end_live(last, ended_at)
         first = self._sitting.pop(sid, None)
         if first is not None and first is not last:
             last = replace(last, stream_id=first.stream_id, started_at=first.started_at)
         if self.notify_offline:
-            self._enqueue(StreamEvent(EventKind.OFFLINE, last, ended_at))
+            self._enqueue(StreamEvent(EventKind.OFFLINE, last.as_ended(), ended_at))
         if held := self._held_scheduled.pop(sid, None):
             self._announce_scheduled(held)
 

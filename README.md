@@ -124,6 +124,9 @@ the bot's proactive messages), it is only recorded under 「最近记录」 (rec
 and Discord gets one alert; if the bot cannot connect for 10 minutes in a row, Discord also gets one alert. Group settings are stored in `data/qq_groups.json`,
 and the send log (the latest 50 entries) in `data/notify_log.json`.
 
+Once a Twitch live has ended, its live preview shows only Twitch's camera placeholder, so its messages, in Discord and in QQ groups, show another picture: 「下播了」 (ended) and the messages before the replay is downloaded show the streamer's avatar,
+and from 「回放已下载」 (replay downloaded) on they show the replay's own cover, or the avatar when Twitch has none yet. The picture is kept with the live in the download queue, so a message after a restart shows the same one. YouTube and TwitCasting messages are unchanged.
+
 Mention the bot with `订阅` to see the group's subscriptions (answered for the group's owner and admins), or with `帮助` (or anything else) for the list of commands.
 
 - [qq.py](backend/notify/qq.py): message format, which groups to send to, cover upload, `QQGroups`.

@@ -14,7 +14,7 @@ import logging
 import re
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable, Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Any, ClassVar
@@ -101,6 +101,17 @@ class StreamStatus:
             checked_at=parse_iso(d.get("checked_at")) or datetime.now(timezone.utc),
         )
 
+    def as_ended(self, replay_cover: str | None = None) -> StreamStatus:
+        """This live as the messages after it ended show it; which picture they show (its
+        `thumbnail`) is decided here and nowhere else. Where the monitor's cover still shows
+        the live after it ended (YouTube, TwitCasting), that cover. Where it does not
+        (Twitch), the replay's own cover (`replay_cover`, empty when the replay has none),
+        else the streamer's avatar, else no picture."""
+        monitor = PlatformMonitor.registry.get(self.streamer.platform)
+        if monitor is None or monitor.cover_outlives_live:
+            return self
+        return replace(self, thumbnail=replay_cover or self.avatar or None)
+
     def same_stream(self, other: StreamStatus) -> bool:
         """Both live and the same broadcast. Unknown ids count as the same, so a
         missing field never looks like a brand-new stream."""
@@ -114,6 +125,9 @@ class PlatformMonitor(ABC):
 
     platform: ClassVar[str]
     registry: ClassVar[dict[str, type[PlatformMonitor]]] = {}
+    # The cover this monitor reports still shows the live after it ended (False: it does not,
+    # and `StreamStatus.as_ended` picks another picture).
+    cover_outlives_live: ClassVar[bool] = True
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)

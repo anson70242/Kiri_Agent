@@ -114,6 +114,10 @@ class Job:
     ready_sent: bool = False  # drive stage: "全部处理完成" went out for this live
     lapsed_since: float | None = None  # drive stage: its first try of the current lapse
     uploading: bool = False  # drive stage: its upload is running (a deploy waits for it)
+    # The address of the replay's own cover, from its metadata ("" when it has none); None
+    # until the replay is downloaded. The messages show the picture `StreamStatus.as_ended`
+    # picks with it.
+    replay_cover: str | None = None
 
     @property
     def stream_key(self) -> str:
@@ -147,6 +151,7 @@ class Job:
             "ready_sent": self.ready_sent,
             "lapsed_since": self.lapsed_since,
             "uploading": self.uploading,
+            "replay_cover": self.replay_cover,
         }
 
     @classmethod
@@ -588,6 +593,15 @@ class AutoDownloader:
             return
         if outcome.kind == "done":
             log.info("auto-download done: %s %s", name, outcome.result and outcome.result.video)
+            # Set on the passed-in `job` as well as on `current`, its copy from the queue file:
+            # when no stage follows the download, `finish` sends 「全部处理完成」 with `job`, not with
+            # `current`, and that message must show the replay's cover too.
+            current.replay_cover = job.replay_cover = outcome.result.info.cover if outcome.result else ""
+            if outcome.result:  # what the owner checks at a Twitch live; never the address itself
+                info = outcome.result.info
+                log.info("replay of %s downloaded, its metadata offered %s", name,
+                         "a cover" if info.cover else
+                         "only a placeholder, taken as no cover" if info.cover_placeholder else "no cover")
             links: tuple[Link, ...] = ()
             if self.site_url and outcome.result:
                 ref = Downloads(self.settings.output_dir).ref(outcome.result.output_dir)
@@ -766,8 +780,10 @@ class AutoDownloader:
         self._wake[stage].set()
 
     def _send(self, kind: EventKind, job: Job, detail: str, links: tuple[Link, ...] = ()) -> None:
+        """Send one message of the job's live, which has ended: it shows the ended live's
+        picture (`StreamStatus.as_ended`), with the replay's cover once the replay is downloaded."""
         if self.notify:
-            self.notify(StreamEvent(kind, job.status, detail=detail, links=links))
+            self.notify(StreamEvent(kind, job.status.as_ended(job.replay_cover), detail=detail, links=links))
 
     async def retry_chats(self) -> None:
         """Retry the late chats that are due, then report ready the lives that waited for theirs."""
