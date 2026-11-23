@@ -66,7 +66,9 @@ def test_leftover_staging_folders_are_removed_at_start_but_that_of_a_flash_trans
     leftover.mkdir(parents=True)
     (leftover / "v (1／2 00.00.00–01.00.00).mp4").write_bytes(b"half a part")
 
-    restarted, _, _ = flash_pipeline(tmp_path, FakeFlash(uploading()))
+    # The upload has moved on meanwhile: `run_until` runs on the real clock, far from the
+    # tests' clock the job was saved with, and an upload that had not moved would count as hung.
+    restarted, _, _ = flash_pipeline(tmp_path, FakeFlash(uploading(70)))
     run_until(restarted, lambda: not leftover.exists())
 
     assert not (Downloads(tmp_path / "dl").flash_staging / "B").exists()
