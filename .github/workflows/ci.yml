@@ -3,7 +3,8 @@ name: CI
 # Runs on every pull request (so you see results before merging) and again on main
 # after the merge lands.
 #
-# A push to main that changes only documentation skips CI, and so skips the deploy
+# A push to main that changes only documentation (or .env.example, which is read by
+# people and by no program) skips CI, and so skips the deploy
 # (deploy.yml runs after CI): the server is not rebuilt or restarted for it.
 # GLOSSARY.md still counts as code, because tests/test_contracts.py reads it.
 on:
@@ -15,6 +16,7 @@ on:
       - '!**.md'
       - '!docs/**'
       - '!LICENSE'
+      - '!.env.example'
       - 'GLOSSARY.md'
 
 concurrency:

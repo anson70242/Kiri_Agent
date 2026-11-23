@@ -104,7 +104,7 @@ curl -sv https://<公网IP> -o /dev/null 2>&1 | grep -E "subject|expire|issuer"
 push 到 main 后，CI 通过就会自动部署。
 也可以在 GitHub → Actions → Deploy → Run workflow 手动部署当前的 main。
 
-只改文档的 push（`*.md`、`docs/`、`LICENSE`）不跑 CI，也就不部署、不重启。
+只改文档的 push（`*.md`、`docs/`、`LICENSE`、`.env.example`）不跑 CI，也就不部署、不重启。
 `GLOSSARY.md` 例外：测试会读它，所以改它照常跑 CI 并部署。
 
 重启之前，部署会先用新版本的代码把服务器上的状态文件读一遍（只读，不改任何文件）。出现下面任一情况，部署就停在这一步，服务器继续跑旧版本：
