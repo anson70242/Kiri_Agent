@@ -15,6 +15,7 @@ answer is the frame with the same `echo`. Every other frame is an event of the f
 
 from __future__ import annotations
 
+import http.client
 import json
 import logging
 import os
@@ -27,6 +28,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 from websockets.exceptions import ConnectionClosed, InvalidHandshake, InvalidURI
@@ -263,11 +265,14 @@ class FlashClient:
         headers = {"Content-Type": "application/json"}
         if credential:
             headers["Authorization"] = f"Bearer {credential}"
-        url = f"{self.settings.login_url.rstrip('/')}{path}"  # type: ignore[union-attr]
-        request = urllib.request.Request(url, json.dumps(body).encode(), headers, method="POST")
+        login_url = _address(self.settings.login_url or "", ("http", "https"), LOGIN_URL_ENV)
         try:
+            request = urllib.request.Request(f"{login_url.rstrip('/')}{path}", json.dumps(body).encode(), headers,
+                                             method="POST")
             with _http.open(request, timeout=LOGIN_TIMEOUT) as response:
                 raw = response.read()
+        except (ValueError, http.client.InvalidURL):  # a setting that is no address: its text holds it
+            raise FlashFailed(_not_an_address(LOGIN_URL_ENV, "HTTP")) from None
         except urllib.error.HTTPError as e:
             raw = e.read()
             answer = _json(raw)
@@ -288,16 +293,17 @@ class FlashClient:
         reached or does not answer in time, FlashFailed when its answer holds no data."""
         echo = uuid.uuid4().hex
         deadline = time.monotonic() + ACTION_TIMEOUT
+        actions_url = _address(self.settings.actions_url, ("ws", "wss"), ACTIONS_URL_ENV)
         try:
-            with connect(self.settings.actions_url, open_timeout=ACTION_TIMEOUT, proxy=None,
+            with connect(actions_url, open_timeout=ACTION_TIMEOUT, proxy=None,
                          max_size=2**24, logger=_wire_log) as ws:
                 ws.send(json.dumps({"action": action, "params": params, "echo": echo}, ensure_ascii=False))
                 while True:
                     answer = _answer(ws.recv(timeout=max(deadline - time.monotonic(), 0.001)), echo)
                     if answer is not None:
                         break
-        except InvalidURI:
-            raise FlashFailed(f"{ACTIONS_URL_ENV} 不是 WebSocket 地址") from None
+        except (InvalidURI, ValueError):  # a setting that is no address: its text holds it
+            raise FlashFailed(_not_an_address(ACTIONS_URL_ENV, "WebSocket")) from None
         # The exceptions' own text can name the address: only their kind is kept.
         except (OSError, TimeoutError, ConnectionClosed, InvalidHandshake) as e:
             raise FlashUnavailable(f"连不上闪传服务（{type(e).__name__}）") from None
@@ -305,6 +311,24 @@ class FlashClient:
         if not isinstance(data, dict):
             raise FlashFailed(f"{action}：{_reason(answer)}")
         return data
+
+
+def _address(url: str, schemes: tuple[str, ...], setting: str) -> str:
+    """`url` when it is an address of one of `schemes` with a host (and a port, if any, that is
+    a number); else FlashFailed, whose text names the setting and not the address."""
+    try:
+        parts = urlsplit(url)
+        usable = parts.scheme.lower() in schemes and bool(parts.hostname)
+        parts.port  # noqa: B018 - raises ValueError for a port that is no number
+    except ValueError:
+        usable = False
+    if not usable:
+        raise FlashFailed(_not_an_address(setting, "WebSocket" if "ws" in schemes else "HTTP"))
+    return url
+
+
+def _not_an_address(setting: str, kind: str) -> str:
+    return f".env 里的 {setting} 不是可用的 {kind} 地址"
 
 
 def _json(raw: str | bytes) -> dict[str, Any] | None:
