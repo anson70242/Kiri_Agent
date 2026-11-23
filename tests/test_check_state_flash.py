@@ -32,7 +32,7 @@ def test_flash_transfers_uploading_or_waiting_do_not_hold_a_deploy(tmp_path, cap
     assert check_state.main(["--config", str(cfg), "--require-idle"]) == 0
     out = capsys.readouterr().out
     assert "下载队列：0 个任务" in out
-    assert "闪传：2 个任务，0 个正在切分影片（只有正在切分的会挡住部署）" in out
+    assert "闪传：2 个任务，0 个正在切分影片，0 个在等闪传账号（只有正在切分的会挡住部署）" in out
 
 
 def test_a_video_being_cut_holds_a_deploy_and_is_named(tmp_path, capsys):

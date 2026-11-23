@@ -72,6 +72,9 @@ class FakeFlash:
     def account(self) -> AccountState:
         return AccountState("online")
 
+    def require_online(self) -> None:
+        """Online: returns."""
+
     def start(self, files: list[Path], name: str) -> StartedTransfer:
         self.starts.append((name, [f.name for f in files]))
         self.existed.append(all(f.is_file() for f in files))
@@ -203,3 +206,54 @@ def staging_exists(ad) -> bool:
     from backend.archive import Downloads
 
     return Downloads(ad.settings.output_dir).flash_staging.exists()
+
+
+# ---- the flash account offline (ticket 10) ----
+
+HOUR = 3600
+
+
+class AccountFlash(FakeFlash):
+    """A FakeFlash whose flash account can be offline: `state` ("online", "offline" or
+    "unreachable", offline by default) is what `account()` answers, and while it is not
+    online a start or a look at a progress raises FlashUnavailable, as the client does
+    (nothing is started then). Records `accounts`: how often the pipeline asked whether
+    the account is online (`require_online`, as the client answers it from the flash service
+    alone; `account()`, which the 通知 page uses, is not counted)."""
+
+    def __init__(self, *progress: Progress | Exception, state: str = "offline", **kw):
+        super().__init__(*progress, **kw)
+        self.state = state
+        self.accounts = 0
+
+    def account(self) -> AccountState:
+        return AccountState(self.state)  # type: ignore[arg-type]
+
+    def require_online(self) -> None:
+        self.accounts += 1
+        self._online()
+
+    def _online(self) -> None:
+        from backend.flash.client import FlashUnavailable
+
+        if self.state != "online":
+            raise FlashUnavailable("闪传账号掉线" if self.state == "offline" else "连不上闪传服务（ConnectionRefusedError）")
+
+    def start(self, files: list[Path], name: str) -> StartedTransfer:
+        self._online()
+        return super().start(files, name)
+
+    def progress(self, transfer_id: str) -> Progress:
+        self._online()
+        return super().progress(transfer_id)
+
+
+def pass_time(ad, clock, seconds: float) -> None:
+    """`seconds` go by; then the flash stage's worker tries every job that is due by then, as
+    it does when it wakes up."""
+    clock.t += seconds
+    for _ in range(50):
+        if ad.next_due("flash") is None:
+            return
+        step(ad, "flash")
+    raise AssertionError("the flash stage keeps finding jobs due")

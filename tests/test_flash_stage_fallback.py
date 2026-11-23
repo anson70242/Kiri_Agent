@@ -7,7 +7,7 @@ from __future__ import annotations
 import pytest
 
 from backend.archive import Archive, ArtifactMissing, Downloads
-from backend.flash.client import FlashFailed, FlashUnavailable, Progress
+from backend.flash.client import FlashFailed, Progress
 from backend.notify import EventKind
 
 from .flash_stage_fakes import FakeFlash, processed_live, ready, run_flash, uploading
@@ -15,10 +15,9 @@ from .test_drive_stage import kinds, ready_with_the_sites_links
 from .test_flash_ready_sheet import short_links
 from .test_source_record_pipeline import Recorder
 
-FAILURES = {  # the fake flash service of each way to fail, at every try (a look's answer repeats)
+FAILURES = {  # the fake flash service of each way to fail, at every try (a look's answer repeats); the
+    # flash account offline is no failure: it waits (test_flash_offline*.py)
     "the start is refused": lambda: FakeFlash(start=[FlashFailed("闪传服务拒绝了")] * 3),
-    "the account is offline at the start": lambda: FakeFlash(start=[FlashUnavailable("闪传账号掉线")] * 3),
-    "the account goes offline while uploading": lambda: FakeFlash(uploading(), FlashUnavailable("闪传账号掉线")),
     "a look at the progress fails": lambda: FakeFlash(uploading(), FlashFailed("闪传服务没有给出闪传的进度")),
     "a file fails": lambda: FakeFlash(Progress(100, 100, done=4, failed=1, finished=True)),
     "a file fails while uploading": lambda: FakeFlash(Progress(50, 100, done=0, failed=1, finished=False)),
