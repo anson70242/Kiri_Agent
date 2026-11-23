@@ -48,8 +48,7 @@ class TransferFiles:
 def staging_folder(archive: Archive, root: Path) -> Path:
     """The archive's staging folder under the downloads `root`. Raises ValueError for an
     archive outside `root`."""
-    downloads = Downloads(root)
-    return downloads.flash_staging / downloads.ref(archive.folder)
+    return Downloads(root).flash_staging_of(archive.folder)
 
 
 def needs_cutting(archive: Archive, limit: int = LIMIT) -> bool:
@@ -102,13 +101,7 @@ def note_flash_link(archive: Archive, started: StartedTransfer) -> None:
 def remove_staging(archive: Archive, root: Path) -> None:
     """Remove the archive's staging folder (its flash transfer is uploaded or given up on);
     nothing happens when there is none."""
-    try:
-        staging = staging_folder(archive, root)
-    except ValueError:
-        return
-    if staging.exists():
-        shutil.rmtree(staging, ignore_errors=True)
-        _remove_empty_parents(staging, Downloads(root).flash_staging)
+    Downloads(root).remove_flash_staging(archive.folder)
 
 
 def remove_leftover_staging(root: Path, keep: Iterable[Path] = ()) -> None:
@@ -116,48 +109,10 @@ def remove_leftover_staging(root: Path, keep: Iterable[Path] = ()) -> None:
     folders in `keep` (a flash transfer still uploading): when the service starts, the
     others were left by a kill."""
     downloads = Downloads(root)
-    place = downloads.flash_staging
-    if not place.exists():
+    if not downloads.flash_staging.exists():
         return
-    kept: set[str] = set()
-    for folder in keep:
-        try:
-            kept.add(downloads.ref(folder))
-        except ValueError:
-            continue
-    if kept:
-        _remove_all_but(place, place, kept)
-    else:
-        shutil.rmtree(place, ignore_errors=True)
-    log.info("removed flash transfer files left over from a kill, kept %d staging folder(s)", len(kept))
-
-
-def _remove_all_but(folder: Path, place: Path, kept: set[str]) -> None:
-    """Remove everything in `folder` but the staging folders `kept` (references relative to
-    `place`) and the folders that lead to them; a folder left empty goes too."""
-    for entry in list(folder.iterdir()):
-        ref = entry.relative_to(place).as_posix()
-        if ref in kept:
-            continue
-        if entry.is_dir() and any(k.startswith(ref + "/") for k in kept):
-            _remove_all_but(entry, place, kept)
-            if not any(entry.iterdir()):
-                entry.rmdir()
-        elif entry.is_dir():
-            shutil.rmtree(entry, ignore_errors=True)
-        else:
-            entry.unlink(missing_ok=True)
-
-
-def _remove_empty_parents(folder: Path, place: Path) -> None:
-    """Remove the folders between `folder` and `place` (`place` included) that are empty."""
-    for parent in [*folder.parents]:
-        if not parent.is_relative_to(place):
-            break
-        try:
-            parent.rmdir()
-        except OSError:  # not empty, or already gone
-            break
+    kept = downloads.remove_flash_staging_but(keep)
+    log.info("removed flash transfer files left over from a kill, kept %d staging folder(s)", kept)
 
 
 def ffmpeg_tools(setting: str | None) -> tuple[str, str]:
