@@ -2,8 +2,11 @@
 
     配信者 | 日期 | 项目类型 | 闪传链接
     森野鈴 | 2026/11/5 | 录播 | 今日はのんびり雑談するよ〜（有效至 2026/12/23）⏎ 全部下载 (the link)
+    森野鈴 | 2026/11/6 | 录播 | 歌枠リレー（有效至 2026/11/20）⏎ 闪传链接 (the link)
 
-The link cell never shows the address: the address is behind its label.
+The link cell never shows the address: the address is behind its label. A 录播 row holds
+the short download link or the flash link, whichever the live's message gave; either way it
+is the live's one 录播 row (the record of rows written does not tell them apart).
 """
 
 from __future__ import annotations
@@ -27,11 +30,12 @@ HEADERS = (STREAMER, DATE, KIND, LINK)
 class RowKind(StrEnum):
     """What a row holds, as written under 项目类型."""
 
-    ARCHIVE = "录播"  # the archive's short download link
+    ARCHIVE = "录播"  # the archive's short download link or its flash link
     DRIVE_COPY = "网盘"  # the drive copy's drive link
 
 
 LABELS = {RowKind.ARCHIVE: "全部下载", RowKind.DRIVE_COPY: "网盘链接"}  # the text the link sits behind
+FLASH_LABEL = "闪传链接"  # what a 录播 row's flash link sits behind, in place of 全部下载
 
 
 @dataclass(frozen=True)
@@ -42,9 +46,17 @@ class SheetRow:
     streamer: str  # the streamer's roster name
     date: str  # the archive's date, `YYYYMMDD` (its date folder)
     title: str  # the live's title
-    link: str = field(repr=False)  # the short download link or the drive link: never logged
-    expires: float | None = None  # when a short download link stops working (epoch seconds)
+    link: str = field(repr=False)  # the short download link, the flash link or the drive link: never logged
+    expires: float | None = None  # when a short download link or a flash link stops working (epoch seconds)
     stream_id: str = ""  # with the streamer, tells lives apart (the record of rows written)
+    # A 录播 row's link is the flash link, not the short download link. A job saved before
+    # flash links existed has no such field: it holds a short download link.
+    flash: bool = False
+
+    @property
+    def label(self) -> str:
+        """The text the link sits behind."""
+        return FLASH_LABEL if self.flash else LABELS[self.kind]
 
     def cells(self) -> dict[str, CellValue]:
         """Each header's cell."""
@@ -52,7 +64,7 @@ class SheetRow:
         if self.expires is not None:
             first_line += f"（有效至 {slashed(datetime.fromtimestamp(self.expires, HONG_KONG).strftime('%Y%m%d'))}）"
         return {STREAMER: self.streamer, DATE: slashed(self.date), KIND: str(self.kind),
-                LINK: [Segment(first_line + "\n"), Segment(LABELS[self.kind], self.link)]}
+                LINK: [Segment(first_line + "\n"), Segment(self.label, self.link)]}
 
 
 def slashed(date: str) -> str:
