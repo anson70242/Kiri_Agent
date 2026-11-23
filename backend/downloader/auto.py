@@ -1099,7 +1099,7 @@ def flash_given_up_message(job: Job, output_dir: Path) -> str:
         f"日期：{live_date(video)}",
         f"直播：{s.title or '（无标题）'}",
         f"原因：{reason}",
-        f"手动做闪传：`{FLASH_UPLOAD_COMMAND} \"{Downloads(output_dir).ref(video.parent)}\"`",
+        f"手动做闪传：`{FLASH_BY_HAND_COMMAND} \"{Downloads(output_dir).ref(video.parent)}\"`",
     ])
 
 
@@ -1128,7 +1128,7 @@ FLASH_WAIT_LOOK = 60
 FLASH_STALL = STALL_SECONDS
 # What the owner runs on the server to make a flash transfer given up on by hand (the alert
 # adds the archive's folder reference).
-FLASH_UPLOAD_COMMAND = "docker compose exec kiri /app/.venv/bin/python -m backend.flash upload"
+FLASH_BY_HAND_COMMAND = "docker compose exec kiri /app/.venv/bin/python -m backend.flash upload"
 ADDRESS = re.compile(r"https?://\S+")  # left out of the reason an alert tells: it carries no link
 REASON_KEPT = 500  # characters of a reason an alert tells
 SHEET_LABEL = "腾讯文档路灯表"
