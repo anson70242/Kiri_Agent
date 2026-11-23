@@ -160,6 +160,18 @@ def zip_contents(archive: Archive) -> tuple[list[Path], dict[str, bytes]]:
     return files, extra
 
 
+def full_contents(archive: Archive) -> tuple[list[Path], dict[str, bytes]]:
+    """What a drive copy and a flash transfer hold: what the "全部下载" zip holds
+    (`zip_contents`) plus the highlight table as the Excel sheet the dashboard's Excel
+    download makes (left out when missing or damaged)."""
+    files, extra = zip_contents(archive)
+    try:
+        extra[highlights_xlsx_name(archive)] = highlights_xlsx(archive.read_highlights())
+    except (ArtifactMissing, ArtifactDamaged):
+        pass
+    return files, extra
+
+
 def highlights_xlsx_name(archive: Archive) -> str:
     """The Excel download's file name: the highlight table's own stem + `.highlights.xlsx`."""
     return Artifact.HIGHLIGHTS.stem_of(archive.require(Artifact.HIGHLIGHTS).name) + ".highlights.xlsx"

@@ -131,6 +131,7 @@ DOWNLOADING_SUFFIX = ".part"  # a download in progress (the video, or Twitch raw
 SAVING_SUFFIX = ".tmp"  # an artifact being saved by a stage: never a download in progress
 DRIVE_COPIES_FOLDER = ".drive_copies"  # under the downloads root: drive copy zips being uploaded
 GROUP_FILES_FOLDER = ".group_files"  # under the downloads root: group files between QQ and the drive
+FLASH_STAGING_FOLDER = ".flash_staging"  # under the downloads root: files made for flash transfers
 
 
 @dataclass(frozen=True)
@@ -456,13 +457,24 @@ class Downloads:
         drive copies, outside every archive, never listed as an archive."""
         return self.root / GROUP_FILES_FOLDER
 
+    @property
+    def flash_staging(self) -> Path:
+        """Where the files a flash transfer needs and no archive holds (subtitles, the
+        highlight table's sheet, the parts of a cut video) wait until it is uploaded: on the
+        downloads volume, which the flash service sees, outside every archive, never listed
+        as an archive. One folder per archive below it, at the archive's folder reference."""
+        return self.root / FLASH_STAGING_FOLDER
+
     def list(self) -> list[Archive]:
         """Every `<creator>/<date>/<title>/` archive, newest first by date, then by when a file
-        in it last changed. Folders that vanish while being listed are skipped."""
+        in it last changed. Folders that vanish while being listed are skipped, and
+        dot-folders (such as FLASH_STAGING_FOLDER) are not looked into."""
         if not self.root.is_dir():
             return []
         archives = []
         for folder in self.root.glob("*/*/*"):
+            if any(part.startswith(".") for part in folder.relative_to(self.root).parts):
+                continue
             if folder.is_dir():
                 try:
                     archives.append(Archive.from_folder(folder, self.root))

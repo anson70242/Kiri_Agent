@@ -18,9 +18,8 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from backend.archive import Archive, ArtifactDamaged, ArtifactMissing, Downloads
-from backend.monitor.archives import highlights_xlsx_name, stream_zip, zip_contents
-from backend.sheet import highlights_xlsx
+from backend.archive import Archive, Downloads
+from backend.monitor.archives import full_contents, stream_zip
 
 log = logging.getLogger(__name__)
 
@@ -46,11 +45,7 @@ def drive_copy(archive: Archive, root: Path) -> Iterator[Path | None]:
     place.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(dir=place))  # its own folder: the zip keeps the archive's name
     try:
-        files, extra = zip_contents(archive)
-        try:
-            extra[highlights_xlsx_name(archive)] = highlights_xlsx(archive.read_highlights())
-        except (ArtifactMissing, ArtifactDamaged):
-            pass
+        files, extra = full_contents(archive)
         zip_path = work / name
         with zip_path.open("wb") as out:
             for chunk in stream_zip(files, extra):
