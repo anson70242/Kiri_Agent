@@ -128,12 +128,14 @@ class AccountState:
 @dataclass(frozen=True)
 class StartedTransfer:
     """A flash transfer the flash service has started: its id (to ask for its progress), its
-    flash link and when the link expires (with a time zone). The link is left out of the
-    text of this object, so that logging one never logs the link."""
+    flash link, when the link expires and when the transfer was started (both with a time
+    zone). The link is left out of the text of this object, so that logging one never logs
+    the link."""
 
     id: str
     link: str = field(repr=False)
     expires: datetime
+    made: datetime
 
 
 @dataclass(frozen=True)
@@ -207,7 +209,7 @@ class FlashClient:
         if transfer_id in (None, "") or not isinstance(link, str) or not link:
             raise FlashFailed("闪传服务没有给出闪传的编号和链接")
         return StartedTransfer(str(transfer_id), link,
-                               _expiry(result.get("expireTime")) or made + timedelta(seconds=VALIDITY_SECONDS))
+                               _expiry(result.get("expireTime")) or made + timedelta(seconds=VALIDITY_SECONDS), made)
 
     def progress(self, transfer_id: str) -> Progress:
         """The progress of the flash transfer `transfer_id`. FlashUnavailable while the account

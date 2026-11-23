@@ -1,13 +1,14 @@
 """The files of a flash transfer: what an archive's flash transfer sends, and the staging
 folder the files no archive holds are written into.
 
-    from backend.flash.files import needs_cutting, prepare, remove_staging
+    from backend.flash.files import needs_cutting, note_flash_link, prepare, remove_staging
 
     if needs_cutting(archive):       # preparing will run ffmpeg (minutes): mark the job busy
         ...
     prepared = prepare(archive, downloads_root, ffmpeg=settings.ffmpeg)
-    client.start(prepared.files, prepared.name)
-    ...
+    started = client.start(prepared.files, prepared.name)
+    ...                              # client.progress(started.id) until finished
+    note_flash_link(archive, started)
     remove_staging(archive, downloads_root)   # once uploaded, or given up on
 
 A flash transfer holds what a drive copy holds (`backend.monitor.archives.full_contents`),
@@ -26,10 +27,10 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
-from backend.archive import Archive, Artifact, Downloads
+from backend.archive import Archive, Artifact, Downloads, FlashLink
 from backend.monitor.archives import full_contents
 
-from .client import FlashFailed
+from .client import FlashFailed, StartedTransfer
 from .cut import CUTTING_SIZE, LIMIT, CutError, cut
 
 log = logging.getLogger(__name__)
@@ -90,6 +91,12 @@ def prepare(archive: Archive, root: Path, *, ffmpeg: str | None = None, limit: i
         shutil.rmtree(staging, ignore_errors=True)
         raise FlashFailed(f"准备闪传的文件失败：{e}") from None
     return TransferFiles(archive.stem, sent)
+
+
+def note_flash_link(archive: Archive, started: StartedTransfer) -> None:
+    """Note the started flash transfer's flash link in the archive (once it is uploaded), so
+    that the archive's page shows it until it expires."""
+    archive.save(Artifact.FLASH_LINK, FlashLink(started.link, started.expires, started.made))
 
 
 def remove_staging(archive: Archive, root: Path) -> None:
