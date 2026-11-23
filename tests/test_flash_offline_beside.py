@@ -96,13 +96,13 @@ def test_a_waiting_job_is_not_marked_as_being_cut_only_its_try_after_the_scan_is
     rewrite_queue(tmp_path, lambda job: job.update(next_try=0))  # its minute is over
     seen: list[tuple[str, list[bool]]] = []
     video_over_the_limit(monkeypatch, lambda: seen.append(("cutting", marks(ad))))
-    account = flash.account
+    asking = flash.require_online
 
     def looking():
         seen.append(("account", marks(ad)))
-        return account()
+        return asking()
 
-    flash.account = looking
+    flash.require_online = looking
     run_until(ad, lambda: flash.accounts >= 2)  # a look while it waits
     assert seen == [("account", [False])]
 

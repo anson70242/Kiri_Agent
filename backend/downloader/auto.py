@@ -609,11 +609,11 @@ class AutoDownloader:
         started = job.transfer
         try:
             if started is None:
-                # Nothing is prepared or cut before the account is known to be online. A job
-                # that waited, or one beside a started flash transfer that waits, only finds
-                # the account back here: its next try (the busy mark set) prepares.
-                if (state := self.flash.account().state) != "online":
-                    return self._flash_offline(job, archive, ACCOUNT_OFFLINE[state])
+                # Nothing is prepared or cut before the account is known to be online (asked of
+                # the flash service alone: never the login interface, which only the 通知 page
+                # uses). A job that waited, or one beside a started flash transfer that waits,
+                # only finds the account back here: its next try (the busy mark set) prepares.
+                self.flash.require_online()
                 if self._looks_only(job, self.load()):
                     return Outcome("wait", "闪传账号已恢复", retry_at=self.clock(), online=True)
                 prepared = prepare(archive, root, ffmpeg=self.settings.ffmpeg)
@@ -1278,8 +1278,6 @@ FLASH_STALL = STALL_SECONDS
 FLASH_OFFLINE_LOOK = 60
 FLASH_OFFLINE_GIVE_UP = 72 * 3600
 FLASH_REMINDER_EVERY = 24 * 3600
-# The reason a waiting flash job notes, from the account's state.
-ACCOUNT_OFFLINE = {"offline": "闪传账号掉线", "unreachable": "连不上闪传服务"}
 # What the owner runs on the server to make a flash transfer given up on by hand (the alert
 # adds the archive's folder reference).
 FLASH_BY_HAND_COMMAND = "docker compose exec kiri /app/.venv/bin/python -m backend.flash upload"
