@@ -3,7 +3,6 @@ the TwitCasting cookies file is present. Run with: uv run pytest -m network"""
 
 import asyncio
 import json
-import os
 import re
 from collections import Counter
 from pathlib import Path
@@ -120,24 +119,18 @@ def test_twitcasting_offline_channel_is_offline():
     assert st.avatar
 
 
-# A published TwitCasting replay, `https://twitcasting.tv/<id>/movie/<number>`: named in the
-# environment, not here (the repository does not say whose lives its owner follows).
-PUBLISHED_REPLAY = os.environ.get("KIRI_TEST_TWITCASTING_REPLAY", "")
+PUBLISHED_REPLAY = "https://twitcasting.tv/shino_nome22/movie/841887581"  # published on 2026-11-13
 
 
 def test_twitcasting_published_replay_metadata_with_the_cookies_file():
     """Reads (never downloads) a published replay with the owner's login. Skipped without
-    the cookies file (CI has none) or without a replay named in KIRI_TEST_TWITCASTING_REPLAY.
-    yt-dlp writes refreshed cookies back to the file."""
-    if not PUBLISHED_REPLAY:
-        pytest.skip("no replay named in KIRI_TEST_TWITCASTING_REPLAY")
-    channel, movie = re.fullmatch(r"https://twitcasting\.tv/([^/]+)/movie/(\d+)", PUBLISHED_REPLAY).groups()
+    the cookies file (CI has none). yt-dlp writes refreshed cookies back to the file."""
     settings, streamers = load_settings(CONFIG)
     cookies = settings.twitcasting_cookies_file
     if not (cookies and cookies.is_file()):
         pytest.skip(f"no TwitCasting cookies file at {cookies}")
     info = downloader_for(PUBLISHED_REPLAY, settings, streamers).info(PUBLISHED_REPLAY)
     print(info)
-    assert (info.platform, info.id, info.channel) == ("twitcasting", movie, channel)
+    assert (info.platform, info.id, info.channel) == ("twitcasting", "841887581", "shino_nome22")
     assert re.fullmatch(r".+ \d{6}", info.title) and " / " not in info.title
     assert info.duration and info.duration > 60
