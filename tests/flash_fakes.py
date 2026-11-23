@@ -10,7 +10,10 @@ service gave on 2026-11-23; ids, codes and addresses are made up.
         service.actions                           # every action frame received, in order
         service.login_calls                       # (path, Authorization header, body) per HTTP call
 
-Ticket 07 adds its actions to `answers` (an answer is the frame without its echo).
+A flash transfer (`create_flash_task`, `get_fileset_info`) answers by default:
+
+        service.created                           # the params of every create_flash_task, in order
+        service.progress = [fileset(...), ...]    # one per get_fileset_info, the last repeated
 """
 
 from __future__ import annotations
@@ -32,6 +35,15 @@ CREDENTIAL = "made-up-credential-0123456789"
 QR_CODE = "https://qr.example/login?k=made-up-qr-0001"
 NEW_QR_CODE = "https://qr.example/login?k=made-up-qr-0002"
 GROUP_TEXT = "群里的一句话：今晚八点开播"  # inside an event frame: never read, never logged
+FILESET_ID = "made-up-fileset-7f3a"
+FLASH_LINK = "https://flash.example/q/MadeUpLink7f3a"
+EXPIRE_TIME = 1_796_400_000  # 2026-12-04 16:00 UTC, in seconds (the unit is a guess: not recorded)
+
+
+def fileset(sent: int, total: int, *, done: int = 0, failed: int = 0, finished: bool = False) -> dict[str, Any]:
+    """get_fileset_info's `data.fileSet`: uploadStatus 2 while uploading, 4 when done."""
+    return {"fileSetId": FILESET_ID, "totalFileSize": total, "uploadStatus": 4 if finished else 2,
+            "uploadInfo": {"totalUploadedFileSize": sent, "successCount": done, "failedCount": failed}}
 
 # Frames the flash service sends on its own: the client drops them unread.
 EVENTS: list[str] = [
@@ -65,7 +77,10 @@ class FakeFlashService:
         self.login_error = ""  # data.loginError
         self.login_hash = LOGIN_HASH
         self.events = list(EVENTS)
-        self.answers: dict[str, Answer] = {"get_status": lambda params: {"data": {"online": self.online, "good": True}}}
+        self.answers: dict[str, Answer] = {"get_status": lambda params: {"data": {"online": self.online, "good": True}},
+                                           "create_flash_task": self._create, "get_fileset_info": self._fileset_info}
+        self.created: list[dict[str, Any]] = []
+        self.progress: list[dict[str, Any]] = [fileset(100, 100, done=1, finished=True)]
         self.actions: list[dict[str, Any]] = []
         self.login_calls: list[tuple[str, str | None, Any]] = []
         self.qr_refreshes = 0
@@ -119,6 +134,18 @@ class FakeFlashService:
             for event in self.events:
                 connection.send(event)
             connection.send(json.dumps({**body, "echo": frame.get("echo")}, ensure_ascii=False))
+
+    def _create(self, params: dict[str, Any]) -> dict[str, Any]:
+        self.created.append(params)
+        return {"status": "ok", "retcode": 0, "message": "",
+                "data": {"createFlashTransferResult": {"fileSetId": FILESET_ID, "shareLink": FLASH_LINK,
+                                                       "expireTime": EXPIRE_TIME}}}
+
+    def _fileset_info(self, params: dict[str, Any]) -> dict[str, Any]:
+        if params.get("fileset_id") != FILESET_ID:
+            return {"status": "failed", "retcode": 1200, "data": None, "message": "文件集不存在"}
+        step = self.progress.pop(0) if len(self.progress) > 1 else self.progress[0]
+        return {"status": "ok", "retcode": 0, "message": "", "data": {"fileSet": step}}
 
     # ---- the login interface (HTTP) ----
 

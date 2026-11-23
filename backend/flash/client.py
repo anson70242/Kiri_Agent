@@ -23,7 +23,8 @@ import urllib.error
 import urllib.request
 import uuid
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
@@ -40,6 +41,13 @@ DOWNLOADS_PATH_ENV = "FLASH_DOWNLOADS_PATH"
 DEFAULT_DOWNLOADS_PATH = "/data/downloads"
 
 ACTION_TIMEOUT = 30.0  # seconds for an action's answer, connecting included
+# How long a flash link works: 14 days, the owner's choice (QQ also offers 90 and 180).
+# Not a setting; create_flash_task needs it with every flash transfer.
+VALIDITY_SECONDS = 14 * 24 * 3600
+# An upload whose bytes sent have not moved for this long is taken as hung: on the server a
+# 7.7 GB video went up in five minutes, so half an hour without a byte is no slow line.
+STALL_SECONDS = 30 * 60
+UPLOADED = 4  # a file set's uploadStatus once every file is up (2 while uploading)
 LOGIN_TIMEOUT = 15.0  # seconds for one call of the login interface
 
 # The login interface is called with the standard library, which writes no request log (the
@@ -117,6 +125,29 @@ class AccountState:
     missing: str = ""
 
 
+@dataclass(frozen=True)
+class StartedTransfer:
+    """A flash transfer the flash service has started: its id (to ask for its progress), its
+    flash link and when the link expires (with a time zone). The link is left out of the
+    text of this object, so that logging one never logs the link."""
+
+    id: str
+    link: str = field(repr=False)
+    expires: datetime
+
+
+@dataclass(frozen=True)
+class Progress:
+    """A flash transfer's progress: bytes sent and in all, files done and failed, and whether
+    the flash service says it is finished (a finished transfer may still have failed files)."""
+
+    sent: int
+    total: int
+    done: int
+    failed: int
+    finished: bool
+
+
 class FlashClient:
     """The flash service, for this service's downloads folder `downloads`. Every call blocks
     (one connection per call, at most ACTION_TIMEOUT or LOGIN_TIMEOUT per round trip): the
@@ -161,6 +192,34 @@ class FlashClient:
         the flash service cannot be reached (wait); FlashFailed for anything else."""
         if self._action("get_status", {}).get("online") is not True:
             raise FlashUnavailable("闪传账号掉线")
+
+    def start(self, files: list[Path], name: str) -> StartedTransfer:
+        """Starts one flash transfer of `files` (under the downloads folder) named `name`; the
+        upload goes on in the flash service. FlashUnavailable while the account is offline or
+        the flash service cannot be reached (nothing is started); FlashFailed otherwise."""
+        paths = [self.flash_path(f) for f in files]
+        self.require_online()
+        made = datetime.now(timezone.utc)
+        data = self._action("create_flash_task", {"files": paths, "name": name, "validitySeconds": VALIDITY_SECONDS})
+        result = data.get("createFlashTransferResult")
+        result = result if isinstance(result, dict) else {}
+        transfer_id, link = result.get("fileSetId"), result.get("shareLink")
+        if transfer_id in (None, "") or not isinstance(link, str) or not link:
+            raise FlashFailed("闪传服务没有给出闪传的编号和链接")
+        return StartedTransfer(str(transfer_id), link,
+                               _expiry(result.get("expireTime")) or made + timedelta(seconds=VALIDITY_SECONDS))
+
+    def progress(self, transfer_id: str) -> Progress:
+        """The progress of the flash transfer `transfer_id`. FlashUnavailable while the account
+        is offline or the flash service cannot be reached; FlashFailed otherwise."""
+        self.require_online()
+        file_set = self._action("get_fileset_info", {"fileset_id": transfer_id}).get("fileSet")
+        if not isinstance(file_set, dict):
+            raise FlashFailed("闪传服务没有给出闪传的进度")
+        upload = file_set.get("uploadInfo") if isinstance(file_set.get("uploadInfo"), dict) else {}
+        return Progress(sent=_count(upload.get("totalUploadedFileSize")), total=_count(file_set.get("totalFileSize")),
+                        done=_count(upload.get("successCount")), failed=_count(upload.get("failedCount")),
+                        finished=_count(file_set.get("uploadStatus")) == UPLOADED)
 
     def refresh_qr_code(self) -> None:
         """Asks the flash service for a new QR code (the next `account()` gives it).
@@ -259,6 +318,25 @@ def _answer(frame: str | bytes, echo: str) -> dict[str, Any] | None:
     """The frame as the answer with this echo, or None for anything else (an event)."""
     value = _json(frame)
     return value if value is not None and value.get("echo") == echo else None
+
+
+def _count(value: Any) -> int:
+    """A number of the flash service's answer (an int, or digits as text); 0 for anything else."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _expiry(value: Any) -> datetime | None:
+    """A flash link's expiry as create_flash_task answers it: epoch seconds, or milliseconds
+    (the unit was not recorded), as a number or as digits; None when it is neither."""
+    seconds = _count(value)
+    if seconds <= 0:
+        return None
+    if seconds > 10**11:  # milliseconds: seconds this big are thousands of years away
+        seconds //= 1000
+    return datetime.fromtimestamp(seconds, timezone.utc)
 
 
 def _reason(answer: dict[str, Any]) -> str:
