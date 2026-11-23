@@ -24,7 +24,7 @@ import os
 import re
 import shutil
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -101,7 +101,7 @@ class FlashLink:
     """An archive's flash link: the address editors download its flash transfer from, until
     it expires. Both times carry a time zone."""
 
-    url: str  # the address
+    url: str = field(repr=False)  # the address, left out of the object's text so that logging one never logs it
     expires: datetime  # when the link stops working
     made: datetime  # when the flash transfer was started
 

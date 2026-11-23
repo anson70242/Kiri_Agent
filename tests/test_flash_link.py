@@ -121,3 +121,10 @@ def test_the_flash_link_is_in_no_log_line(root, caplog):
 
     assert caplog.records  # the prune was logged
     assert "flash.example" not in caplog.text
+
+
+def test_the_text_of_a_flash_link_object_leaves_its_address_out(caplog):
+    caplog.set_level(logging.DEBUG)
+    logging.getLogger("test").debug("noted %r and %s", LINK, LINK)
+
+    assert "flash.example" not in repr(LINK) + str(LINK) + caplog.text
