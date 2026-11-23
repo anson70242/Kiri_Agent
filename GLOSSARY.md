@@ -29,7 +29,7 @@ One live's folder on disk and everything in it (录播).
 _Avoid_: VOD folder, download, recording
 
 **Artifact**:
-One file of an archive: the video, raw chat, chat, transcript, Chinese transcript, highlight table or drive link.
+One file of an archive: the video, raw chat, chat, transcript, Chinese transcript, highlight table, drive link or flash link.
 _Avoid_: output, sidecar
 
 **Creator**:

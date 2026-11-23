@@ -140,6 +140,12 @@
 <script>
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+// An ISO time as the day it falls on in Hong Kong, without leading zeros (2026/12/7), as the sheet writes dates.
+const hkDay = iso => {
+  const p = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Hong_Kong", year: "numeric",
+    month: "numeric", day: "numeric" }).formatToParts(new Date(iso)).map(x => [x.type, x.value]));
+  return `${p.year}/${p.month}/${p.day}`;
+};
 const app = document.getElementById("app");
 
 function size(n) {
@@ -343,6 +349,7 @@ async function drawDetail(folder) {
         <div class="links">${links.map(([href, label]) => `<a href="${href}" download>⬇ ${label}</a>`).join("")}
           ${a.downloading ? "" : `<a class="all" href="/api/archives/zip?folder=${q}" download>⬇ 全部下载 (zip)</a>`}
           ${a.drive_link ? `<a href="${esc(a.drive_link.url)}" target="_blank" rel="noopener" title="提取码 ${esc(a.drive_link.code)}">☁ 网盘链接</a>` : ""}
+          ${a.flash_link ? `<a href="${esc(a.flash_link.url)}" target="_blank" rel="noopener" title="有效至 ${esc(hkDay(a.flash_link.expires))}">⚡ 闪传链接</a>` : ""}
           ${a.highlights_file ? `<a href="/highlights#${q}">🚦 看路灯表</a>` : ""}</div>
       </div>
       <div class="panel subs"><h3>字幕 <span class="meta" id="submeta"></span>
