@@ -19,9 +19,10 @@ How each part works, in detail: settings, files, rules and guarantees. For an ov
 | [Upload to Tencent Docs](#upload-to-tencent-docs) | Highlight table → one sub-sheet (formatted) in a Tencent Docs spreadsheet, set per streamer, uploaded automatically | Done |
 | [Drive copies on Quark](#drive-copies-on-quark) | Processed live → one zip (video, chat, SRT, highlight table) kept for good on a Quark cloud drive, with a drive link for the editors; set per streamer | Done |
 | [Group files to the drive](#group-files-to-the-drive) | A group file (posted in a QQ group) that a filing rule keeps, by the tag in its name (【待校】 and the like) → the rule's subfolder of the group folder on the same Quark drive; set per group. The bot answers two commands, `订阅` (subscriptions) and `帮助` (help) | Done |
+| [Flash transfers](#flash-transfers) | Processed live → its files on QQ's flash transfer (闪传), made by an outside flash service; 「全部处理完成」 (all processing done) and the source record sheet give its flash link (14 days) in place of the short download link; set per streamer | Done |
 | Google Sheets | The same upload, to Google Sheets instead | Planned |
 
-Each live goes through the steps in order: download → transcribe → analysis and translation side by side → upload → drive copy. Every step retries on failure and reports on Discord.
+Each live goes through the steps in order: download → transcribe → analysis and translation side by side → upload → drive copy and flash transfer side by side. Every step retries on failure and reports on Discord.
 
 ## Installation
 
@@ -262,14 +263,17 @@ A 5-hour live takes about 120,000 tokens. By hand: `uv run -m backend.translate 
   auto-upload of drive copies to Quark (自动上传到夸克网盘) and the drive folder, flash transfers (自动上传到 QQ 闪传; greyed out
   while no flash service is configured, and the API refuses to tick it then), and can delete the streamer.
   Settings that are on show on the card as ⬇ 自动下载 (auto-download) / ⬆ 自动上传 (auto-upload) / ☁ 网盘 (drive) / ⚡ 闪传 (flash transfer).
-- **录播** ([archives.html](../frontend/archives.html)): downloaded archives and their processing progress. Each one can be played,
+- **录播** ([archives.html](../frontend/archives.html)): downloaded archives and their processing progress (the queue box names each live's stage,
+  a flash transfer's as 「等待闪传上传」 (waiting for the flash upload) and then 「闪传上传 xx%」 while it uploads). Each one can be played,
   with Chinese (default) / Japanese subtitles, a 中 / 日 / 双语 subtitle panel, chat replay and a chat density chart. Downloads: video, chat,
   SRT (Chinese / Japanese), highlight table (Excel), or everything as one zip (without the raw chat); once the live's drive copy is on the drive,
-  「☁ 网盘链接」 (drive link) opens it there.
+  「☁ 网盘链接」 (drive link) opens it there, and once its flash transfer is uploaded, 「⚡ 闪传链接」 (flash link) opens the flash link until it expires
+  (see [Flash transfers](#flash-transfers)).
 - **路灯表** ([highlights.html](../frontend/highlights.html)): the highlight table of each archive, filterable by score, chat activity and
   「只看有切片」 (only rows with clips); topic logs can be expanded.
 - **通知** ([notify.html](../frontend/notify.html)): the status of the QQ bot and Discord, with test buttons; each QQ group's name,
-  on/off switch, subscribed streamers and notification types, and its two group-file switches (see [Group files to the drive](#group-files-to-the-drive)); the latest 50 sent messages.
+  on/off switch, subscribed streamers and notification types, and its two group-file switches (see [Group files to the drive](#group-files-to-the-drive)); the latest 50 sent messages;
+  and the block 「闪传账号」 (flash account): whether the flash account is online and, while it is not, the QR code to scan (see [Flash transfers](#flash-transfers)).
 - **用户** (users, [users.html](../frontend/users.html)): only when login is on, and only for admins; add accounts, reset passwords and disable accounts (see [Login](#login)).
 
 The Excel highlight table ([sheet.py](../backend/sheet.py)) is readable as soon as it is opened: the header row is frozen; the two columns for the content summary and the clip titles are wider, wrap text and
@@ -316,9 +320,11 @@ On the 通知 page, paste the address of one tab of it (`docs.qq.com/sheet/…?t
 When a live of a streamer ticked for that group is fully processed and 「全部处理完成」 goes out, the service adds a 录播 row to that tab: the sheet's third row
 (the first two stay on top), merged like the row below it, with the streamer, the archive's date (`2026/11/5`), 录播, and the live's title with the short download link's expiry,
 then the label 「全部下载」 linking to the message's short download link, under the headers 配信者, 日期, 项目类型 and 闪传链接. The address itself is never shown in the sheet.
+For a live whose message gave its flash link (see [Flash transfers](#flash-transfers)), that 录播 row holds the flash link instead: the title with the flash link's expiry,
+then the label 「闪传链接」 linking to it. A live gets one 录播 row a tab, with whichever link its message gave, never one of each.
 When that live's drive copy is uploaded and 「网盘上传完成」 goes out with a drive link (also after a retry), a second row is added the same way, with 网盘 and the live's title (no expiry),
 then the label 「网盘链接」 linking to the drive link with its extraction code inside; an upload without a drive link, or a streamer without drive copies, gets no 网盘 row.
-Only the field and the ticked streamer count (not the group's switch or notification types); a group the bot was removed from gets nothing, and so does a live whose message has no link (no `SITE_URL`).
+Only the field and the ticked streamer count (not the group's switch or notification types); a group the bot was removed from gets nothing, and so does a live whose message has no link (no `SITE_URL` and no flash link).
 Rows are written one at a time beside the pipeline, which never waits for them; the log names the group, streamer, live and kind of a row, never its link.
 A row that cannot be written is tried again with the pipeline's retry settings (`download.auto.retry_minutes` and `max_errors`: three tries, fifteen minutes apart);
 after the last, or at once when the tab lacks one of the four headers, it is given up on and the owner gets one Discord alert naming the group, the streamer,
@@ -337,7 +343,8 @@ each live is also kept for good on the owner's Quark cloud drive: once it is ful
 is uploaded into the streamer's drive folder (written in the gear, counted from the top of the drive; blank means `录播/<主播>`, the streamer's name as their archives' folder has it; a missing folder is created).
 Then a drive link is made: a Quark share address with its extraction code inside, which does not expire.
 
-- 「全部处理完成」 (all processing done) does not wait for the upload: it goes out with the site's own links, as for any streamer.
+- 「全部处理完成」 (all processing done) does not wait for the upload: it goes out with the site's own links, as for any streamer
+  (with the flash link when the streamer also has flash transfers: then it waits for the flash transfer, never for the drive copy).
   Only a chat that is still being fetched holds it back (and the upload with it), until the chat is in or given up on.
   When the upload ends, ☁️ 「网盘上传完成」 (drive upload done) brings the drive link, and the archive's page shows 「☁ 网盘链接」 (drive link).
   A QQ group gets that message only when it ticks 「网盘上传完成」 on the 通知 page.
@@ -382,6 +389,107 @@ With the first on, a group file (a file posted in the group, in the chat or in i
 
 The code is in [backend/group_files](../backend/group_files). For turning it on, see 「群文件上传到夸克网盘」 in [docs/deploy.md](deploy.md) (in Chinese).
 
+## Flash transfers
+
+A **flash transfer** (闪传) is the files of one archive put on QQ's flash transfer, for the streamers whose gear ⚙ ticks 「自动上传到 QQ 闪传」 (auto-upload to QQ flash transfer).
+Its **flash link** (闪传链接) is the address editors download it from: served by Tencent's own storage, fast for any QQ user in mainland China without a membership,
+and it expires after 14 days (a constant, not a setting). For such a streamer, 「全部处理完成」 (all processing done) and the source record sheet give the flash link
+in place of the short download link. The box is independent of the drive box: a streamer can have a flash transfer, a drive copy, both or neither.
+
+Flash transfers are made by **the flash service**: an outside service the owner runs beside this one, logged in with the **flash account** (闪传账号), a QQ account of the owner's.
+It is not part of this repository and is not described here; why the feature works this way, and what it risks, is in
+[ADR 0003](adr/0003-flash-transfers-through-an-outside-qq-client-service.md). This service calls three of its actions over a WebSocket
+(`get_status`, `create_flash_task`, `get_fileset_info`), and its login interface (HTTP) only for the 通知 page's QR code. Every other frame the flash service sends is dropped unread,
+so nothing the flash account receives (a group's message) is read, stored or logged; and the flash account posts nothing anywhere.
+The client, the only code that knows how the flash service is spoken to, is [backend/flash/client.py](../backend/flash/client.py);
+the flash stage is in [auto.py](../backend/downloader/auto.py).
+
+**Settings.** All in the server's `.env` (see [.env.example](../.env.example)), none in `config.json`, which is public and built into the image:
+
+| Variable | What it is |
+| --- | --- |
+| `FLASH_ACTIONS_URL` | The address of the flash service's actions (`ws://…`). Without it the feature is off: the gear's box is greyed out with 「未设置闪传服务，不能开启」 (no flash service set up) and the streamers API refuses to tick it (422), and everything behaves as before |
+| `FLASH_LOGIN_URL` | The address of its login interface (`http://…`) |
+| `FLASH_LOGIN_HASH` | What the login interface expects in place of its token (not the token itself) |
+| `FLASH_DOWNLOADS_PATH` | How the flash service sees this service's downloads folder; default `/data/downloads` |
+
+Without `FLASH_LOGIN_URL` or `FLASH_LOGIN_HASH`, the account is known only as online or offline (from `get_status`) and the 通知 page shows no QR code, with a line naming the missing setting.
+The flash service reads the files from the same downloads volume (read-only is enough). Setting it up: 「QQ 闪传」 in [docs/deploy.md](deploy.md) (in Chinese).
+
+**What is transferred.** What a drive copy holds, as separate files, nothing zipped: the video, the cleaned chat, the Chinese and Japanese transcripts as SRT and the highlight table as Excel,
+each left out when the archive lacks it (the raw chat and the JSON files stay out). The flash transfer is named like the archive, `[20261122][森野鈴] 标题`.
+The video and the chat are sent from where they are; the SRT and Excel files and a cut video's parts are written into the archive's staging folder,
+`.flash_staging/<主播>/<YYYYMMDD>/<标题>/` under the downloads folder (never listed as an archive), which is removed once the flash transfer is uploaded or given up on.
+When the service starts, it removes every staging folder left by a kill, except that of a flash transfer already started.
+
+**A video too big for one file.** One file of a flash transfer may be at most 10 GB (QQ's limit). A bigger video is cut with ffmpeg, by stream copy (no re-encoding, minutes of work),
+into the fewest parts of equal length whose expected size is under 9.5 GB; each part begins at a key frame and plays by itself. A part that still comes out over 10 GB (an uneven bit rate)
+makes the cutting start again with one part more, up to three more. Each part is named with its number, the count and where in the live it begins and ends, read from the parts made
+(dots in place of colons, which a file name cannot hold): `[20261122][森野鈴] 标题 (2／3 03.12.45–06.20.10).mp4`. A video at or under 10 GB goes up as it is.
+
+**The message, the sheet and the page.**
+
+- When nothing but the drive copy is left for a live of a ticked streamer, and a flash service is configured, a flash job is queued (in the same save as the drive job).
+  The tick counts when the live's processing ends: unticking leaves the flash links already made, and a flash job already queued goes on.
+- The flash job waits for a late chat as 「全部处理完成」 does, then prepares the files, starts the flash transfer (its id, flash link and expiry are kept in the job in
+  `data/download_queue.json`) and asks for its progress every 10 seconds. A 7.7 GB video took about five minutes from the server.
+- Once uploaded, the flash link is noted in the archive (`<stem>.flash_link.json`: the link, its expiry, when the transfer was made), and 「全部处理完成」 goes out with
+  「闪传链接（影片、弹幕、中日字幕 SRT、路灯表）」 (flash link: video, chat, SRT, highlight table) in place of 「全部下载」, then 「录播页面」 (archive page, only with `SITE_URL`),
+  and the line `闪传链接有效至 2026/12/7` (the flash link works until, the day in Hong Kong time). The rest of the message is unchanged. No short download link is made for that live.
+  There is no separate notification type: a group gets this message only when it ticks 全部处理完成, as before.
+- The source record sheet's 录播 row holds the flash link behind 「闪传链接」, with its expiry (see [Source record sheets](#source-record-sheets)); the 网盘 row is as before.
+  Without `SITE_URL` the message still carries the flash link, and the sheet is told it.
+- The archive's page shows 「⚡ 闪传链接」 until it expires (its expiry on hover); the archives API gives `flash_link` (`{url, expires, made}`) until then and `null` after.
+  The page's own 全部下载 zip stays.
+- The drive copy does not wait for the flash transfer: its upload hours and 「网盘上传完成」 (drive upload done) are as before. A drive copy that ends first sends only 「网盘上传完成」;
+  「全部处理完成」 is the flash job's to send.
+- One flash transfer at a time, in the order the lives were processed. An archive is not deleted from the server (see `keep`) while its flash job is in the queue.
+
+**When it fails.** A try fails when the flash service refuses or answers an error, a file fails, the bytes sent do not move for 30 minutes, or the files cannot be prepared or cut.
+It is tried again with the pipeline's retry settings (`download.auto.retry_minutes` and `max_errors`: three tries, fifteen minutes apart), each try a new flash transfer;
+a failing one waits for its next try without holding back other lives. After the last try, 「全部处理完成」 goes out as for a streamer without flash transfers
+(the short download link; the sheet is told it), and the owner gets one Discord alert: the streamer, the live's date and title, the reason (without any address),
+and the command that makes the flash transfer by hand. No QQ group is told. A flash job whose flash service is no longer configured after a restart is dropped the same way, without the alert.
+
+**When the flash account is offline.** An offline flash account and a flash service that cannot be reached are one case (they cannot be told apart from here). The flash job waits:
+neither a try nor an error, and nothing is prepared or cut before the account is online. It is looked at every minute.
+The owner gets a Discord alert when the first live starts to wait, 「闪传账号掉线或闪传服务连不上」 (flash account offline or flash service unreachable) with how many lives wait
+and the 通知 page's address (with `SITE_URL`), and again every 24 hours while any live waits, never more often; one alert covers every waiting live. No QQ group is told.
+After the scan nothing more is needed: the first look that finds the account online ends every live's waiting, and they go on one at a time in their order
+(a flash transfer started before the account went offline goes on by its id), each with its own 「全部处理完成」 and flash link.
+A live that has waited 72 hours since it first found the account offline in that outage is given up on: 「全部处理完成」 with the short download link, the sheet told it,
+and no alert of a failure (the reminders said why). A restart keeps the waiting time and the time of the last reminder.
+
+**The 「闪传账号」 block** on the 通知 page (admins only, like the rest of the page) shows the state, 在线 / 掉线 / 连不上闪传服务 / 未设置 (online / offline / unreachable / not set up),
+the flash service's own error text, a missing setting, and how many lives wait for the account. While the account is offline it shows the QR code to scan with mobile QQ,
+drawn by the backend (with [segno](https://pypi.org/project/segno/)), and a button 「刷新二维码」 (new QR code); while it shows a QR code it asks again every 3 seconds, so it turns to 在线 by itself after the scan.
+
+- `GET /api/notify/flash` → `{state: online | offline | unreachable | unconfigured, qr_image (a data: URI, only while offline), error, missing, waiting}`.
+  A flash service that answers with an error counts as `unreachable`, with its words in `error`.
+- `POST /api/notify/flash/qr-code` asks for a new QR code and answers as the GET; 404 without a flash service, 503 when the login interface cannot be reached,
+  502 when it refuses (as it does while the account is logged in) or is not set up.
+
+**Restarts and deploys.** The upload runs in the flash service, so a restart does not interrupt it: the flash job asks for its progress again by the id kept in the queue,
+and never starts it a second time. A flash job without an id prepares its files again. A deploy waits only while a video is being cut for a flash transfer (a restart would start the cutting over);
+an uploading or waiting flash transfer never holds a deploy. The deploy check prints `闪传：N 个任务，M 个正在切分影片，K 个在等闪传账号（只有正在切分的会挡住部署）。`
+(flash: N jobs, M cutting a video, K waiting for the flash account; only cutting holds a deploy).
+
+A flash link, a QR code's text, the login hash and the flash service's addresses are never written to the log. The flash link is kept in the queue while its job is there,
+then in the archive's flash link file (and in `data/source_record_jobs.json` until its row is written).
+
+**By hand** ([backend/flash/\_\_main\_\_.py](../backend/flash/__main__.py)):
+
+```sh
+docker compose exec kiri /app/.venv/bin/python -m backend.flash status                         # 闪传账号在线吗
+docker compose exec kiri /app/.venv/bin/python -m backend.flash upload "森野鈴/20261122/标题"   # 给一场录播做闪传
+```
+
+(The comments mean: is the flash account online; make the flash transfer of one archive.)
+`status` prints the account's state in one line (exit code 0 online, 1 otherwise). `upload` takes an archive's folder, or its folder reference under the downloads folder;
+it prepares the files (cutting a video too big for one file), starts the flash transfer, waits for it while printing its progress, notes the flash link in the archive
+(its page shows 「⚡ 闪传链接」) and prints the flash link with its expiry. It tells no group and writes no sheet row; exit code 1 when the flash transfer could not be made.
+Both exit with 2 when no flash service is configured. Only lives processed after the box was ticked are transferred automatically; this command is for older ones and for a live that fell back.
+
 ## Local preview
 
 You can check changes to the pages without deploying:
@@ -417,7 +525,8 @@ The browser tests of the web pages ([test_monitor_page.py](../tests/test_monitor
 CI ([ci.yml](../.github/workflows/ci.yml)) runs the tests and builds the Docker image on every pull request and on main.
 After CI passes on main, [deploy.yml](../.github/workflows/deploy.yml) copies the code to the server over SSH
 and runs `docker compose up -d --build`. Before that restart, the new code reads the server's state files without changing them; the deploy stops there,
-with the old version still running, if a state file would be refused or set aside, or while the download queue still holds jobs or a drive copy or a group file is uploading (see 「部署」 (deployment) in [docs/deploy.md](deploy.md), in Chinese). The web pages listen only on the server's localhost and are reached over Tailscale.
+with the old version still running, if a state file would be refused or set aside, or while the download queue still holds jobs, a drive copy or a group file is uploading,
+or a video is being cut for a flash transfer (see 「部署」 (deployment) in [docs/deploy.md](deploy.md), in Chinese). The web pages listen only on the server's localhost and are reached over Tailscale.
 
 ```sh
 docker compose up -d --build     # 在本地跑容器（需要 .env）
@@ -452,7 +561,8 @@ See [auth.py](../backend/auth.py) and [auth_api.py](../backend/monitor/auth_api.
 One thing works without an account: the 「全部下载」 (download everything) address in 「全部处理完成」 (all processing done) is a short download link,
 `<SITE_URL>/d/<code>` with a random code of ten letters and digits.
 Whoever holds it can download that one archive's zip for 31 days, and nothing else; the 「录播页面」 (archive page) link beside it still asks for the login.
-The link stops working when the archive is deleted from the server (see `keep`). The links are kept in `data/download_links.json` (the codes only as hashes):
+The link stops working when the archive is deleted from the server (see `keep`). A live whose message gives its flash link gets no short download link
+(see [Flash transfers](#flash-transfers)). The links are kept in `data/download_links.json` (the codes only as hashes):
 delete that file to cancel every link sent so far.
 The first messages (2026-11-22) carried a longer, signed address instead; those keep working until they expire on 2026-12-23.
 
@@ -467,7 +577,8 @@ and the router must forward TCP 80 / 443 to the server. For the steps, see 「�
 
 `config.json` holds every setting that can be committed: `monitor`, `notify`, `llm`, `analysis`, `translate`, `asr`,
 `upload`, `download`, `drive`. Secrets go in `.env` (see [.env.example](../.env.example)): the LLM key, `DISCORD_WEBHOOK_URL`,
-`TWITCH_OAUTH`, `LLM_PROXY` / `LLM_PROXY_TOKEN`, `TENCENT_DOCS_MCP_TOKEN`, `QQ_BOT_APP_ID` / `QQ_BOT_SECRET`. Everything changed on the web pages is stored in `data/`
+`TWITCH_OAUTH`, `LLM_PROXY` / `LLM_PROXY_TOKEN`, `TENCENT_DOCS_MCP_TOKEN`, `QQ_BOT_APP_ID` / `QQ_BOT_SECRET`; so do the flash service's settings
+(`FLASH_ACTIONS_URL`, `FLASH_LOGIN_URL`, `FLASH_LOGIN_HASH`, `FLASH_DOWNLOADS_PATH`; see [Flash transfers](#flash-transfers)): they say where the flash service is and how to get into it. Everything changed on the web pages is stored in `data/`
 (the roster, the queues, the notification state), which a deploy never touches; so are the Quark CLI and its authorization (`data/quark/`).
 
 ## License
