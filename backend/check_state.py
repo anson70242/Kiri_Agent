@@ -89,9 +89,11 @@ def main(argv: list[str] | None = None) -> int:
     # service, and the job asks for its progress again after the restart.
     flash = [j for j in queue if j.stage == "flash"]
     cutting = [j for j in flash if j.cutting]
+    offline = [j for j in flash if j.flash_offline_since is not None]  # waiting for the flash account
     print(f"下载队列：{len(jobs)} 个任务。")
     print(f"网盘上传：{len(drive)} 个任务，{len(uploading)} 个正在上传（只有正在上传的会挡住部署）。")
-    print(f"闪传：{len(flash)} 个任务，{len(cutting)} 个正在切分影片（只有正在切分的会挡住部署）。")
+    print(f"闪传：{len(flash)} 个任务，{len(cutting)} 个正在切分影片，{len(offline)} 个在等闪传账号"
+          "（只有正在切分的会挡住部署）。")
     files = [f for f in group_files if f.uploading]
     print(f"群文件：{len(group_files)} 个任务，{len(files)} 个正在上传（只有正在上传的会挡住部署）。")
     if not args.require_idle or not (jobs or uploading or cutting or files):

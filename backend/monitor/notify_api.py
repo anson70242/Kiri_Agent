@@ -9,12 +9,14 @@
     POST   /api/notify/test             {target: "discord" | <group openid>}
     GET    /api/notify/flash            the flash account: {state: online | offline | unreachable |
                                         unconfigured, qr_image (a data: URI, only while offline),
-                                        error (the flash service's words), missing (a setting)}
+                                        error (the flash service's words), missing (a setting),
+                                        waiting (how many lives wait for the account)}
     POST   /api/notify/flash/qr-code    a new QR code; answers as GET /api/notify/flash
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -54,12 +56,14 @@ class TestTarget(BaseModel):
 
 def create_notify_router(notifier: LiveNotifier | None, roster: Roster, gateway: QQGateway | None,
                          drive_available: bool = False, tencent_docs_available: bool = False,
-                         flash: FlashClient | None = None) -> APIRouter:
+                         flash: FlashClient | None = None,
+                         flash_waiting: Callable[[], int] | None = None) -> APIRouter:
     """`drive_available`: the Quark drive can be used on this server (the page says so when
     not, next to the switch that sends group files there). `tencent_docs_available`: the
     service has a Tencent Docs token, so a group's source record sheet can be written (without
     it the page shows the field as unavailable and a sheet is not saved). `flash`: the flash
-    service's client, None when none is configured (the 「闪传账号」 block says 未设置)."""
+    service's client, None when none is configured (the 「闪传账号」 block says 未设置).
+    `flash_waiting`: how many lives wait for the flash account (the pipeline's); None: none."""
     router = APIRouter()
     qq = notifier.qq if notifier else None
     discord = next((n for n in notifier.notifiers if n.name == "discord"), None) if notifier else None
@@ -175,16 +179,16 @@ def create_notify_router(notifier: LiveNotifier | None, roster: Roster, gateway:
     # thread pool. The QR code's text is drawn here and goes nowhere else (no log line).
 
     def flash_account() -> dict[str, Any]:
+        waiting = {"waiting": flash_waiting() if flash_waiting else 0}
         if flash is None:
-            return {"state": "unconfigured", "qr_image": None, "error": "", "missing": NO_FLASH}
+            return {"state": "unconfigured", "qr_image": None, "error": "", "missing": NO_FLASH} | waiting
         try:
             account = flash.account()
         except FlashFailed as e:  # the flash service answered, but with an error: it is of no use
-            return {"state": "unreachable", "qr_image": None, "error": str(e), "missing": ""}
-        # Ticket 10 adds here how many lives wait for the account ("waiting").
+            return {"state": "unreachable", "qr_image": None, "error": str(e), "missing": ""} | waiting
         return {"state": account.state,
                 "qr_image": qr_image(account.qr_code) if account.qr_code else None,
-                "error": account.error, "missing": account.missing}
+                "error": account.error, "missing": account.missing} | waiting
 
     @router.get("/api/notify/flash")
     def flash_state() -> dict[str, Any]:

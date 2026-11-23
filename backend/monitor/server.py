@@ -193,7 +193,8 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
     app.include_router(create_router(load_settings(config)[0].output_dir, visible,
                                      auth.download_links.folder if auth else None))
     app.include_router(create_notify_router(notifier, roster, gateway, drive_available=drive is not None,
-                                            tencent_docs_available=has_tencent_docs_token(config), flash=flash))
+                                            tencent_docs_available=has_tencent_docs_token(config), flash=flash,
+                                            flash_waiting=auto.flash_waiting if auto else None))
 
     def snapshot(names: set[str] | None = None) -> dict:
         rows = []

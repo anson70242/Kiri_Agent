@@ -220,10 +220,10 @@ function drawFlash(f) {
   flashShown = shown;
   const [label, cls] = FLASH[f.state] || [f.state, "off"];
   const canRefresh = f.state === "offline" && !f.missing;
-  // Ticket 10 adds a line here: how many lives wait for the account.
   document.getElementById("flash").innerHTML = `
     <div class="top"><span class="title">闪传账号</span><span class="chip ${cls}">${label}</span>
       <span class="meta">QQ 闪传用这个账号上传录播</span></div>
+    ${f.waiting ? `<div class="err">${f.waiting} 场录播在等闪传账号，扫码登录后会按顺序自动上传（每场最多等 72 小时）</div>` : ""}
     ${f.error ? `<div class="err">闪传服务说：${esc(f.error)}</div>` : ""}
     ${f.missing ? `<div class="meta">⚠️ ${esc(f.missing)}</div>` : ""}
     ${f.qr_image ? `<img src="${esc(f.qr_image)}" alt="闪传账号登录二维码">
