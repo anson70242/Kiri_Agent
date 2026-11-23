@@ -490,7 +490,8 @@ docker compose exec kiri /app/.venv/bin/python -m backend.flash upload "森野�
 ```
 
 (The comments mean: is the flash account online; make the flash transfer of one archive.)
-`status` prints the account's state in one line (exit code 0 online, 1 otherwise). `upload` takes an archive's folder, or its folder reference under the downloads folder;
+`status` prints the account's state in one line (exit code 0 online, 1 otherwise). `upload` takes an archive's folder, or its folder reference under the downloads folder
+(a folder outside the downloads folder is refused); while the flash account is offline it ends at once with nothing prepared, else
 it prepares the files (cutting a video too big for one file), starts the flash transfer, waits for it while printing its progress, notes the flash link in the archive
 (its page shows 「⚡ 闪传链接」) and prints the flash link with its expiry. It tells no group and writes no sheet row; exit code 1 when the flash transfer could not be made.
 Both exit with 2 when no flash service is configured. Only lives processed after the box was ticked are transferred automatically; this command is for older ones and for a live that fell back.

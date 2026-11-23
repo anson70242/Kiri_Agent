@@ -5,9 +5,11 @@
     python -m backend.flash upload <archive folder>   # that archive's flash transfer; prints its flash link
 
 `upload` takes the archive's folder, or its folder reference under the downloads folder
-(`森野鈴/20261122/标题`). It prepares the archive's files (cutting a video too big for one
-file), starts the flash transfer, waits for it, notes the flash link in the archive (its page
-shows 「闪传链接」) and prints it. It tells no group and writes no sheet row.
+(`森野鈴/20261122/标题`); an archive outside the downloads folder is refused. While the flash
+account is offline it ends at once, with nothing prepared. Else it prepares the archive's
+files (cutting a video too big for one file), starts the flash transfer, waits for it, notes
+the flash link in the archive (its page shows 「闪传链接」) and prints it. It tells no group
+and writes no sheet row.
 
 The settings come from `.env` (see backend/flash/client.py).
 """
@@ -22,7 +24,7 @@ from collections.abc import Callable, Mapping
 from datetime import timedelta, timezone
 from pathlib import Path
 
-from backend.archive import Archive
+from backend.archive import Archive, ArchiveNotFound, Downloads
 
 from .client import (ACTIONS_URL_ENV, REPO_ROOT, STALL_SECONDS, AccountState, FlashClient, FlashFailed,
                      FlashUnavailable, Progress, load_flash)
@@ -62,17 +64,12 @@ def upload_command(client: FlashClient, folder: str, ffmpeg: str | None, *,
                    sleep: Callable[[float], None], clock: Callable[[], float]) -> int:
     """One archive's flash transfer, waited for; 0 with the flash link printed, 1 when it
     could not be made (the staging folder is removed either way)."""
-    path = Path(folder)
-    if not path.is_dir():
-        path = client.downloads / folder
-    try:
-        archive = Archive.from_folder(path)
-    except OSError:
-        archive = None
+    archive = _archive(Downloads(client.downloads), folder)
     if archive is None or not archive.present():
-        print(f"不是录播文件夹：{folder}")
+        print(f"不是下载目录里的录播文件夹：{folder}")
         return 1
     try:
+        client.require_online()  # nothing is prepared or cut for an account that is offline
         if needs_cutting(archive):
             print("影片超过单个文件的上限，先切成几段……")
         prepared = prepare(archive, client.downloads, ffmpeg=ffmpeg)
@@ -91,6 +88,19 @@ def upload_command(client: FlashClient, folder: str, ffmpeg: str | None, *,
     expires = started.expires.astimezone(HONG_KONG)
     print(f"闪传链接（有效至 {expires.year}/{expires.month}/{expires.day} {expires:%H:%M}，香港时间）：{started.link}")
     return 0
+
+
+def _archive(downloads: Downloads, folder: str) -> Archive | None:
+    """The archive `folder` names: its folder reference under the downloads folder, or its
+    folder's path; None when that is no folder inside the downloads folder."""
+    try:
+        return downloads.open(folder)
+    except (ArchiveNotFound, OSError):
+        pass
+    try:
+        return downloads.open(downloads.ref(Path(folder)))
+    except (ArchiveNotFound, OSError, ValueError):
+        return None
 
 
 def _wait(client: FlashClient, transfer_id: str, sleep: Callable[[float], None], clock: Callable[[], float]) -> None:
