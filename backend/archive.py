@@ -46,6 +46,7 @@ class Artifact(Enum):
     CHINESE_TRANSCRIPT = (".zh.transcript.json",)  # Chinese subtitles (backend.translate)
     HIGHLIGHTS = (".highlights.json",)  # 路灯表 (backend.analysis)
     DRIVE_LINK = (".drive_link.json",)  # where editors download the drive copy (a DriveLink)
+    FLASH_LINK = (".flash_link.json",)  # where editors download the flash transfer (a FlashLink)
 
     @property
     def suffixes(self) -> tuple[str, ...]:
@@ -93,6 +94,37 @@ class DriveLink:
         if not all(isinstance(v, str) and v for v in fields.values()):
             raise ValueError("url, code, path and made must be non-empty strings")
         return cls(fields["url"], fields["code"], fields["path"], datetime.fromisoformat(fields["made"]))
+
+
+@dataclass(frozen=True)
+class FlashLink:
+    """An archive's flash link: the address editors download its flash transfer from, until
+    it expires. Both times carry a time zone."""
+
+    url: str  # the address
+    expires: datetime  # when the link stops working
+    made: datetime  # when the flash transfer was started
+
+    def expired(self, now: datetime) -> bool:
+        return now >= self.expires
+
+    def to_dict(self) -> dict[str, str]:
+        """As saved, and as the archives API returns it (times in ISO 8601)."""
+        return {"url": self.url, "expires": self.expires.isoformat(), "made": self.made.isoformat()}
+
+    @classmethod
+    def from_dict(cls, data: Any) -> FlashLink:
+        """Raises ValueError for anything `to_dict` does not make. The error's text never
+        holds the address."""
+        if not isinstance(data, dict):
+            raise ValueError(f"expected an object, got {type(data).__name__}")
+        fields = {k: data.get(k) for k in ("url", "expires", "made")}
+        if not all(isinstance(v, str) and v for v in fields.values()):
+            raise ValueError("url, expires and made must be non-empty strings")
+        expires, made = datetime.fromisoformat(fields["expires"]), datetime.fromisoformat(fields["made"])
+        if expires.tzinfo is None or made.tzinfo is None:
+            raise ValueError("expires and made must carry a time zone")
+        return cls(fields["url"], expires, made)
 
 
 DOWNLOADING_SUFFIX = ".part"  # a download in progress (the video, or Twitch raw chat being fetched)
@@ -315,6 +347,16 @@ class Archive:
         except ValueError as e:
             raise ArtifactDamaged(Artifact.DRIVE_LINK, path, str(e)) from None
 
+    def read_flash_link(self) -> FlashLink:
+        """The flash link, expired or not. Raises ArtifactMissing when the archive has none,
+        ArtifactDamaged when its file is not one `save` wrote."""
+        path = self.require(Artifact.FLASH_LINK)
+        data = read_file(path, Artifact.FLASH_LINK)
+        try:
+            return FlashLink.from_dict(data)
+        except ValueError as e:
+            raise ArtifactDamaged(Artifact.FLASH_LINK, path, str(e)) from None
+
     def chat_count(self) -> int:
         """How many chat messages the archive has; 0 when it has no readable chat. Cached
         until the chat file changes."""
@@ -361,12 +403,15 @@ class Archive:
 
     @staticmethod
     def _serialize(artifact: Artifact, content: Any) -> str:
-        """An artifact's bytes on disk: the highlight table and the drive link (a DriveLink)
-        indented by one space; the lists (chat, transcripts) one compact item per line."""
-        if artifact is Artifact.DRIVE_LINK:
-            if not isinstance(content, DriveLink):
-                raise TypeError(f"a drive link is saved as a DriveLink, got {type(content).__name__}")
-            return json.dumps(content.to_dict(), ensure_ascii=False, indent=1)
+        """An artifact's bytes on disk: the highlight table, the drive link (a DriveLink) and
+        the flash link (a FlashLink) indented by one space; the lists (chat, transcripts) one
+        compact item per line."""
+        for link_artifact, link_type in ((Artifact.DRIVE_LINK, DriveLink), (Artifact.FLASH_LINK, FlashLink)):
+            if artifact is link_artifact:
+                if not isinstance(content, link_type):
+                    raise TypeError(f"a {artifact.name.lower().replace('_', ' ')} is saved as a "
+                                    f"{link_type.__name__}, got {type(content).__name__}")
+                return json.dumps(content.to_dict(), ensure_ascii=False, indent=1)
         if artifact is Artifact.HIGHLIGHTS:
             return json.dumps(content, ensure_ascii=False, indent=1)
         body = ",\n".join("  " + json.dumps(x, ensure_ascii=False) for x in content)

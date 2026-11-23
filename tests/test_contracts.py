@@ -16,7 +16,8 @@ ARCHIVE_MODULE = REPO / "backend" / "archive.py"
 
 # The tests' own list, so a suffix added to the Archive module is added here on purpose.
 ARTIFACT_SUFFIXES = (".mp4", ".live_chat.json", ".chat.json", ".comments.json", ".chat_parsed.json",
-                     ".transcript.json", ".zh.transcript.json", ".highlights.json", ".drive_link.json")
+                     ".transcript.json", ".zh.transcript.json", ".highlights.json", ".drive_link.json",
+                     ".flash_link.json")
 
 
 def python_files(*folders: str) -> list[Path]:

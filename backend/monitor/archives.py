@@ -9,6 +9,7 @@ which creator on top.
 import shutil
 import zipfile
 from collections.abc import Callable, Iterator
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TypeVar
 from urllib.parse import quote
@@ -39,8 +40,8 @@ def _seconds(t: str) -> int:
         return 0
 
 
-def summary(a: Archive) -> dict:
-    """One archive as the 录播 page lists it."""
+def summary(a: Archive, now: datetime) -> dict:
+    """One archive as the 录播 page lists it, its flash link only when it has not expired by `now`."""
 
     def name(artifact: Artifact) -> str | None:
         f = a.file(artifact)
@@ -62,6 +63,7 @@ def summary(a: Archive) -> dict:
         "zh_transcript_file": name(Artifact.CHINESE_TRANSCRIPT),
         "highlights_file": name(Artifact.HIGHLIGHTS),
         "drive_link": drive_link(a),
+        "flash_link": flash_link(a, now),
         "size": a.size,
         "mtime": a.mtime,
     }
@@ -73,6 +75,16 @@ def drive_link(a: Archive) -> dict | None:
         return a.read_drive_link().to_dict()
     except (ArtifactMissing, ArtifactDamaged, OSError):
         return None
+
+
+def flash_link(a: Archive, now: datetime) -> dict | None:
+    """The archive's flash link as the API returns it; None when it has none, it is damaged,
+    or it has expired by `now`."""
+    try:
+        link = a.read_flash_link()
+    except (ArtifactMissing, ArtifactDamaged, OSError):
+        return None
+    return None if link.expired(now) else link.to_dict()
 
 
 def srt(segments: list[dict]) -> str:
@@ -166,11 +178,13 @@ def read_or_answer(read: Callable[[], T], missing: str, damaged: str) -> T:
 
 def create_router(output_dir: Path,
                   visible: Callable[[Request], set[str] | None] = lambda request: None,
-                  linked: Callable[[str], str | None] | None = None) -> APIRouter:
+                  linked: Callable[[str], str | None] | None = None,
+                  now: Callable[[], datetime] = lambda: datetime.now(timezone.utc)) -> APIRouter:
     """`visible(request)`: the streamer (creator folder) names that request may see, or
     None for everyone (no login, admins, members allowed "all"). `linked(code)`: the folder
     reference of the archive a short download link's code downloads, or None (no such
-    link, or expired); without it no code downloads anything."""
+    link, or expired); without it no code downloads anything. `now()`: the current time,
+    against which a flash link has expired."""
     router = APIRouter()
     downloads = Downloads(output_dir)
     root = downloads.root
@@ -203,7 +217,8 @@ def create_router(output_dir: Path,
             disk = {"total": u.total, "used": u.used, "free": u.free}
         except OSError:
             pass
-        return {"output_dir": str(root), "disk": disk, "archives": [summary(a) for a in seen_archives(request)]}
+        t = now()
+        return {"output_dir": str(root), "disk": disk, "archives": [summary(a, t) for a in seen_archives(request)]}
 
     @router.get("/api/archives/chat")
     def chat(folder: str, request: Request) -> dict:
