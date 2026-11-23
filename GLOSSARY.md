@@ -64,8 +64,20 @@ _Avoid_: share link, pan link
 An address of the dashboard that downloads one archive's zip without logging in, until it expires. A message carries it for the people of a group, who have no account.
 _Avoid_: public link, temporary link
 
+**Flash transfer**:
+The files of one archive put on QQ's flash transfer (闪传) for a chosen streamer: its video, its chat, both transcripts as subtitles and its highlight table as a spreadsheet, as separate files. A video too big for one file goes as several parts, each playable by itself.
+_Avoid_: flash upload, QQ share
+
+**Flash link**:
+The address editors download a flash transfer from (闪传链接). It expires after 14 days. For a streamer with flash transfers it is the address a message and the source record sheet give for the archive, in place of the short download link.
+_Avoid_: share link, qfile link
+
+**Flash account**:
+The QQ account the flash transfers are made with (闪传账号), logged in on the server by scanning a QR code. While it is offline a flash transfer waits for it, and the owner is reminded to scan again.
+_Avoid_: bot account, spare account
+
 **Source record sheet**:
-A subtitle group's own sheet on Tencent Docs (录播源记录表) where its editors look up where the files of a live can be fetched. The service adds a row to it for an archive's short download link, and another for its drive link.
+A subtitle group's own sheet on Tencent Docs (录播源记录表) where its editors look up where the files of a live can be fetched. The service adds a row to it for an archive's short download link, or its flash link, and another for its drive link.
 _Avoid_: annotation sheet, link sheet
 
 ### Group files
