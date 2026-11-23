@@ -454,10 +454,13 @@ and the command that makes the flash transfer by hand. No QQ group is told. A fl
 **When the flash account is offline.** An offline flash account and a flash service that cannot be reached are one case (they cannot be told apart from here). The flash job waits:
 neither a try nor an error, and nothing is prepared or cut before the account is online. It is looked at every minute.
 The owner gets a Discord alert when the first live starts to wait, 「闪传账号掉线或闪传服务连不上」 (flash account offline or flash service unreachable) with how many lives wait
-and the 通知 page's address (with `SITE_URL`), and again every 24 hours while any live waits, never more often; one alert covers every waiting live. No QQ group is told.
-After the scan nothing more is needed: the first look that finds the account online ends every live's waiting, and they go on one at a time in their order
+and the 通知 page's address (with `SITE_URL`), and again every 24 hours while any live waits. Never more often: while a live that an alert covered is still in the queue,
+a new wait (the account back for a while, then offline again) brings no alert before 24 hours have passed since the last one. One alert covers every waiting live. No QQ group is told.
+After the scan nothing more is needed: the waiting ends once the flash service serves again (a flash transfer started, or a started one's progress answered), and the lives go on one at a time in their order
 (a flash transfer started before the account went offline goes on by its id), each with its own 「全部处理完成」 and flash link.
-A live that has waited 72 hours since it first found the account offline in that outage is given up on: 「全部处理完成」 with the short download link, the sheet told it,
+A status that merely says online does not end the waiting: while the flash service still cannot start a flash transfer, the files are prepared (and a big video cut) at most once every
+retry pause (`download.auto.retry_minutes`), and a started flash transfer is never started again.
+A live that has waited 72 hours since it first waited, with no flash transfer served in between, is given up on: 「全部处理完成」 with the short download link, the sheet told it,
 and no alert of a failure (the reminders said why). A restart keeps the waiting time and the time of the last reminder.
 
 **The 「闪传账号」 block** on the 通知 page (admins only, like the rest of the page) shows the state, 在线 / 掉线 / 连不上闪传服务 / 未设置 (online / offline / unreachable / not set up),

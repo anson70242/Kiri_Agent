@@ -81,7 +81,7 @@ def test_no_second_reminder_within_the_day_after_a_restart(tmp_path):
     assert len(alerts) == 1
 
 
-def test_a_new_outage_after_the_scan_is_reminded_at_once(tmp_path):
+def test_a_new_outage_after_the_scan_is_not_reminded_within_the_day_of_the_last_reminder(tmp_path):
     flash = AccountFlash()
     ad, clock, _, _ = processed_live(tmp_path, flash)
     alerts = alerts_of(ad)
@@ -91,5 +91,29 @@ def test_a_new_outage_after_the_scan_is_reminded_at_once(tmp_path):
     pass_time(ad, clock, 60)  # back: started
     flash.state = "offline"
     pass_time(ad, clock, 10)
+    pass_time(ad, clock, 24 * HOUR - 130)
+    assert len(alerts) == 1
+
+    pass_time(ad, clock, 60)
+
+    assert len(alerts) == 2
+
+
+def test_a_live_that_starts_to_wait_when_no_reminded_live_is_in_the_queue_is_reminded_at_once(tmp_path):
+    flash = AccountFlash()
+    ad, clock, sent = flash_pipeline(tmp_path, flash, ticked=(A, B))
+    alerts = alerts_of(ad)
+    downloaded(ad, A)
+    step(ad, "transcribe")
+    step(ad, "flash")  # A waits: reminded
+    flash.state = "online"
+    pass_time(ad, clock, 60)
+    pass_time(ad, clock, 60)  # A uploaded: it leaves the queue
+    assert EventKind.READY in kinds(sent)
+    flash.state = "offline"
+    downloaded(ad, B)
+    step(ad, "transcribe")
+
+    step(ad, "flash")
 
     assert len(alerts) == 2

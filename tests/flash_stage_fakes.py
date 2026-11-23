@@ -225,6 +225,11 @@ class AccountFlash(FakeFlash):
         super().__init__(*progress, **kw)
         self.state = state
         self.accounts = 0
+        # False: the status answers as `state` says, but a start or a look at a progress
+        # cannot reach the flash service (FlashUnavailable), however online the status says
+        # the account is. `unserved` counts those calls.
+        self.serving = True
+        self.unserved = 0
 
     def account(self) -> AccountState:
         return AccountState(self.state)  # type: ignore[arg-type]
@@ -239,12 +244,20 @@ class AccountFlash(FakeFlash):
         if self.state != "online":
             raise FlashUnavailable("闪传账号掉线" if self.state == "offline" else "连不上闪传服务（ConnectionRefusedError）")
 
-    def start(self, files: list[Path], name: str) -> StartedTransfer:
+    def _served(self) -> None:
+        from backend.flash.client import FlashUnavailable
+
         self._online()
+        if not self.serving:
+            self.unserved += 1
+            raise FlashUnavailable("连不上闪传服务（TimeoutError）")
+
+    def start(self, files: list[Path], name: str) -> StartedTransfer:
+        self._served()
         return super().start(files, name)
 
     def progress(self, transfer_id: str) -> Progress:
-        self._online()
+        self._served()
         return super().progress(transfer_id)
 
 
