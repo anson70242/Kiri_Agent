@@ -73,6 +73,9 @@
   th { color: var(--muted); font-weight: 600; font-size: 12.5px; background: #f6f9ff; white-space: nowrap; }
   td.t { white-space: nowrap; color: var(--muted); font-variant-numeric: tabular-nums; }
   td.fail { color: var(--live); }
+  .card.flash { margin-top: 12px; }
+  .card.flash img { display: block; width: 200px; max-width: 100%; height: auto; margin-top: 10px;
+    image-rendering: pixelated; border-radius: 4px; }
 </style>
 </head>
 <body>
@@ -91,6 +94,7 @@
 <main>
   <h1>通知</h1>
   <div class="cards" id="channels"></div>
+  <section class="card flash" id="flash" aria-label="闪传账号"></section>
   <h2>QQ 群</h2>
   <div id="groups"></div>
   <h2>最近记录</h2>
@@ -200,7 +204,53 @@ function drawLog() {
     : `<div class="empty">还没有发过消息</div>`;
 }
 
+// The 「闪传账号」 block: its own endpoint (asking the flash service can take a while). Asked
+// again every few seconds while it shows a QR code, so it turns to 在线 by itself after the scan.
+const FLASH = {
+  online: ["在线", "ok"], offline: ["掉线", "bad"], unreachable: ["连不上闪传服务", "bad"], unconfigured: ["未设置", "off"],
+};
+const FLASH_POLL = 3000;
+let flashShown = "", flashTimer = null, flashBusy = false;
+
+function drawFlash(f) {
+  clearTimeout(flashTimer);
+  flashTimer = f.qr_image ? setTimeout(loadFlash, FLASH_POLL) : null;
+  const shown = JSON.stringify(f);
+  if (shown === flashShown) return;  // unchanged: keep the image and the button's result
+  flashShown = shown;
+  const [label, cls] = FLASH[f.state] || [f.state, "off"];
+  const canRefresh = f.state === "offline" && !f.missing;
+  // Ticket 10 adds a line here: how many lives wait for the account.
+  document.getElementById("flash").innerHTML = `
+    <div class="top"><span class="title">闪传账号</span><span class="chip ${cls}">${label}</span>
+      <span class="meta">QQ 闪传用这个账号上传录播</span></div>
+    ${f.error ? `<div class="err">闪传服务说：${esc(f.error)}</div>` : ""}
+    ${f.missing ? `<div class="meta">⚠️ ${esc(f.missing)}</div>` : ""}
+    ${f.qr_image ? `<img src="${esc(f.qr_image)}" alt="闪传账号登录二维码">
+      <div class="meta">用手机 QQ 扫码登录闪传账号，登录后这里会自动更新</div>` : ""}
+    ${canRefresh ? `<div class="actions"><button data-flash-refresh>刷新二维码</button>
+      <span class="meta" data-result="flash"></span></div>` : ""}`;
+}
+
+async function loadFlash() {
+  if (flashBusy) return;
+  flashBusy = true;
+  try { drawFlash(await api("GET", "/api/notify/flash")); } catch { /* shown as before */ }
+  finally { flashBusy = false; }
+}
+
+async function refreshFlash() {
+  const say = (text, ok = true) => {
+    const result = document.querySelector('[data-result="flash"]');
+    if (result) { result.textContent = text; result.style.color = ok ? "var(--ok)" : "var(--live)"; }
+  };
+  say("请求中…");
+  try { drawFlash(await api("POST", "/api/notify/flash/qr-code")); }
+  catch (err) { say(err.message, false); }
+}
+
 async function load() {
+  loadFlash();
   try { data = await api("GET", "/api/notify"); } catch { return; }
   drawChannels(); drawGroups(); drawLog();
 }
@@ -212,6 +262,7 @@ document.addEventListener("input", e => {
 document.addEventListener("click", async e => {
   const b = e.target.closest("button");
   if (!b) return;
+  if (b.hasAttribute("data-flash-refresh")) { await refreshFlash(); return; }
   const f = b.closest("fieldset.group");
   const key = CSS.escape(b.dataset.test || f?.dataset.id || "");
   const say = (text, ok = true) => {  // looked up each time: a reload redraws the card

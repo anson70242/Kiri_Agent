@@ -25,6 +25,7 @@ from backend.archive import Downloads
 from backend.auth import auth_enabled, is_admin, load_auth
 from backend.downloader import load_settings
 from backend.downloader.auto import ShortDownloadLink, attach
+from backend.flash.client import load_flash
 from backend.group_files import GroupFileKeeper
 from backend.group_files.report import GroupFileReport
 from backend.notify.incidents import IncidentAlerts
@@ -187,8 +188,10 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
         print("Login: off")
     app.include_router(create_router(load_settings(config)[0].output_dir, visible,
                                      auth.download_links.folder if auth else None))
+    # The flash service (None when none is configured, and in dev mode): the 通知 page shows its account.
     app.include_router(create_notify_router(notifier, roster, gateway, drive_available=drive is not None,
-                                            tencent_docs_available=has_tencent_docs_token(config)))
+                                            tencent_docs_available=has_tencent_docs_token(config),
+                                            flash=None if dev else load_flash(config)))
 
     def snapshot(names: set[str] | None = None) -> dict:
         rows = []

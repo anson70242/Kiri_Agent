@@ -12,6 +12,7 @@ dependencies = [
     "openai>=3.49.0",
     "openpyxl>=3.1.5",
     "python-dotenv>=1.0",
+    "segno>=1.6.6",
     "uvicorn>=0.54.0",
     "websockets>=16.1.1",
     "yt-dlp[default,deno]>=2026.11.4.232659.dev0",
