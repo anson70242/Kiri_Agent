@@ -611,13 +611,14 @@ class AutoDownloader:
         staging folder goes once the flash transfer is uploaded or cannot be made."""
         s = job.status
         assert job.video  # a flash job is only queued for a live with a video
-        if not self.flash:  # gone since the job was queued (.env changed, then a restart)
-            log.warning("flash transfers are on for %s, but no flash service is configured: dropped", s.streamer.name)
-            return Outcome("unavailable")
-        if self._awaits_chat(job):  # the chat goes into the flash transfer: wait until it is in or given up
+        if self._awaits_chat(job):  # the chat goes into the flash transfer (READY waits for it too)
             return Outcome("wait", "等待弹幕补抓", retry_at=self.clock() + FLASH_WAIT_LOOK)
         archive = Archive.from_video(Path(job.video))
         root = self.settings.output_dir
+        if not self.flash:  # gone since the job was queued (.env changed, then a restart)
+            log.warning("flash transfers are on for %s, but no flash service is configured: dropped", s.streamer.name)
+            remove_staging(archive, root)  # a flash transfer it had started is never looked at again
+            return Outcome("unavailable")
         started = job.transfer
         prepared = False  # this try prepared the files: a start that cannot reach the flash service waits a retry pause
         try:

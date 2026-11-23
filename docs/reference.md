@@ -450,7 +450,8 @@ makes the cutting start again with one part more, up to three more. Each part is
 It is tried again with the pipeline's retry settings (`download.auto.retry_minutes` and `max_errors`: three tries, fifteen minutes apart), each try a new flash transfer;
 a failing one waits for its next try without holding back other lives. After the last try, 「全部处理完成」 goes out as for a streamer without flash transfers
 (the short download link; the sheet is told it), and the owner gets one Discord alert: the streamer, the live's date and title, the reason (without any address),
-and the command that makes the flash transfer by hand. No QQ group is told. A flash job whose flash service is no longer configured after a restart is dropped the same way, without the alert.
+and the command that makes the flash transfer by hand. No QQ group is told. A flash job whose flash service is no longer configured after a restart is dropped the same way, without the alert,
+once its live's late chat is in or given up (the files a flash transfer it had started was reading are removed).
 
 **When the flash account is offline.** An offline flash account and a flash service that cannot be reached are one case (they cannot be told apart from here). The flash job waits:
 neither a try nor an error, and nothing is prepared or cut before the account is online. It is looked at every minute.
