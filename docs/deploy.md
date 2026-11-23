@@ -403,7 +403,7 @@ QQ 群里有人发了文件（在聊天里发，或传到群文件面板，机�
 **要打开的**
 
 1. 服务器 `.env` 里要有 `TENCENT_DOCS_MCP_TOKEN`（和上传路灯表的是同一个；没有的话在 <https://docs.qq.com/open/auth/mcp.html> 用 QQ / 微信扫码拿一个），
-   改了以后 `docker compose up -d --force-recreate kiri`。没有 token 时通知页上「录播源记录表」那一栏会写不可用。QQ 机器人也要先接好（见 README 的 QQ groups）。
+   改了以后 `docker compose up -d --force-recreate kiri`。没有 token 时通知页上「录播源记录表」那一栏会写不可用。QQ 机器人也要先接好（见 [reference.md](reference.md) 的 QQ groups）。
 2. **token 的那个账号要能编辑这张表。** 你自己的表本来就可以；别的字幕组的表，要先请他们把表共享给这个账号、给编辑权限。
 3. 表的第一行要有这四个表头：配信者、日期、项目类型、闪传链接（在哪一列都行，多出来的列不管）。新行插在第三行，第一、二行不动；新行照它下面那一行合并单元格。
 4. 在浏览器里打开表、点到要写的那个工作表，复制地址栏的地址（要带 `?tab=`），贴到通知页这个群的「录播源记录表」，保存。清空再保存就是关掉。
