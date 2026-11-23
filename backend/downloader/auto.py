@@ -646,8 +646,11 @@ class AutoDownloader:
         except FlashFailed as e:
             return self._flash_failed(archive, str(e))
         except Exception as e:  # noqa: BLE001 - a bug or a surprise: a failed try, not a stuck job
-            log.exception("flash attempt raised: %s %s", s.streamer.name, s.url)
-            return self._flash_failed(archive, f"{type(e).__name__}: {e}")
+            # Its kind and its text without addresses, no traceback: a flash service's error
+            # can name its address, or a flash link.
+            reason = without_addresses(f"{type(e).__name__}: {e}")
+            log.warning("flash attempt raised: %s %s: %s", s.streamer.name, s.url, reason)
+            return self._flash_failed(archive, reason)
         if progress.failed:
             return self._flash_failed(archive, f"{progress.failed} 个文件上传失败", served=True)
         if not progress.finished:
@@ -1011,12 +1014,12 @@ class AutoDownloader:
             self._account_back([current, *rest], now)
         if outcome.kind == "offline":  # neither an attempt nor an error
             self._active["flash"] = None
-            current.last_error = outcome.message
+            current.last_error = without_addresses(outcome.message)
             current.flash_moved_at = None  # a started upload's FLASH_STALL counts again after the scan
             if current.flash_offline_since is None:
                 current.flash_offline_since = now
                 log.warning("flash transfer waits for the flash account: %s %s: %s", name, current.status.url,
-                            ADDRESS.sub("(address left out)", outcome.message))
+                            current.last_error)
             current.next_try = outcome.retry_at if outcome.retry_at is not None else now + FLASH_OFFLINE_LOOK
             queue = rest + [current]
             reminder = self._flash_reminder(queue, now)
@@ -1043,11 +1046,11 @@ class AutoDownloader:
         if outcome.kind == "error":  # a failed try: the next one starts a new flash transfer
             current.attempts += 1
             current.errors += 1
-            current.last_error = outcome.message
+            current.last_error = without_addresses(outcome.message)
             current.transfer = None
             current.flash_sent = current.flash_moved_at = None
             log.warning("flash transfer failed (%d/%d): %s: %s", current.errors, self.max_errors, name,
-                        ADDRESS.sub("(address left out)", outcome.message))
+                        current.last_error)
             if current.errors < self.max_errors:
                 current.next_try = self.clock() + self.retry_interval
                 self.save(rest + [current])
@@ -1256,6 +1259,11 @@ def flash_ready_links(video: Path, site_url: str, output_dir: Path, flash_link: 
     return (Link(FLASH_LINK_LABEL, flash_link), *page)
 
 
+def without_addresses(reason: str) -> str:
+    """A flash transfer's reason with every address left out (and cut to REASON_KEPT)."""
+    return ADDRESS.sub("（地址略）", reason)[:REASON_KEPT]
+
+
 def flash_given_up_message(job: Job, output_dir: Path) -> str:
     """The owner's operator alert for a flash job given up on (Chinese, like the other operator
     messages): the streamer, the live and the last try's reason, and the command that makes
@@ -1263,7 +1271,7 @@ def flash_given_up_message(job: Job, output_dir: Path) -> str:
     s = job.status
     assert job.video  # a flash job is only queued for a live with a video
     video = Path(job.video)
-    reason = ADDRESS.sub("（地址略）", job.last_error)[:REASON_KEPT]
+    reason = without_addresses(job.last_error)
     return "\n".join([
         f"QQ 闪传试了 {job.errors} 次仍失败，已放弃；「全部处理完成」已照常发出（不带闪传链接）",
         f"配信者：{s.streamer.name}",
@@ -1320,8 +1328,10 @@ FLASH_REMINDER_EVERY = 24 * 3600
 # What the owner runs on the server to make a flash transfer given up on by hand (the alert
 # adds the archive's folder reference).
 FLASH_BY_HAND_COMMAND = "docker compose exec kiri /app/.venv/bin/python -m backend.flash upload"
-ADDRESS = re.compile(r"https?://\S+")  # left out of the reason an alert tells: it carries no link
-REASON_KEPT = 500  # characters of a reason an alert tells
+# Left out of a flash transfer's reason before it is logged, kept in the queue (shown in the
+# members' queue view) or told in an alert: a flash link, the flash service's addresses.
+ADDRESS = re.compile(r"(?:https?|wss?)://\S+", re.IGNORECASE)
+REASON_KEPT = 500  # characters of a reason kept and told
 SHEET_LABEL = "腾讯文档路灯表"
 
 

@@ -477,7 +477,9 @@ and never starts it a second time. A flash job without an id prepares its files 
 an uploading or waiting flash transfer never holds a deploy. The deploy check prints `闪传：N 个任务，M 个正在切分影片，K 个在等闪传账号（只有正在切分的会挡住部署）。`
 (flash: N jobs, M cutting a video, K waiting for the flash account; only cutting holds a deploy).
 
-A flash link, a QR code's text, the login hash and the flash service's addresses are never written to the log. The flash link is kept in the queue while its job is there,
+A flash link, a QR code's text, the login hash and the flash service's addresses are never written to the log. A try's reason is kept (in the queue, shown in the queue view),
+logged and told in an alert with every address in it (`http`, `https`, `ws`, `wss`) left out; an unexpected error is logged by its kind and that text, without a traceback.
+The flash link is kept in the queue while its job is there,
 then in the archive's flash link file (and in `data/source_record_jobs.json` until its row is written).
 
 **By hand** ([backend/flash/\_\_main\_\_.py](../backend/flash/__main__.py)):
