@@ -95,7 +95,10 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
     # The service's one drive (None without the Quark CLI, and in dev mode): the pipeline and
     # the group-files module upload through it, so their uploads take turns.
     drive = None if dev else load_quark(config)
-    notifier, auto = (None, None) if dev else attach(config, mon, drive)
+    # The flash service's one client (None when none is configured, and in dev mode): the
+    # pipeline makes flash transfers through it, the 通知 page shows its account.
+    flash = None if dev else load_flash(config)
+    notifier, auto = (None, None) if dev else attach(config, mon, drive, flash)
     if dev:
         print("Dev mode: no auto-download, no notifications")
     elif notifier and notifier.notifiers:
@@ -189,10 +192,8 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
         print("Login: off")
     app.include_router(create_router(load_settings(config)[0].output_dir, visible,
                                      auth.download_links.folder if auth else None))
-    # The flash service (None when none is configured, and in dev mode): the 通知 page shows its account.
     app.include_router(create_notify_router(notifier, roster, gateway, drive_available=drive is not None,
-                                            tencent_docs_available=has_tencent_docs_token(config),
-                                            flash=None if dev else load_flash(config)))
+                                            tencent_docs_available=has_tencent_docs_token(config), flash=flash))
 
     def snapshot(names: set[str] | None = None) -> dict:
         rows = []
