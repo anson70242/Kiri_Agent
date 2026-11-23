@@ -264,7 +264,7 @@ A 5-hour live takes about 120,000 tokens. By hand: `uv run -m backend.translate 
   while no flash service is configured, and the API refuses to tick it then), and can delete the streamer.
   Settings that are on show on the card as ⬇ 自动下载 (auto-download) / ⬆ 自动上传 (auto-upload) / ☁ 网盘 (drive) / ⚡ 闪传 (flash transfer).
 - **录播** ([archives.html](../frontend/archives.html)): downloaded archives and their processing progress (the queue box names each live's stage,
-  a flash transfer's as 「等待闪传上传」 (waiting for the flash upload) and then 「闪传上传 xx%」 while it uploads). Each one can be played,
+  a flash transfer's as 「等待闪传上传」 (waiting for its flash transfer) and then 「闪传上传 xx%」 while it uploads). Each one can be played,
   with Chinese (default) / Japanese subtitles, a 中 / 日 / 双语 subtitle panel, chat replay and a chat density chart. Downloads: video, chat,
   SRT (Chinese / Japanese), highlight table (Excel), or everything as one zip (without the raw chat); once the live's drive copy is on the drive,
   「☁ 网盘链接」 (drive link) opens it there, and once its flash transfer is uploaded, 「⚡ 闪传链接」 (flash link) opens the flash link until it expires

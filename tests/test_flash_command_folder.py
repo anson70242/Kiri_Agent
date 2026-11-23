@@ -9,7 +9,7 @@ import pytest
 import backend.flash.__main__ as command
 
 from .helpers import sample_archive
-from .test_flash_upload import config, root, service, staging_is_gone, upload  # noqa: F401 - fixtures
+from .test_flash_transfer_by_hand import config, root, service, staging_is_gone, upload  # noqa: F401 - fixtures
 
 
 @pytest.mark.parametrize("reference", ["../outside/森野鈴/20261105/歌枠", "{outside}"])
