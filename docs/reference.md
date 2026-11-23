@@ -264,7 +264,7 @@ A 5-hour live takes about 120,000 tokens. By hand: `uv run -m backend.translate 
   while no flash service is configured, and the API refuses to tick it then), and can delete the streamer.
   Settings that are on show on the card as ⬇ 自动下载 (auto-download) / ⬆ 自动上传 (auto-upload) / ☁ 网盘 (drive) / ⚡ 闪传 (flash transfer).
 - **录播** ([archives.html](../frontend/archives.html)): downloaded archives and their processing progress (the queue box names each live's stage,
-  a flash transfer's as 「等待闪传上传」 (waiting for the flash upload) and then 「闪传上传 xx%」 while it uploads). Each one can be played,
+  a flash transfer's as 「等待闪传上传」 (waiting for its flash transfer) and then 「闪传上传 xx%」 while it uploads). Each one can be played,
   with Chinese (default) / Japanese subtitles, a 中 / 日 / 双语 subtitle panel, chat replay and a chat density chart. Downloads: video, chat,
   SRT (Chinese / Japanese), highlight table (Excel), or everything as one zip (without the raw chat); once the live's drive copy is on the drive,
   「☁ 网盘链接」 (drive link) opens it there, and once its flash transfer is uploaded, 「⚡ 闪传链接」 (flash link) opens the flash link until it expires
@@ -445,19 +445,24 @@ makes the cutting start again with one part more, up to three more. Each part is
   「全部处理完成」 is the flash job's to send.
 - One flash transfer at a time, in the order the lives were processed. An archive is not deleted from the server (see `keep`) while its flash job is in the queue.
 
-**When it fails.** A try fails when the flash service refuses or answers an error, a file fails, the bytes sent do not move for 30 minutes, or the files cannot be prepared or cut.
+**When it fails.** A try fails when the flash service refuses or answers an error, a file fails, the bytes sent do not move for 30 minutes, or the files cannot be prepared or cut
+(then the reason is 「切分影片失败（详情见日志）」 or 「准备闪传的文件失败（详情见日志）」, and ffmpeg's own words, or the system's, are in the log).
 It is tried again with the pipeline's retry settings (`download.auto.retry_minutes` and `max_errors`: three tries, fifteen minutes apart), each try a new flash transfer;
 a failing one waits for its next try without holding back other lives. After the last try, 「全部处理完成」 goes out as for a streamer without flash transfers
 (the short download link; the sheet is told it), and the owner gets one Discord alert: the streamer, the live's date and title, the reason (without any address),
-and the command that makes the flash transfer by hand. No QQ group is told. A flash job whose flash service is no longer configured after a restart is dropped the same way, without the alert.
+and the command that makes the flash transfer by hand. No QQ group is told. A flash job whose flash service is no longer configured after a restart is dropped the same way, without the alert,
+once its live's late chat is in or given up (the files a flash transfer it had started was reading are removed).
 
 **When the flash account is offline.** An offline flash account and a flash service that cannot be reached are one case (they cannot be told apart from here). The flash job waits:
 neither a try nor an error, and nothing is prepared or cut before the account is online. It is looked at every minute.
 The owner gets a Discord alert when the first live starts to wait, 「闪传账号掉线或闪传服务连不上」 (flash account offline or flash service unreachable) with how many lives wait
-and the 通知 page's address (with `SITE_URL`), and again every 24 hours while any live waits, never more often; one alert covers every waiting live. No QQ group is told.
-After the scan nothing more is needed: the first look that finds the account online ends every live's waiting, and they go on one at a time in their order
+and the 通知 page's address (with `SITE_URL`), and again every 24 hours while any live waits. Never more often: while a live that an alert covered is still in the queue,
+a new wait (the account back for a while, then offline again) brings no alert before 24 hours have passed since the last one. One alert covers every waiting live. No QQ group is told.
+After the scan nothing more is needed: the waiting ends once the flash service serves again (a flash transfer started, or a started one's progress answered), and the lives go on one at a time in their order
 (a flash transfer started before the account went offline goes on by its id), each with its own 「全部处理完成」 and flash link.
-A live that has waited 72 hours since it first found the account offline in that outage is given up on: 「全部处理完成」 with the short download link, the sheet told it,
+A status that merely says online does not end the waiting: while the flash service still cannot start a flash transfer, the files are prepared (and a big video cut) at most once every
+retry pause (`download.auto.retry_minutes`), and a started flash transfer is never started again.
+A live that has waited 72 hours since it first waited, with no flash transfer served in between, is given up on: 「全部处理完成」 with the short download link, the sheet told it,
 and no alert of a failure (the reminders said why). A restart keeps the waiting time and the time of the last reminder.
 
 **The 「闪传账号」 block** on the 通知 page (admins only, like the rest of the page) shows the state, 在线 / 掉线 / 连不上闪传服务 / 未设置 (online / offline / unreachable / not set up),
@@ -474,7 +479,9 @@ and never starts it a second time. A flash job without an id prepares its files 
 an uploading or waiting flash transfer never holds a deploy. The deploy check prints `闪传：N 个任务，M 个正在切分影片，K 个在等闪传账号（只有正在切分的会挡住部署）。`
 (flash: N jobs, M cutting a video, K waiting for the flash account; only cutting holds a deploy).
 
-A flash link, a QR code's text, the login hash and the flash service's addresses are never written to the log. The flash link is kept in the queue while its job is there,
+A flash link, a QR code's text, the login hash and the flash service's addresses are never written to the log. A try's reason is kept (in the queue, shown in the queue view),
+logged and told in an alert with every address in it (`http`, `https`, `ws`, `wss`) left out; an unexpected error is logged by its kind and that text, without a traceback.
+The flash link is kept in the queue while its job is there,
 then in the archive's flash link file (and in `data/source_record_jobs.json` until its row is written).
 
 **By hand** ([backend/flash/\_\_main\_\_.py](../backend/flash/__main__.py)):
@@ -485,7 +492,8 @@ docker compose exec kiri /app/.venv/bin/python -m backend.flash upload "森野�
 ```
 
 (The comments mean: is the flash account online; make the flash transfer of one archive.)
-`status` prints the account's state in one line (exit code 0 online, 1 otherwise). `upload` takes an archive's folder, or its folder reference under the downloads folder;
+`status` prints the account's state in one line (exit code 0 online, 1 otherwise). `upload` takes an archive's folder, or its folder reference under the downloads folder
+(a folder outside the downloads folder is refused); while the flash account is offline it ends at once with nothing prepared, else
 it prepares the files (cutting a video too big for one file), starts the flash transfer, waits for it while printing its progress, notes the flash link in the archive
 (its page shows 「⚡ 闪传链接」) and prints the flash link with its expiry. It tells no group and writes no sheet row; exit code 1 when the flash transfer could not be made.
 Both exit with 2 when no flash service is configured. Only lives processed after the box was ticked are transferred automatically; this command is for older ones and for a live that fell back.

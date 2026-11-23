@@ -59,11 +59,13 @@ Rules:
   were processed; a failed one waits for its next try without holding the others. While
   the flash account is offline or the flash service cannot be reached, a flash job waits
   instead: neither an attempt nor an error, nothing prepared before the account is online,
-  looked at every FLASH_OFFLINE_LOOK; the owner is reminded at once and every
-  FLASH_REMINDER_EVERY (operator alert, one for all waiting lives). The first look that finds
-  the account online ends every live's waiting, and they go on in their order; a live that
-  has waited FLASH_OFFLINE_GIVE_UP since its first wait gets READY as without a flash
-  transfer, without the alert of a failure.
+  looked at every FLASH_OFFLINE_LOOK; the owner is reminded at once and then at most every
+  FLASH_REMINDER_EVERY while a reminded live is in the queue (operator alert, one for all
+  waiting lives). The waiting ends when the flash service serves the stage again (a flash
+  transfer started, a started one's progress answered), not when its status merely says
+  online: then the files are prepared at most once a retry pause, and the lives go on in
+  their order once it serves. A live that has waited FLASH_OFFLINE_GIVE_UP since its first
+  wait gets READY as without a flash transfer, without the alert of a failure.
 - Jobs live in `state_file`, so a restart resumes them (yt-dlp resumes partial files).
 """
 
@@ -159,10 +161,16 @@ class Job:
     flash_sent: int | None = None
     flash_moved_at: float | None = None
     # Flash stage, the flash account offline (or the flash service unreachable): when this job
-    # first found it so (its FLASH_OFFLINE_GIVE_UP count from then) and when the owner was last
-    # reminded of the waiting; both None while it does not wait for the account.
+    # first found it so (its FLASH_OFFLINE_GIVE_UP count from then; None while it does not
+    # wait), and when the owner was last reminded of a waiting that covered it (kept while the
+    # job is in the queue, so that no second reminder comes within FLASH_REMINDER_EVERY).
+    # A waiting ends only when the flash service serves the stage again (a flash transfer
+    # started, a started one's progress answered), not when its status merely says online:
+    # `flash_status_online` notes that the waiting job's last look found it so, and its next
+    # try prepares the files and starts the flash transfer.
     flash_offline_since: float | None = None
     flash_reminded_at: float | None = None
+    flash_status_online: bool = False
 
     @property
     def stream_key(self) -> str:
@@ -206,6 +214,7 @@ class Job:
             "flash_moved_at": self.flash_moved_at,
             "flash_offline_since": self.flash_offline_since,
             "flash_reminded_at": self.flash_reminded_at,
+            "flash_status_online": self.flash_status_online,
         }
 
     @property
@@ -250,7 +259,10 @@ class Outcome:
     # uploaded (done)
     flash: StartedTransfer | None = None
     sent: int | None = None  # flash stage, wait while uploading: the bytes sent at this look
-    online: bool = False  # flash stage: this look found the flash account online
+    # Flash stage: the flash service served this look (a flash transfer started, its progress
+    # answered): no live waits for the flash account any more
+    served: bool = False
+    online: bool = False  # flash stage: a waiting job's look found the status online, nothing served
 
 
 class AutoDownloader:
@@ -428,7 +440,7 @@ class AutoDownloader:
         flash account, and the video is over the limit."""
         if job.transfer_id or not self.flash or not job.video or self._awaits_chat(job):
             return False
-        if self._looks_only(job, self.load()):
+        if self._looks_only(job) or self._goes_after(job, self.load()):
             return False
         return needs_cutting(Archive.from_video(Path(job.video)))
 
@@ -443,7 +455,7 @@ class AutoDownloader:
     def _eligible(jobs: list[Job], stage: str | None) -> list[Job]:
         """The stage's jobs that may be tried when due: while a flash transfer is started, no
         other flash job (one flash transfer at a time), unless it waits for the flash account:
-        then the others are looked at too, each to find the account for itself (`_looks_only`)."""
+        then the others are looked at too, and wait with it (`_goes_after`)."""
         jobs = [j for j in jobs if stage in (None, j.stage)]
         started = [j for j in jobs if j.stage == "flash" and j.transfer_id]
         if started and any(j.flash_offline_since is None for j in started):
@@ -599,81 +611,105 @@ class AutoDownloader:
         staging folder goes once the flash transfer is uploaded or cannot be made."""
         s = job.status
         assert job.video  # a flash job is only queued for a live with a video
-        if not self.flash:  # gone since the job was queued (.env changed, then a restart)
-            log.warning("flash transfers are on for %s, but no flash service is configured: dropped", s.streamer.name)
-            return Outcome("unavailable")
-        if self._awaits_chat(job):  # the chat goes into the flash transfer: wait until it is in or given up
+        if self._awaits_chat(job):  # the chat goes into the flash transfer (READY waits for it too)
             return Outcome("wait", "等待弹幕补抓", retry_at=self.clock() + FLASH_WAIT_LOOK)
         archive = Archive.from_video(Path(job.video))
         root = self.settings.output_dir
+        if not self.flash:  # gone since the job was queued (.env changed, then a restart)
+            log.warning("flash transfers are on for %s, but no flash service is configured: dropped", s.streamer.name)
+            remove_staging(archive, root)  # a flash transfer it had started is never looked at again
+            return Outcome("unavailable")
         started = job.transfer
+        prepared = False  # this try prepared the files: a start that cannot reach the flash service waits a retry pause
         try:
             if started is None:
+                since = job.flash_offline_since
+                if since is not None and self.clock() - since >= FLASH_OFFLINE_GIVE_UP:
+                    remove_staging(archive, root)
+                    return Outcome("waited_out", job.last_error)  # nothing prepared for a live given up on
                 # Nothing is prepared or cut before the account is known to be online (asked of
                 # the flash service alone: never the login interface, which only the 通知 page
-                # uses). A job that waited, or one beside a started flash transfer that waits,
-                # only finds the account back here: its next try (the busy mark set) prepares.
+                # uses). A live behind one that waits, waits with it. A waiting job whose look
+                # finds the status online only notes it: its next try (the busy mark set) prepares.
                 self.flash.require_online()
-                if self._looks_only(job, self.load()):
-                    return Outcome("wait", "闪传账号已恢复", retry_at=self.clock(), online=True)
-                prepared = prepare(archive, root, ffmpeg=self.settings.ffmpeg)
-                started = self.flash.start(prepared.files, prepared.name)
-                log.info("flash transfer started: %s %s (%d files)", s.streamer.name, s.url, len(prepared.files))
-                return Outcome("wait", "闪传上传中", retry_at=self.clock(), flash=started, online=True)
+                if self._goes_after(job, self.load()):
+                    return self._flash_offline(job, archive, "排在前面的录播在等闪传账号")
+                if self._looks_only(job):
+                    return Outcome("wait", "闪传账号显示在线", retry_at=self.clock(), online=True)
+                files = prepare(archive, root, ffmpeg=self.settings.ffmpeg)
+                prepared = True
+                started = self.flash.start(files.files, files.name)
+                log.info("flash transfer started: %s %s (%d files)", s.streamer.name, s.url, len(files.files))
+                return Outcome("wait", "闪传上传中", retry_at=self.clock(), flash=started, served=True)
             progress = self.flash.progress(started.id)
         except FlashUnavailable as e:  # waits for the account: not a failed try
-            return self._flash_offline(job, archive, str(e))
+            return self._flash_offline(job, archive, str(e), pause=prepared)
         except FlashFailed as e:
             return self._flash_failed(archive, str(e))
         except Exception as e:  # noqa: BLE001 - a bug or a surprise: a failed try, not a stuck job
-            log.exception("flash attempt raised: %s %s", s.streamer.name, s.url)
-            return self._flash_failed(archive, f"{type(e).__name__}: {e}")
+            # Its kind and its text without addresses, no traceback: a flash service's error
+            # can name its address, or a flash link.
+            reason = without_addresses(f"{type(e).__name__}: {e}")
+            log.warning("flash attempt raised: %s %s: %s", s.streamer.name, s.url, reason)
+            return self._flash_failed(archive, reason)
         if progress.failed:
-            return self._flash_failed(archive, f"{progress.failed} 个文件上传失败", online=True)
+            return self._flash_failed(archive, f"{progress.failed} 个文件上传失败", served=True)
         if not progress.finished:
             moved_at = job.flash_moved_at  # None: not looked at since a restart from an older queue file
             if moved_at is not None and progress.sent == job.flash_sent and self.clock() - moved_at >= FLASH_STALL:
-                return self._flash_failed(archive, f"上传 {FLASH_STALL // 60} 分钟没有进展", online=True)
+                return self._flash_failed(archive, f"上传 {FLASH_STALL // 60} 分钟没有进展", served=True)
             self._active["flash"] = {
                 "name": s.streamer.name, "platform": s.streamer.platform, "title": s.title, "url": s.url,
                 "started": started.made.timestamp(), "stage": "flash",
                 "percent": round(progress.sent / progress.total * 100, 1) if progress.total else None,
                 "downloaded": progress.sent, "total": progress.total or None, "speed": None, "eta": None}
             return Outcome("wait", "闪传上传中", retry_at=self.clock() + FLASH_PROGRESS_LOOK, sent=progress.sent,
-                           online=True)
+                           served=True)
         try:
             note_flash_link(archive, started)
         except Exception:  # noqa: BLE001 - the page loses the link, the message still carries it
             log.exception("noting the flash link in the archive failed: %s %s", s.streamer.name, s.url)
         remove_staging(archive, root)
-        return Outcome("done", flash=started, online=True)
+        return Outcome("done", flash=started, served=True)
 
-    def _flash_failed(self, archive: Archive, reason: str, online: bool = False) -> Outcome:
+    def _flash_failed(self, archive: Archive, reason: str, served: bool = False) -> Outcome:
         """A try at a flash transfer failed: its staging folder goes (a new try prepares the
-        files again). `online`: the flash service answered its progress, so the account is."""
+        files again). `served`: the flash service answered its progress."""
         remove_staging(archive, self.settings.output_dir)
-        return Outcome("error", reason, online=online)
+        return Outcome("error", reason, served=served)
 
-    def _flash_offline(self, job: Job, archive: Archive, reason: str) -> Outcome:
+    def _flash_offline(self, job: Job, archive: Archive, reason: str, pause: bool = False) -> Outcome:
         """The flash account is offline or the flash service cannot be reached: the job waits
-        and is looked at again in FLASH_OFFLINE_LOOK; FLASH_OFFLINE_GIVE_UP after it first
-        found it so, it is given up on. A started flash transfer keeps its staging folder (the
-        flash service reads it when it goes on); any other is removed (prepared again later)."""
+        and is looked at again in FLASH_OFFLINE_LOOK, or after the retry pause when this try
+        prepared the files (`pause`: a status that says online while the start cannot reach
+        the flash service would prepare them, and cut a big video, at every look);
+        FLASH_OFFLINE_GIVE_UP after it first found it so, it is given up on. A started flash
+        transfer keeps its staging folder (the flash service reads it when it goes on); any
+        other is removed (prepared again later)."""
         now = self.clock()
-        over = job.flash_offline_since is not None and now - job.flash_offline_since >= FLASH_OFFLINE_GIVE_UP
+        since = job.flash_offline_since if job.flash_offline_since is not None else now
+        over = now - since >= FLASH_OFFLINE_GIVE_UP
         if over or job.transfer is None:
             remove_staging(archive, self.settings.output_dir)
         if over:
             return Outcome("waited_out", reason)
-        return Outcome("offline", reason, retry_at=now + FLASH_OFFLINE_LOOK)
+        look = self.retry_interval if pause else FLASH_OFFLINE_LOOK
+        return Outcome("offline", reason, retry_at=min(now + look, since + FLASH_OFFLINE_GIVE_UP))
 
     @staticmethod
-    def _looks_only(job: Job, jobs: list[Job]) -> bool:
+    def _looks_only(job: Job) -> bool:
         """A try at this flash job (no flash transfer started) only looks at the account: it
-        waited for it, or another live's started flash transfer is in the queue (one flash
-        transfer at a time; that one goes on first)."""
-        return job.flash_offline_since is not None or any(
-            j.stage == "flash" and j.transfer_id and j.key != job.key for j in jobs)
+        waits for it, and its last look did not find the status online."""
+        return job.flash_offline_since is not None and not job.flash_status_online
+
+    @staticmethod
+    def _goes_after(job: Job, jobs: list[Job]) -> bool:
+        """Another live goes before this flash job (no flash transfer started): its started
+        flash transfer is in the queue (one at a time; that one goes on first), or a live
+        processed earlier waits for the flash account (the lives go on in their order)."""
+        return any(j.stage == "flash" and j.key != job.key
+                   and (j.transfer_id or (j.flash_offline_since is not None and j.queued_at < job.queued_at))
+                   for j in jobs)
 
     def _on_drive_progress(self, sent: int, total: int | None) -> None:
         """The drive's progress (runs in the drive thread)."""
@@ -966,23 +1002,25 @@ class AutoDownloader:
         without one. While the flash account is offline the job waits for it, neither an
         attempt nor an error, and the owner is reminded (`_flash_reminder`); after
         FLASH_OFFLINE_GIVE_UP it is given up on without the alert of a failure. A look that
-        finds the account online ends every live's waiting."""
+        the flash service served ends every live's waiting; one that merely finds the status
+        online lets this job's next try prepare and start."""
         jobs = self.load()
         current = next((j for j in jobs if j.key == job.key), job)
         rest = [j for j in jobs if j.key != job.key]
         current.cutting = False  # the attempt is over, whatever its outcome
+        current.flash_status_online = outcome.online
         name = job.status.streamer.name
         now = self.clock()
-        if outcome.online:
+        if outcome.served:
             self._account_back([current, *rest], now)
         if outcome.kind == "offline":  # neither an attempt nor an error
             self._active["flash"] = None
-            current.last_error = outcome.message
+            current.last_error = without_addresses(outcome.message)
             current.flash_moved_at = None  # a started upload's FLASH_STALL counts again after the scan
             if current.flash_offline_since is None:
                 current.flash_offline_since = now
                 log.warning("flash transfer waits for the flash account: %s %s: %s", name, current.status.url,
-                            ADDRESS.sub("(address left out)", outcome.message))
+                            current.last_error)
             current.next_try = outcome.retry_at if outcome.retry_at is not None else now + FLASH_OFFLINE_LOOK
             queue = rest + [current]
             reminder = self._flash_reminder(queue, now)
@@ -1009,11 +1047,11 @@ class AutoDownloader:
         if outcome.kind == "error":  # a failed try: the next one starts a new flash transfer
             current.attempts += 1
             current.errors += 1
-            current.last_error = outcome.message
+            current.last_error = without_addresses(outcome.message)
             current.transfer = None
             current.flash_sent = current.flash_moved_at = None
             log.warning("flash transfer failed (%d/%d): %s: %s", current.errors, self.max_errors, name,
-                        ADDRESS.sub("(address left out)", outcome.message))
+                        current.last_error)
             if current.errors < self.max_errors:
                 current.next_try = self.clock() + self.retry_interval
                 self.save(rest + [current])
@@ -1047,21 +1085,26 @@ class AutoDownloader:
 
     @staticmethod
     def _account_back(jobs: list[Job], now: float) -> None:
-        """The flash account is online: no flash job waits for it any more, and each that did
-        is looked at now (the order of the lives decides which goes first)."""
+        """The flash service served the stage again: no flash job waits for the account any
+        more, and each that did is looked at now (the order of the lives decides which goes
+        first). When they were reminded stays noted: a new waiting within the day is not
+        reminded again."""
         back = [j for j in jobs if j.stage == "flash" and j.flash_offline_since is not None]
         for j in back:
-            j.flash_offline_since = j.flash_reminded_at = None
+            j.flash_offline_since = None
+            j.flash_status_online = False
             j.next_try = min(j.next_try, now)
         if back:
             log.info("the flash account is online again: %d flash transfer(s) go on", len(back))
 
     def _flash_reminder(self, jobs: list[Job], now: float) -> str | None:
         """The reminder of the waiting for the flash account, when it is due: at the first
-        wait and then every FLASH_REMINDER_EVERY while any live waits, never more often. One
-        reminder covers every waiting live; its time is noted in each (a restart keeps it)."""
-        waiting = [j for j in jobs if j.stage == "flash" and j.flash_offline_since is not None]
-        last = max((j.flash_reminded_at for j in waiting if j.flash_reminded_at is not None), default=None)
+        wait, then at most once every FLASH_REMINDER_EVERY while any live a reminder covered
+        is in the queue, whatever the account did in between. One reminder covers every
+        waiting live; its time is noted in each (a restart keeps it)."""
+        flash = [j for j in jobs if j.stage == "flash"]
+        waiting = [j for j in flash if j.flash_offline_since is not None]
+        last = max((j.flash_reminded_at for j in flash if j.flash_reminded_at is not None), default=None)
         if last is not None and now - last < FLASH_REMINDER_EVERY:
             for j in waiting:  # a live that starts to wait now is covered by the last reminder
                 j.flash_reminded_at = j.flash_reminded_at or last
@@ -1217,6 +1260,11 @@ def flash_ready_links(video: Path, site_url: str, output_dir: Path, flash_link: 
     return (Link(FLASH_LINK_LABEL, flash_link), *page)
 
 
+def without_addresses(reason: str) -> str:
+    """A flash transfer's reason with every address left out (and cut to REASON_KEPT)."""
+    return ADDRESS.sub("（地址略）", reason)[:REASON_KEPT]
+
+
 def flash_given_up_message(job: Job, output_dir: Path) -> str:
     """The owner's operator alert for a flash job given up on (Chinese, like the other operator
     messages): the streamer, the live and the last try's reason, and the command that makes
@@ -1224,7 +1272,7 @@ def flash_given_up_message(job: Job, output_dir: Path) -> str:
     s = job.status
     assert job.video  # a flash job is only queued for a live with a video
     video = Path(job.video)
-    reason = ADDRESS.sub("（地址略）", job.last_error)[:REASON_KEPT]
+    reason = without_addresses(job.last_error)
     return "\n".join([
         f"QQ 闪传试了 {job.errors} 次仍失败，已放弃；「全部处理完成」已照常发出（不带闪传链接）",
         f"配信者：{s.streamer.name}",
@@ -1281,8 +1329,10 @@ FLASH_REMINDER_EVERY = 24 * 3600
 # What the owner runs on the server to make a flash transfer given up on by hand (the alert
 # adds the archive's folder reference).
 FLASH_BY_HAND_COMMAND = "docker compose exec kiri /app/.venv/bin/python -m backend.flash upload"
-ADDRESS = re.compile(r"https?://\S+")  # left out of the reason an alert tells: it carries no link
-REASON_KEPT = 500  # characters of a reason an alert tells
+# Left out of a flash transfer's reason before it is logged, kept in the queue (shown in the
+# members' queue view) or told in an alert: a flash link, the flash service's addresses.
+ADDRESS = re.compile(r"(?:https?|wss?)://\S+", re.IGNORECASE)
+REASON_KEPT = 500  # characters of a reason kept and told
 SHEET_LABEL = "腾讯文档路灯表"
 
 

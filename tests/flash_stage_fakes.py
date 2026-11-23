@@ -182,6 +182,12 @@ def staging(tmp_path, creator: str = "A") -> Path:
     return Downloads(tmp_path / "dl").flash_staging / creator / "20261110" / "歌枠"
 
 
+# Every field flash transfers added to a job of the download queue: a queue file written before
+# them has none of these (the tests of such a file drop them all).
+FLASH_JOB_FIELDS = ("transfer_id", "flash_link", "flash_expires", "flash_made", "flash_sent", "flash_moved_at",
+                    "flash_offline_since", "flash_reminded_at", "flash_status_online", "cutting")
+
+
 # ---- a failed flash transfer (ticket 09) ----
 
 PAUSE = 900  # the pipeline's retry pause in the tests' pipeline (`make`: retry_interval=900)
@@ -225,6 +231,11 @@ class AccountFlash(FakeFlash):
         super().__init__(*progress, **kw)
         self.state = state
         self.accounts = 0
+        # False: the status answers as `state` says, but a start or a look at a progress
+        # cannot reach the flash service (FlashUnavailable), however online the status says
+        # the account is. `unserved` counts those calls.
+        self.serving = True
+        self.unserved = 0
 
     def account(self) -> AccountState:
         return AccountState(self.state)  # type: ignore[arg-type]
@@ -239,12 +250,20 @@ class AccountFlash(FakeFlash):
         if self.state != "online":
             raise FlashUnavailable("闪传账号掉线" if self.state == "offline" else "连不上闪传服务（ConnectionRefusedError）")
 
-    def start(self, files: list[Path], name: str) -> StartedTransfer:
+    def _served(self) -> None:
+        from backend.flash.client import FlashUnavailable
+
         self._online()
+        if not self.serving:
+            self.unserved += 1
+            raise FlashUnavailable("连不上闪传服务（TimeoutError）")
+
+    def start(self, files: list[Path], name: str) -> StartedTransfer:
+        self._served()
         return super().start(files, name)
 
     def progress(self, transfer_id: str) -> Progress:
-        self._online()
+        self._served()
         return super().progress(transfer_id)
 
 

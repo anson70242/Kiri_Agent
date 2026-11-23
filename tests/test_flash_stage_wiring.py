@@ -25,7 +25,7 @@ def test_the_pipeline_gets_the_configured_flash_service_and_none_without_one(tmp
     assert load_auto(cfg).flash is None
     assert load_auto(cfg, flash=load_flash(cfg)).flash is None  # the tests' environment configures none
 
-    monkeypatch.setenv("FLASH_ACTIONS_URL", "ws://flash.example:3001")
+    monkeypatch.setenv("FLASH_ACTIONS_URL", "ws://flash.example:8001")
     client = load_flash(cfg)
     assert isinstance(client, FlashClient)
     assert load_auto(cfg, flash=client).flash is client

@@ -24,7 +24,7 @@ import os
 import re
 import shutil
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -101,7 +101,7 @@ class FlashLink:
     """An archive's flash link: the address editors download its flash transfer from, until
     it expires. Both times carry a time zone."""
 
-    url: str  # the address
+    url: str = field(repr=False)  # the address, left out of the object's text so that logging one never logs it
     expires: datetime  # when the link stops working
     made: datetime  # when the flash transfer was started
 
@@ -465,6 +465,48 @@ class Downloads:
         as an archive. One folder per archive below it, at the archive's folder reference."""
         return self.root / FLASH_STAGING_FOLDER
 
+    def flash_staging_of(self, folder: Path) -> Path:
+        """The staging folder of the archive in `folder` (under `flash_staging`, at its folder
+        reference). Raises ValueError for a folder outside the root."""
+        return self.flash_staging / self.ref(folder)
+
+    def remove_flash_staging(self, folder: Path) -> None:
+        """Remove the staging folder of the archive in `folder`, and the folders above it up
+        to `flash_staging` (included) that it leaves empty; nothing happens when there is
+        none, or for a folder outside the root."""
+        try:
+            staging = self.flash_staging_of(folder)
+        except ValueError:
+            return
+        if not staging.exists():
+            return
+        shutil.rmtree(staging, ignore_errors=True)
+        for parent in staging.parents:
+            if not parent.is_relative_to(self.flash_staging):
+                break
+            try:
+                parent.rmdir()
+            except OSError:  # not empty, or already gone
+                break
+
+    def remove_flash_staging_but(self, keep: Iterable[Path] = ()) -> int:
+        """Remove every staging folder but those of the archive folders in `keep` (outside
+        the root: ignored), and the folders left empty; returns how many were kept."""
+        place = self.flash_staging
+        if not place.exists():
+            return 0
+        kept: set[Path] = set()
+        for folder in keep:
+            try:
+                kept.add(self.flash_staging_of(folder))
+            except ValueError:
+                continue
+        if kept:
+            _remove_all_but(place, kept)
+        else:
+            shutil.rmtree(place, ignore_errors=True)
+        return len(kept)
+
     def list(self) -> list[Archive]:
         """Every `<creator>/<date>/<title>/` archive, newest first by date, then by when a file
         in it last changed. Folders that vanish while being listed are skipped, and
@@ -532,6 +574,22 @@ class Downloads:
             if not any(folder.parent.iterdir()):
                 folder.parent.rmdir()
         return removed
+
+
+def _remove_all_but(folder: Path, kept: set[Path]) -> None:
+    """Remove everything in `folder` but the folders `kept` and the folders that lead to
+    them; a folder left empty goes too."""
+    for entry in list(folder.iterdir()):
+        if entry in kept:
+            continue
+        if entry.is_dir() and any(k.is_relative_to(entry) for k in kept):
+            _remove_all_but(entry, kept)
+            if not any(entry.iterdir()):
+                entry.rmdir()
+        elif entry.is_dir():
+            shutil.rmtree(entry, ignore_errors=True)
+        else:
+            entry.unlink(missing_ok=True)
 
 
 def archive_folders_under(path: Path) -> list[Path]:
