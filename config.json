@@ -2,14 +2,7 @@
   "auth": { "enabled": true },
   "monitor": {
     "interval": 60,
-    "streamers": [
-      { "name": "惑世いと", "platform": "youtube", "channel": "@wakuse_ito" },
-      { "name": "柊優花", "platform": "youtube", "channel": "@柊優花", "auto_download": true },
-      { "name": "東雲はる", "platform": "youtube", "channel": "@東雲はるch", "auto_download": true },
-      { "name": "sola", "platform": "youtube", "channel": "@sola_she" },
-      { "name": "鹿乃まほろ", "platform": "youtube", "channel": "@Kano_", "auto_download": true },
-      { "name": "柊優花", "platform": "twitch", "channel": "hiiragiyukaofficial", "auto_download": true }
-    ]
+    "streamers": []
   },
   "notify": {
     "on_startup": false,
