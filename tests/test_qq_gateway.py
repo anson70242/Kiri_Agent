@@ -66,13 +66,13 @@ def test_removed_or_muted_groups_stop_and_raise_one_alert(tmp_path):
     fake = FakeQQ()
     gw, groups, alerts = gateway(tmp_path, fake)
     groups.register("G1")
-    groups.update("G1", name="章鱼烧")
+    groups.update("G1", name="向日葵")
     groups.register("G2")
 
     dispatch(gw, "GROUP_DEL_ROBOT", {"group_openid": "G1"})
     dispatch(gw, "GROUP_MSG_REJECT", {"group_openid": "G2"})
     assert groups.get("G1")["status"] == "removed" and groups.get("G2")["status"] == "muted"
-    assert len(alerts) == 2 and "章鱼烧" in alerts[0]
+    assert len(alerts) == 2 and "向日葵" in alerts[0]
     dispatch(gw, "GROUP_MSG_RECEIVE", {"group_openid": "G2"})
     assert groups.get("G2")["status"] == "active"
 

@@ -23,9 +23,9 @@ def groups(tmp_path, **settings) -> QQGroups:
 
 
 def test_a_group_with_a_sheet_records_the_streamers_it_ticks_on_every_platform(tmp_path):
-    store = groups(tmp_path, name="章鱼烧字幕组", streamers=["A"], source_record_sheet=SHEET)
+    store = groups(tmp_path, name="向日葵字幕组", streamers=["A"], source_record_sheet=SHEET)
     for s in (A_YOUTUBE, A_TWITCH, A_TWITCASTING):
-        assert store.recording(s) == [RecordingGroup("G1", "章鱼烧字幕组", SHEET)], s
+        assert store.recording(s) == [RecordingGroup("G1", "向日葵字幕组", SHEET)], s
     assert store.recording(B) == []
 
 

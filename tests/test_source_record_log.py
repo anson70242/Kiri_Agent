@@ -29,7 +29,7 @@ def test_a_reason_that_echoes_the_link_puts_no_link_into_the_log(tmp_path, caplo
 def test_a_missing_header_is_logged_in_english_naming_the_header(tmp_path, caplog):
     docs = FakeTencentDocs()
     record_sheet(docs, headers=("配信者", "日期", "项目类型", "链接"))
-    store(tmp_path, ("G1", {"name": "章鱼烧字幕组", "streamers": ["A"], "source_record_sheet": SHEET}))
+    store(tmp_path, ("G1", {"name": "向日葵字幕组", "streamers": ["A"], "source_record_sheet": SHEET}))
     s, _, alerts = setup(tmp_path, docs)
     processed(s.keeper)
     with caplog.at_level(logging.DEBUG):
@@ -42,7 +42,7 @@ def test_a_missing_header_is_logged_in_english_naming_the_header(tmp_path, caplo
 
 
 def test_a_row_and_its_job_shown_with_repr_hold_no_link():
-    row = SheetRow(RowKind.ARCHIVE, "A", "20261122", "戦場がマイホームの声優です", LINK, None, "v1")
-    job = RowJob(SheetTab(FILE_ID, TAB_ID), row, "章鱼烧字幕组")
+    row = SheetRow(RowKind.ARCHIVE, "A", "20261122", "今日はのんびり雑談するよ〜", LINK, None, "v1")
+    job = RowJob(SheetTab(FILE_ID, TAB_ID), row, "向日葵字幕组")
     assert "AbCdEf1234" not in repr(row) and "AbCdEf1234" not in repr(job)
-    assert "戦場がマイホームの声優です" in repr(job)
+    assert "今日はのんびり雑談するよ〜" in repr(job)

@@ -83,7 +83,7 @@ CHAT = [
 ]
 TRANSCRIPT = [{"start": 1.0, "end": 2.0, "text": "やっほー"}]
 CHINESE_TRANSCRIPT = [{"start": 1.0, "end": 2.0, "text": "哈喽"}]
-HIGHLIGHTS = {"streamer": "柊優花", "title": "歌枠", "rows": [
+HIGHLIGHTS = {"streamer": "森野鈴", "title": "歌枠", "rows": [
     {"start": "00:00:00", "end": "00:05:00", "score": 8, "top_pick": {"title": "开场"}},
     {"start": "00:05:00", "end": "00:10:00", "score": 5, "top_pick": None},
 ]}
@@ -93,7 +93,7 @@ _ARTIFACT_FILES = {  # keyword -> file name suffix, spelled out here as the test
 }
 
 
-def sample_archive(root: Path, creator: str = "柊優花", date: str = "20261105", title: str = "歌枠", *,
+def sample_archive(root: Path, creator: str = "森野鈴", date: str = "20261105", title: str = "歌枠", *,
                    video: bytes | None = b"0123456789", raw_chat: object = None, chat: object = CHAT,
                    transcript: object = TRANSCRIPT, chinese_transcript: object = CHINESE_TRANSCRIPT,
                    highlights: object = HIGHLIGHTS, stem: str | None = None) -> Path:
@@ -118,7 +118,7 @@ def sample_archive(root: Path, creator: str = "柊優花", date: str = "20261105
     return folder
 
 
-def bare_archive(root: Path, creator: str = "柊優花", date: str = "20261105", title: str = "歌枠",
+def bare_archive(root: Path, creator: str = "森野鈴", date: str = "20261105", title: str = "歌枠",
                  **artifacts: object) -> Path:
     """`sample_archive` with only the artifacts given (none by default), e.g.
     `bare_archive(root, "A", stem="v", video=b"x")`."""

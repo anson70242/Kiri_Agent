@@ -18,9 +18,9 @@ from backend.monitor.archives import create_router
 
 from .helpers import sample_archive
 
-FOLDER = "柊優花/20261105/歌枠"
+FOLDER = "森野鈴/20261105/歌枠"
 LINK = DriveLink(url="https://pan.example/s/f00dcafe?pwd=k7q2", code="k7q2",
-                 path="录播/柊優花/[20261105][柊優花] 歌枠.zip",
+                 path="录播/森野鈴/[20261105][森野鈴] 歌枠.zip",
                  made=datetime(2026, 11, 18, 12, 30, tzinfo=timezone.utc))
 
 
@@ -41,7 +41,7 @@ def test_a_drive_link_saved_in_the_archive_is_returned_by_the_archives_api(root)
 
     assert api_archive(root)["drive_link"] == {
         "url": "https://pan.example/s/f00dcafe?pwd=k7q2", "code": "k7q2",
-        "path": "录播/柊優花/[20261105][柊優花] 歌枠.zip", "made": "2026-11-18T12:30:00+00:00",
+        "path": "录播/森野鈴/[20261105][森野鈴] 歌枠.zip", "made": "2026-11-18T12:30:00+00:00",
     }
     assert Archive.from_folder(root / FOLDER).read_drive_link() == LINK
 

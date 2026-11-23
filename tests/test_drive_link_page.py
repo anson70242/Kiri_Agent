@@ -6,14 +6,14 @@ from urllib.parse import quote
 
 from .test_monitor_page import browser, page, server  # noqa: F401  (pytest fixtures)
 
-FOLDER = "柊優花/20261105/歌枠"
-STEM = "[20261105][柊優花] 歌枠"
-ARCHIVE = {"creator": "柊優花", "date": "20261105", "title": "歌枠", "folder": FOLDER,
+FOLDER = "森野鈴/20261105/歌枠"
+STEM = "[20261105][森野鈴] 歌枠"
+ARCHIVE = {"creator": "森野鈴", "date": "20261105", "title": "歌枠", "folder": FOLDER,
            "video": f"{STEM}.mp4", "video_size": 10, "downloading": False, "has_chat": False,
            "chat_file": None, "raw_chat_file": None, "chat_count": 0, "transcript_file": None,
            "zh_transcript_file": None, "highlights_file": None, "drive_link": None, "size": 10, "mtime": 0}
 LINK = {"url": "https://pan.example/s/f00dcafe?pwd=k7q2", "code": "k7q2",
-        "path": f"录播/柊優花/{STEM}.zip", "made": "2026-11-18T12:30:00+00:00"}
+        "path": f"录播/森野鈴/{STEM}.zip", "made": "2026-11-18T12:30:00+00:00"}
 
 
 def open_archive_page(page, url, archive):  # noqa: F811

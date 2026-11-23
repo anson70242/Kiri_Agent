@@ -15,7 +15,7 @@ from backend.state_file import StateFileError
 
 from .test_check_state import files, qq_on, write_config  # noqa: F401  (qq_on is a fixture)
 
-TODAY = {"openid": "G1", "name": "章鱼烧字幕组", "enabled": True, "streamers": ["A"], "kinds": ["live"],
+TODAY = {"openid": "G1", "name": "向日葵字幕组", "enabled": True, "streamers": ["A"], "kinds": ["live"],
          "group_files_to_drive": False, "group_file_notices": False,
          "status": "active", "added_at": "2026-11-01T00:00:00+00:00"}
 WITH_SHEET = {**TODAY, "openid": "G2", "source_record_sheet": {"file_id": "DFakeFile123", "tab_id": "TAB0x1"}}

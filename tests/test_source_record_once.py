@@ -17,7 +17,7 @@ from .test_source_record_processed import processed, store
 
 SHEET = SourceRecordSheet(FILE_ID, TAB_ID)
 OTHER = SourceRecordSheet("OTHERFILE2", "tab002")
-RECORDING = ("G1", {"name": "章鱼烧字幕组", "streamers": ["A"], "source_record_sheet": SHEET})
+RECORDING = ("G1", {"name": "向日葵字幕组", "streamers": ["A"], "source_record_sheet": SHEET})
 
 
 def ours(tab) -> list[str]:
@@ -27,7 +27,7 @@ def ours(tab) -> list[str]:
 
 def drive_row(**kw) -> SheetRow:
     return SheetRow(**{"kind": RowKind.DRIVE_COPY, "streamer": "A", "date": "20261122",
-                       "title": "戦場がマイホームの声優です", "link": "https://example.test/s/drive1", "stream_id": "v1", **kw})
+                       "title": "今日はのんびり雑談するよ〜", "link": "https://example.test/s/drive1", "stream_id": "v1", **kw})
 
 
 def test_a_live_told_again_after_its_row_was_written_gets_no_second_row(tmp_path):

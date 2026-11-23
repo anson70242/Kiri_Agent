@@ -14,7 +14,7 @@ from .test_source_record_processed import processed, store
 
 INTERVAL = 900.0
 SHEET = SourceRecordSheet(FILE_ID, TAB_ID)
-RECORDING = ("G1", {"name": "章鱼烧字幕组", "streamers": ["A"], "source_record_sheet": SHEET})
+RECORDING = ("G1", {"name": "向日葵字幕组", "streamers": ["A"], "source_record_sheet": SHEET})
 
 
 class Clock:
@@ -88,10 +88,10 @@ def test_after_the_last_failed_try_the_job_is_dropped_and_the_owner_told_once(tm
     assert waiting(tmp_path) == [] and ours(s) == []
     assert len(alerts) == 1
     assert alerts == ["\n".join([
-        "QQ 群「章鱼烧字幕组」的录播源记录表没写进这一行，已放弃，请手动补上",
+        "QQ 群「向日葵字幕组」的录播源记录表没写进这一行，已放弃，请手动补上",
         "配信者：A",
         "日期：2026/11/22",
-        "直播：戦場がマイホームの声優です",
+        "直播：今日はのんびり雑談するよ〜",
         "项目类型：录播",
         "原因：Tencent Docs sheet.get_cell_data failed: code:400007, msg:internal error",
     ])]

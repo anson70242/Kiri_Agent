@@ -15,7 +15,7 @@ from backend.monitor.server import create_app
 from .test_qq import SECRET
 
 GROUP = "GROUP_OPENID_1"  # invented
-FOLDER = "章鱼烧字幕组"
+FOLDER = "向日葵字幕组"
 ORIGIN = {"Origin": "http://testserver"}
 
 

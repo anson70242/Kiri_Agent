@@ -18,7 +18,7 @@ from backend.archive import Archive
 from .helpers import sample_archive, wait_for
 from .quark_fakes import SHARED, UPLOAD_DELETED, FakeCli, browse, create_folder, progress, uploaded
 
-STEM = "[20261105][柊優花] 歌枠"
+STEM = "[20261105][森野鈴] 歌枠"
 ZIP = f"{STEM}.zip"
 FOLDER = "某字幕组/待校"
 
@@ -129,7 +129,7 @@ def group_file(tmp_path, name: str) -> Path:
 def drive_copy(d, root):
     """The pipeline's call for one archive's drive copy, in a thread."""
     archive = Archive.from_folder(sample_archive(root))
-    return Caller(lambda: d(archive, "录播/柊優花", lambda sent, total: None))
+    return Caller(lambda: d(archive, "录播/森野鈴", lambda sent, total: None))
 
 
 def put(d, local):
@@ -157,7 +157,7 @@ def test_a_group_file_waits_while_a_drive_copy_uploads_and_goes_when_it_ends(tmp
     assert wait_for(lambda: uploads.started == [ZIP, "第3话.ass"])
     uploads.let_go("第3话.ass")
     assert copy.ended() and file.ended()
-    assert copy.raised is None and copy.got.path == f"录播/柊優花/{ZIP}"
+    assert copy.raised is None and copy.got.path == f"录播/森野鈴/{ZIP}"
     assert file.raised is None and file.got == f"{FOLDER}/第3话.ass"
 
 
@@ -221,7 +221,7 @@ def test_a_running_upload_is_not_stopped_by_callers_that_wait(tmp_path, root, up
     for name in (ZIP, "第1话.ass", "第2话.ass"):  # the drive copy's share waits for the two
         uploads.let_go(name)
     assert copy.ended()
-    assert copy.raised is None and copy.got.path == f"录播/柊優花/{ZIP}"
+    assert copy.raised is None and copy.got.path == f"录播/森野鈴/{ZIP}"
     assert not uploads.held[ZIP].killed.is_set()
     assert all(f.ended() and f.raised is None for f in files)
 

@@ -11,7 +11,7 @@ from backend.archive import Archive, Artifact
 
 from .helpers import sample_archive
 
-STEM = "[20261105][柊優花] 歌枠"
+STEM = "[20261105][森野鈴] 歌枠"
 SEGMENTS = [{"start": 0.78, "end": 3.78, "text": "めっちゃ味するよ!"}, {"start": 4.0, "end": 5.5, "text": "哈喽"}]
 
 
@@ -39,10 +39,10 @@ def test_a_save_that_cannot_finish_leaves_a_tmp_file_never_taken_for_a_download(
 
 def test_highlights_are_saved_with_one_space_indent(tmp_path):
     folder = sample_archive(tmp_path, highlights=None)
-    table = {"streamer": "柊優花", "rows": [{"start": "00:00:00", "score": 7}]}
+    table = {"streamer": "森野鈴", "rows": [{"start": "00:00:00", "score": 7}]}
     out = Archive.from_folder(folder).save(Artifact.HIGHLIGHTS, table)
     assert out.read_text(encoding="utf-8") == (
-        '{\n "streamer": "柊優花",\n "rows": [\n  {\n   "start": "00:00:00",\n   "score": 7\n  }\n ]\n}'
+        '{\n "streamer": "森野鈴",\n "rows": [\n  {\n   "start": "00:00:00",\n   "score": 7\n  }\n ]\n}'
     )
 
 

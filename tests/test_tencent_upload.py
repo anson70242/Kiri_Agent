@@ -93,7 +93,7 @@ class FakeDocs:
 
 
 def table3() -> dict:
-    return {"streamer": "鹿乃まほろ", "title": "T", "rows": [
+    return {"streamer": "青葉みのり", "title": "T", "rows": [
         row(0, score=8, chat_level="高", top_pick={"start": "00:01:00", "end": "00:02:00", "title": "名场面"}),
         row(5, score=5),
         row(10, score=3, chat_level="低"),
@@ -102,12 +102,12 @@ def table3() -> dict:
 
 def test_upload_adds_a_first_sheet_with_the_table_and_its_formatting():
     fake = FakeDocs(sheets=["工作表1", "20261108 X Y"])
-    url = upload_table(table3(), settings(), sheet_title="20261111 鹿乃まほろ T", client=fake.client())
+    url = upload_table(table3(), settings(), sheet_title="20261111 青葉みのり T", client=fake.client())
 
     assert url == f"https://docs.qq.com/sheet/{FILE_ID}?tab=NEW1"
     (add,) = fake.args("sheet.add_sheet")
-    assert add["name"] == "20261111 鹿乃まほろ T" and add["index"] == 0  # newest first
-    assert [s["sheet_name"] for s in fake.sheets][0] == "20261111 鹿乃まほろ T"
+    assert add["name"] == "20261111 青葉みのり T" and add["index"] == 0  # newest first
+    assert [s["sheet_name"] for s in fake.sheets][0] == "20261111 青葉みのり T"
     assert all(a["sheet_id"] == "NEW1" for t, a in fake.calls if t not in ("sheet.get_sheet_info", "sheet.add_sheet"))
     for r in fake.requests:
         assert r.headers["Authorization"] == TOKEN
@@ -193,9 +193,9 @@ def test_a_failed_write_deletes_the_half_filled_sheet():
 def test_sheet_title_is_date_creator_title_trimmed_and_safe():
     from backend.tencent_docs import MAX_TITLE, sheet_title, unique_title
 
-    t = sheet_title({"streamer": "鹿乃まほろ", "title": "【Potato Please】60,000個のじゃがいもの皮って何時間で剥けますか？【鹿乃まほろ/ミリプロ】"},
+    t = sheet_title({"streamer": "青葉みのり", "title": "【Potato Please】60,000個のじゃがいもの皮って何時間で剥けますか？【青葉みのり/ミリプロ】"},
                     "20261111")
-    assert t.startswith("20261111 鹿乃まほろ 【Potato Please】") and len(t) <= MAX_TITLE
+    assert t.startswith("20261111 青葉みのり 【Potato Please】") and len(t) <= MAX_TITLE
     assert "/" not in sheet_title({"title": "a/b[c]:d"})
     long = "x" * MAX_TITLE
     assert unique_title(long, {long}) == "x" * (MAX_TITLE - 4) + " (2)"
@@ -244,15 +244,15 @@ def test_a_missing_token_fails_fast_naming_it(tmp_path):
 def test_cli_uploads_an_archive_folder(tmp_path, monkeypatch, capsys):
     import backend.tencent_docs as td
 
-    folder = bare_archive(tmp_path / "downloads", "鹿乃まほろ", "20261111", "T",
-                          highlights={"streamer": "鹿乃まほろ", "title": "T", "rows": [row(0)]})
+    folder = bare_archive(tmp_path / "downloads", "青葉みのり", "20261111", "T",
+                          highlights={"streamer": "青葉みのり", "title": "T", "rows": [row(0)]})
     fake = FakeDocs()
     real_upload = td.upload_table
     monkeypatch.setattr(td, "upload_table", lambda *a, **kw: real_upload(*a, **kw, client=fake.client()))
     monkeypatch.setattr(td, "load_credentials", lambda cfg: settings(file_id=""))
 
     assert td.main([str(folder), "--sheet", f"https://docs.qq.com/sheet/{FILE_ID}?tab=x"]) == 0
-    assert fake.args("sheet.add_sheet")[0]["name"] == "20261111 鹿乃まほろ T"
+    assert fake.args("sheet.add_sheet")[0]["name"] == "20261111 青葉みのり T"
     out = capsys.readouterr().out
     assert f"https://docs.qq.com/sheet/{FILE_ID}?tab=NEW1" in out
     assert TOKEN not in out

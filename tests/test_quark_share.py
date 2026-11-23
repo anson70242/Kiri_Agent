@@ -13,7 +13,7 @@ from .helpers import sample_archive
 from .quark_fakes import FILE_ID, PASSCODE, SHARE_URL, SHARED, lapsed_11001, result
 from .test_quark_upload import ZIP, cli, drive, root, upload_command, uploading, write_config  # noqa: F401
 
-PATH = f"录播/柊優花/{ZIP}"
+PATH = f"录播/森野鈴/{ZIP}"
 ADDRESS = f"{SHARE_URL}?pwd={PASSCODE}"
 OLD = DriveLink("https://pan.quark.cn/s/0ld0ld0ld0ld?pwd=0ldc", "0ldc", PATH,
                 datetime(2026, 11, 1, tzinfo=timezone.utc))
@@ -28,7 +28,7 @@ def test_an_uploaded_drive_copy_is_shared_privately_for_good_and_its_link_saved_
     uploading(cli)
     cli.answers["share"] = [SHARED]
 
-    copy = drive(root)(Archive.from_folder(folder), "录播/柊優花", lambda sent, total: None)
+    copy = drive(root)(Archive.from_folder(folder), "录播/森野鈴", lambda sent, total: None)
 
     assert copy.path == PATH and copy.link == ADDRESS
     assert shares(cli) == [["share", FILE_ID, "--url-type", "2", "--expired-type", "1"]]
@@ -42,7 +42,7 @@ def test_a_zip_found_on_the_drive_for_an_archive_without_a_link_is_shared_with_t
     uploading(cli, files=[("别的.zip", 5), (ZIP, 123)])
     cli.answers["share"] = [SHARED]
 
-    done = drive(root).upload(Archive.from_folder(folder), "录播/柊優花")
+    done = drive(root).upload(Archive.from_folder(folder), "录播/森野鈴")
 
     assert not done.sent and done.copy.link == ADDRESS
     assert shares(cli) == [["share", "~1AAAA1|BBBB", "--url-type", "2", "--expired-type", "1"]]
@@ -55,7 +55,7 @@ def test_an_archive_with_a_link_whose_zip_is_there_is_left_alone(root, cli):
     uploading(cli, files=[(ZIP, 123)])
     cli.answers["share"] = [SHARED]
 
-    done = drive(root).upload(Archive.from_folder(folder), "录播/柊優花")
+    done = drive(root).upload(Archive.from_folder(folder), "录播/森野鈴")
 
     assert not done.sent and done.copy.link == OLD.url
     assert [c[0] for c in cli.commands()] == ["create-folder", "browse"]
@@ -68,7 +68,7 @@ def test_an_archive_with_a_link_whose_zip_is_gone_is_uploaded_and_shared_again(r
     uploading(cli)
     cli.answers["share"] = [SHARED]
 
-    done = drive(root).upload(Archive.from_folder(folder), "录播/柊優花")
+    done = drive(root).upload(Archive.from_folder(folder), "录播/森野鈴")
 
     assert done.sent and done.copy.link == ADDRESS
     assert Archive.from_folder(folder).read_drive_link().url == ADDRESS
@@ -83,7 +83,7 @@ def test_a_failed_share_after_an_upload_still_returns_the_path_with_the_reason(r
     uploading(cli)
     cli.answers["share"] = [answer]
 
-    done = drive(root).upload(Archive.from_folder(folder), "录播/柊優花")
+    done = drive(root).upload(Archive.from_folder(folder), "录播/森野鈴")
 
     assert done.sent and done.copy.path == PATH and done.copy.link is None and reason in done.copy.reason
     assert not Archive.from_folder(folder).has(Artifact.DRIVE_LINK)
@@ -95,7 +95,7 @@ def test_a_lapsed_authorization_at_the_share_gives_the_uploaded_drive_copy_witho
     uploading(cli)
     cli.answers["share"] = [lapsed_11001("share")]
 
-    done = drive(root).upload(Archive.from_folder(folder), "录播/柊優花")
+    done = drive(root).upload(Archive.from_folder(folder), "录播/森野鈴")
 
     assert done.sent and done.copy.path == PATH and done.copy.link is None and "授权已失效" in done.copy.reason
     assert not Archive.from_folder(folder).has(Artifact.DRIVE_LINK)
@@ -114,6 +114,6 @@ def test_the_command_prints_each_drive_link_or_why_there_is_none(tmp_path, root,
     assert out == [
         f"已上传：{ZIP} → {PATH}",
         f"  网盘链接：{ADDRESS}",
-        "已上传：[20261106][柊優花] 雑談.zip → 录播/柊優花/[20261106][柊優花] 雑談.zip",
+        "已上传：[20261106][森野鈴] 雑談.zip → 录播/森野鈴/[20261106][森野鈴] 雑談.zip",
         "  没有网盘链接：分享失败（-2101）",
     ]

@@ -35,7 +35,7 @@ def test_both_switches_are_off_and_saving_sends_them(page, notify_server):  # no
     expect(first).not_to_be_checked()
     expect(second).not_to_be_checked()
 
-    card.get_by_label("群名").fill("章鱼烧字幕组")
+    card.get_by_label("群名").fill("向日葵字幕组")
     first.check()
     second.check()
     card.get_by_role("button", name="保存").click()
@@ -43,8 +43,8 @@ def test_both_switches_are_off_and_saving_sends_them(page, notify_server):  # no
 
     g = saved(tmp)
     assert (g["group_files_to_drive"], g["group_file_notices"], g["enabled"]) == (True, True, False)
-    card = page.get_by_role("group", name="QQ 群 章鱼烧字幕组")
-    expect(card).to_contain_text("网盘位置：章鱼烧字幕组/")
+    card = page.get_by_role("group", name="QQ 群 向日葵字幕组")
+    expect(card).to_contain_text("网盘位置：向日葵字幕组/")
     expect(card.get_by_label("群文件上传到夸克网盘")).to_be_checked()
 
 

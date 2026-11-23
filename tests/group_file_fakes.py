@@ -21,7 +21,7 @@ from .test_qq import SECRET, FakeQQ  # noqa: F401  (re-exported for the tests of
 
 HOST = "https://grpfile.ftn.qq.com"  # under qq.com, like the addresses QQ gives
 GROUP = "GROUP_OPENID_1"
-FOLDER = "章鱼烧字幕组"
+FOLDER = "向日葵字幕组"
 POSTED = "2026-11-19T05:41:00+08:00"  # a message's `timestamp` as QQ gives it
 
 

@@ -6,7 +6,7 @@ import json
 
 from .test_monitor_page import browser, page, server  # noqa: F401  (pytest fixtures)
 
-FOLDER = "章鱼烧字幕组"  # invented
+FOLDER = "向日葵字幕组"  # invented
 LIVE = {"name": "A", "platform": "youtube", "title": "歌枠", "url": "https://x/v1"}
 
 

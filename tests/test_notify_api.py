@@ -55,12 +55,12 @@ def test_status_lists_channels_groups_and_choices(tmp_path, monkeypatch):
 def test_a_group_is_named_subscribed_and_switched_on(tmp_path, monkeypatch):
     client = app(tmp_path, monkeypatch)
     r = client.patch("/api/notify/groups", params={"id": "G1"}, json={
-        "name": "章鱼烧字幕组", "enabled": True, "streamers": ["A"], "kinds": ["live", "analyzed"]})
+        "name": "向日葵字幕组", "enabled": True, "streamers": ["A"], "kinds": ["live", "analyzed"]})
     assert r.status_code == 200
     (g,) = client.get("/api/notify").json()["groups"]
-    assert (g["name"], g["enabled"], g["streamers"], g["kinds"]) == ("章鱼烧字幕组", True, ["A"], ["live", "analyzed"])
+    assert (g["name"], g["enabled"], g["streamers"], g["kinds"]) == ("向日葵字幕组", True, ["A"], ["live", "analyzed"])
     (g,) = json.loads((tmp_path / "qq_groups.json").read_text(encoding="utf-8"))  # kept for restarts
-    assert g["name"] == "章鱼烧字幕组"
+    assert g["name"] == "向日葵字幕组"
 
 
 def test_bad_group_settings_are_refused(tmp_path, monkeypatch):

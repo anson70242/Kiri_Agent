@@ -14,8 +14,8 @@ from backend.downloader.youtube import YoutubeDownloader
 from backend.monitor import Streamer
 
 STREAMERS = [
-    Streamer("東雲はる", "youtube", "@東雲はるch"),
-    Streamer("柊優花", "twitch", "hiiragiyukaofficial"),
+    Streamer("高槻なお", "youtube", "@高槻なおch"),
+    Streamer("森野鈴", "twitch", "morinosuzuofficial"),
 ]
 
 
@@ -40,14 +40,14 @@ def test_unsupported_url():
 def test_youtube_info_matches_config_streamer():
     dl = YoutubeDownloader(DownloadSettings(), STREAMERS)
     raw = {
-        "id": "abc", "title": "歌枠 Vol.2", "uploader_id": "@%E6%9D%B1%E9%9B%B2%E3%81%AF%E3%82%8Bch",
-        "channel": "東雲はる / Shinonome Haru", "timestamp": 1_800_000_000, "extractor_key": "Youtube",
+        "id": "abc", "title": "歌枠 Vol.2", "uploader_id": "@%E9%AB%98%E6%A7%BB%E3%81%AA%E3%81%8Ach",
+        "channel": "高槻なお / Takatsuki Nao", "timestamp": 1_800_000_000, "extractor_key": "Youtube",
         "live_status": "was_live", "webpage_url": "https://www.youtube.com/watch?v=abc",
     }
     info = dl.parse_info(raw, "u")
-    assert info.creator == "東雲はる"
-    assert info.stem.startswith("[2027") and info.stem.endswith("][東雲はる] 歌枠 Vol.2")
-    assert info.folder.parts[0] == "東雲はる"
+    assert info.creator == "高槻なお"
+    assert info.stem.startswith("[2027") and info.stem.endswith("][高槻なお] 歌枠 Vol.2")
+    assert info.folder.parts[0] == "高槻なお"
 
 
 def test_unknown_channel_falls_back_to_display_name():
@@ -59,8 +59,8 @@ def test_unknown_channel_falls_back_to_display_name():
 
 def test_twitch_creator_match_is_case_insensitive():
     dl = TwitchDownloader(DownloadSettings(), STREAMERS)
-    info = dl.parse_info({"id": "v1", "uploader_id": "HiiragiYukaOfficial", "uploader": "柊優花"}, "u")
-    assert info.creator == "柊優花"
+    info = dl.parse_info({"id": "v1", "uploader_id": "MorinoSuzuOfficial", "uploader": "森野鈴"}, "u")
+    assert info.creator == "森野鈴"
 
 
 # ---- Twitch chat ----
@@ -327,7 +327,7 @@ def yt_line(offset_ms, renderer: str, body: dict) -> str:
 
 def test_clean_youtube_chat(tmp_path):
     from backend.downloader.chat_clean import clean_chat
-    raw = tmp_path / "[20261005][東雲はる] t.live_chat.json"
+    raw = tmp_path / "[20261005][高槻なお] t.live_chat.json"
     raw.write_text("\n".join([
         yt_line(3_723_456, "liveChatTextMessageRenderer", {
             "authorName": {"simpleText": "@bob"},
@@ -345,7 +345,7 @@ def test_clean_youtube_chat(tmp_path):
         "",
     ]), encoding="utf-8")
     out = clean_chat(raw)
-    assert out.name == "[20261005][東雲はる] t.chat_parsed.json"
+    assert out.name == "[20261005][高槻なお] t.chat_parsed.json"
     assert json.loads(out.read_text(encoding="utf-8")) == [
         {"time": "01:02:03", "user": "@bob", "msg": "hi :_chu:😀"},
         {"time": "01:06:40", "user": "@spica", "msg": "おめでとう", "sc": "¥100"},

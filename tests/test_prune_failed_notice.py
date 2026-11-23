@@ -40,7 +40,7 @@ def test_discord_shows_the_notice_as_a_warning_and_not_as_a_failed_download():
 
 def test_only_qq_groups_that_ticked_the_notice_get_it(tmp_path):
     fake = FakeQQ()
-    chosen = {"openid": "G1", "name": "章鱼烧", "enabled": True, "streamers": ["Mika"],
+    chosen = {"openid": "G1", "name": "向日葵", "enabled": True, "streamers": ["Mika"],
               "kinds": ["downloaded", "prune_failed"]}
     n = qq_notifier(tmp_path, fake, chosen, {**chosen, "openid": "G2", "kinds": ["downloaded"]})
     asyncio.run(n.send(notice()))

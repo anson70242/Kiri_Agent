@@ -65,7 +65,7 @@ def test_without_a_token_the_field_is_unavailable_and_the_rest_still_saves(page,
     expect(card).to_contain_text("没有腾讯文档的令牌")
     expect(card.get_by_label(FIELD)).to_be_disabled()
 
-    card.get_by_label("群名").fill("章鱼烧字幕组")
+    card.get_by_label("群名").fill("向日葵字幕组")
     card.get_by_role("button", name="保存").click()
     expect(page.locator("body")).to_contain_text("已保存")
-    assert saved(tmp)["name"] == "章鱼烧字幕组" and "source_record_sheet" not in saved(tmp)
+    assert saved(tmp)["name"] == "向日葵字幕组" and "source_record_sheet" not in saved(tmp)

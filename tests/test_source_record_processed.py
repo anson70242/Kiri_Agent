@@ -30,15 +30,15 @@ def store(tmp_path, *groups: tuple[str, dict]) -> QQGroups:
 
 
 def processed(keeper, streamer=A_YOUTUBE, **kw) -> None:
-    keeper.processed(streamer, **{"date": "20261122", "title": "戦場がマイホームの声優です", "link": LINK,
+    keeper.processed(streamer, **{"date": "20261122", "title": "今日はのんびり雑談するよ〜", "link": LINK,
                                   "expires": EXPIRES, "stream_id": "v1", **kw})
 
 
 def test_a_processed_live_of_a_ticked_streamer_gets_its_row_in_the_groups_sheet(tmp_path):
-    s = make(groups=store(tmp_path, ("G1", {"name": "章鱼烧字幕组", "streamers": ["A"], "source_record_sheet": SHEET})))
+    s = make(groups=store(tmp_path, ("G1", {"name": "向日葵字幕组", "streamers": ["A"], "source_record_sheet": SHEET})))
     processed(s.keeper)
     s.settle()
-    assert s.tab.texts(2) == ["A", "2026/11/22", "录播", "戦場がマイホームの声優です（有效至 2026/12/23）\n全部下载"]
+    assert s.tab.texts(2) == ["A", "2026/11/22", "录播", "今日はのんびり雑談するよ〜（有效至 2026/12/23）\n全部下载"]
     assert s.tab.rich(2, 6)[1] == {"text": "全部下载", "link_url": LINK}
 
 
@@ -96,10 +96,10 @@ def test_two_groups_naming_one_tab_get_one_row(tmp_path):
 
 
 def test_the_log_names_the_group_the_streamer_and_the_live_and_never_the_link(tmp_path, caplog):
-    s = make(groups=store(tmp_path, ("G1", {"name": "章鱼烧字幕组", "streamers": ["A"], "source_record_sheet": SHEET})))
+    s = make(groups=store(tmp_path, ("G1", {"name": "向日葵字幕组", "streamers": ["A"], "source_record_sheet": SHEET})))
     processed(s.keeper)
     with caplog.at_level(logging.DEBUG):
         s.settle()
     (written,) = [r.getMessage() for r in caplog.records if "row written" in r.getMessage()]
-    assert "章鱼烧字幕组" in written and "A" in written and "戦場がマイホームの声優です" in written
+    assert "向日葵字幕组" in written and "A" in written and "今日はのんびり雑談するよ〜" in written
     assert LINK not in caplog.text

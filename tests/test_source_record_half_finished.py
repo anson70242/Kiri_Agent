@@ -10,7 +10,7 @@ from __future__ import annotations
 from .test_source_record_processed import processed
 from .test_source_record_retries import INTERVAL, ours, setup, waiting
 
-ROW = ["A", "2026/11/22", "录播", "戦場がマイホームの声優です（有效至 2026/12/23）\n全部下载"]
+ROW = ["A", "2026/11/22", "录播", "今日はのんびり雑談するよ〜（有效至 2026/12/23）\n全部下载"]
 SPANS = [(0, 1), (2, 3), (4, 5), (6, 15)]
 
 

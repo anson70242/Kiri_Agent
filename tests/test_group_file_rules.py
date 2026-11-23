@@ -43,7 +43,7 @@ def test_the_table_is_the_owners_five_rules_in_order():
 
 
 def test_the_help_has_one_line_per_rule_with_the_tag_the_extension_and_the_folder():
-    lines = rule_lines("章鱼烧字幕组")
+    lines = rule_lines("向日葵字幕组")
     assert len(lines) == 5
-    assert "【待校】" in lines[2] and ".ass" in lines[2] and "章鱼烧字幕组/待校/" in lines[2]
-    assert "【待轴】" in lines[0] and ".mp4" in lines[0] and "章鱼烧字幕组/剪辑/" in lines[0]
+    assert "【待校】" in lines[2] and ".ass" in lines[2] and "向日葵字幕组/待校/" in lines[2]
+    assert "【待轴】" in lines[0] and ".mp4" in lines[0] and "向日葵字幕组/剪辑/" in lines[0]

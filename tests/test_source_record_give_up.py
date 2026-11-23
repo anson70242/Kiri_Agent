@@ -27,14 +27,14 @@ def test_a_tab_without_a_header_is_given_up_on_at_once_and_the_message_names_it(
     docs = FakeTencentDocs()
     tab = record_sheet(docs, headers=("配信者", "日期", "项目类型", "链接"))
     before = tab.rows()
-    store(tmp_path, ("G1", {"name": "章鱼烧字幕组", "streamers": ["A"], "source_record_sheet": SHEET}))
+    store(tmp_path, ("G1", {"name": "向日葵字幕组", "streamers": ["A"], "source_record_sheet": SHEET}))
     s, clock, alerts = setup(tmp_path, docs)
     processed(s.keeper)
     s.settle()
     assert waiting(tmp_path) == [] and tab.rows() == before
     assert docs.tools() == ["sheet.get_cell_data"]  # one try, nothing changed
     (message,) = alerts
-    assert "表头「闪传链接」" in message and "章鱼烧字幕组" in message
+    assert "表头「闪传链接」" in message and "向日葵字幕组" in message
 
 
 def test_a_sheet_the_tokens_account_may_not_edit_is_said_to_need_sharing(tmp_path):
@@ -57,17 +57,17 @@ def test_another_failure_says_nothing_about_sharing(tmp_path):
 
 
 def test_the_message_names_the_kind_of_row_and_both_groups_naming_one_tab(tmp_path):
-    store(tmp_path, ("G1", {"name": "章鱼烧字幕组", "streamers": ["A"], "source_record_sheet": SHEET}),
+    store(tmp_path, ("G1", {"name": "向日葵字幕组", "streamers": ["A"], "source_record_sheet": SHEET}),
           ("G2", {"name": "鲷鱼烧字幕组", "streamers": ["A"], "source_record_sheet": SHEET}))
     docs = FakeTencentDocs()
     record_sheet(docs)
     s, clock, alerts = setup(tmp_path, docs)
     docs.fail("sheet.get_cell_data", times=10)
-    s.keeper.uploaded(A_YOUTUBE, date="20261122", title="戦場がマイホームの声優です", link=LINK, stream_id="v1")
+    s.keeper.uploaded(A_YOUTUBE, date="20261122", title="今日はのんびり雑談するよ〜", link=LINK, stream_id="v1")
     run_out(s, clock)
     (message,) = alerts
-    assert message.startswith("QQ 群「章鱼烧字幕组、鲷鱼烧字幕组」")
-    assert "项目类型：网盘" in message and "直播：戦場がマイホームの声優です" in message
+    assert message.startswith("QQ 群「向日葵字幕组、鲷鱼烧字幕组」")
+    assert "项目类型：网盘" in message and "直播：今日はのんびり雑談するよ〜" in message
 
 
 def test_neither_the_message_nor_the_log_holds_a_link(tmp_path, caplog):

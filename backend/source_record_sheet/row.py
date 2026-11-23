@@ -1,7 +1,7 @@
 """A row of a source record sheet: its kind, its values, and the text each cell gets.
 
     配信者 | 日期 | 项目类型 | 闪传链接
-    柊優花 | 2026/11/5 | 录播 | 戦場がマイホームの声優です（有效至 2026/12/23）⏎ 全部下载 (the link)
+    森野鈴 | 2026/11/5 | 录播 | 今日はのんびり雑談するよ〜（有效至 2026/12/23）⏎ 全部下载 (the link)
 
 The link cell never shows the address: the address is behind its label.
 """

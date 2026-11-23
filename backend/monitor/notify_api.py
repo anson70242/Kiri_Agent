@@ -65,7 +65,7 @@ def create_notify_router(notifier: LiveNotifier | None, roster: Roster, gateway:
         return FileResponse(PAGE)
 
     def people() -> list[str]:
-        """Streamer names, one per person (柊優花's YouTube and Twitch are one)."""
+        """Streamer names, one per person (森野鈴's YouTube and Twitch are one)."""
         return list(dict.fromkeys(e.get("name") or e["channel"] for e in roster.entries))
 
     def as_people(group: dict[str, Any]) -> dict[str, Any]:

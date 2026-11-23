@@ -92,7 +92,7 @@ class VideoInfo:
 
     @property
     def stem(self) -> str:
-        """File name without extension: `[20261105][柊優花] title` (named by the Archive module)."""
+        """File name without extension: `[20261105][森野鈴] title` (named by the Archive module)."""
         return name_archive(self.creator, self.date, self.title)[1]
 
     @property

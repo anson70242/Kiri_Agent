@@ -16,9 +16,9 @@ from .helpers import sample_archive
 # ---- naming a new archive ----
 
 def test_a_new_archive_is_filed_under_creator_date_title_and_named_date_creator_title():
-    folder, stem = name_archive("柊優花", "20261105", "歌枠 Vol.2")
-    assert folder == Path("柊優花", "20261105", "歌枠 Vol.2")
-    assert stem == "[20261105][柊優花] 歌枠 Vol.2"
+    folder, stem = name_archive("森野鈴", "20261105", "歌枠 Vol.2")
+    assert folder == Path("森野鈴", "20261105", "歌枠 Vol.2")
+    assert stem == "[20261105][森野鈴] 歌枠 Vol.2"
 
 
 def test_names_are_made_safe_for_windows_and_linux():
@@ -32,7 +32,7 @@ def test_names_are_made_safe_for_windows_and_linux():
 
 
 def test_the_files_of_a_new_archive_are_named_after_its_stem():
-    stem = "[20261105][柊優花] 歌枠"
+    stem = "[20261105][森野鈴] 歌枠"
     assert artifact_name(stem, Artifact.VIDEO) == f"{stem}.mp4"
     assert artifact_name(stem, Artifact.RAW_CHAT, "youtube") == f"{stem}.live_chat.json"
     assert artifact_name(stem, Artifact.RAW_CHAT, "twitch") == f"{stem}.chat.json"
@@ -42,18 +42,18 @@ def test_the_files_of_a_new_archive_are_named_after_its_stem():
 @pytest.mark.parametrize("platform", [None, "", "niconico"])
 def test_a_raw_chat_cannot_be_named_without_a_known_platform(platform):
     with pytest.raises(ValueError, match="platform"):
-        artifact_name("[20261105][柊優花] 歌枠", Artifact.RAW_CHAT, platform)
+        artifact_name("[20261105][森野鈴] 歌枠", Artifact.RAW_CHAT, platform)
 
 
 def test_an_archive_finds_the_files_it_was_named_with(tmp_path):
-    folder, stem = name_archive("柊優花", "20261105", "歌枠")
+    folder, stem = name_archive("森野鈴", "20261105", "歌枠")
     out = tmp_path / folder
     out.mkdir(parents=True)
     for name in (artifact_name(stem, Artifact.VIDEO), artifact_name(stem, Artifact.RAW_CHAT, "twitch")):
         (out / name).write_bytes(b"x")
     a = Archive.from_video(out / artifact_name(stem, Artifact.VIDEO))
     assert a.present() == {Artifact.VIDEO, Artifact.RAW_CHAT}
-    assert a.date_folder == "20261105" and a.creator == "柊優花" and a.title == "歌枠"
+    assert a.date_folder == "20261105" and a.creator == "森野鈴" and a.title == "歌枠"
 
 
 # ---- prune ----

@@ -15,8 +15,8 @@ EXPIRES = 1_797_957_000.0
 
 
 def archive_row(**kw) -> SheetRow:
-    return SheetRow(**{"kind": RowKind.ARCHIVE, "streamer": "柊優花", "date": "20261105",
-                       "title": "戦場がマイホームの声優です", "link": LINK, "expires": EXPIRES, **kw})
+    return SheetRow(**{"kind": RowKind.ARCHIVE, "streamer": "森野鈴", "date": "20261105",
+                       "title": "今日はのんびり雑談するよ〜", "link": LINK, "expires": EXPIRES, **kw})
 
 
 def test_the_row_goes_in_as_the_third_row_and_the_rows_there_move_down():
@@ -28,7 +28,7 @@ def test_the_row_goes_in_as_the_third_row_and_the_rows_there_move_down():
     rows = s.tab.rows()
     assert len(rows) == len(before) + 1
     assert rows[:2] == before[:2]
-    assert rows[2][0] == "柊優花"
+    assert rows[2][0] == "森野鈴"
     assert rows[3:] == before[2:]
     assert [s.tab.merges_of(r) for r in (0, 1, *range(3, len(rows)))] == merges_before
 
@@ -57,7 +57,7 @@ def test_a_sheet_whose_row_below_has_no_merges_gets_a_row_without_merges():
     s.keeper.add(s.sheet, archive_row())
     s.settle()
     assert s.tab.merges_of(2) == []
-    assert s.tab.texts(2)[:3] == ["柊優花", "2026/11/5", "录播"]
+    assert s.tab.texts(2)[:3] == ["森野鈴", "2026/11/5", "录播"]
     assert "merge_cell" not in " ".join(docs.tools())
 
 
@@ -72,7 +72,7 @@ def test_the_values_go_under_the_headers_wherever_they_are():
     s.keeper.add(s.sheet, archive_row(date="20261122"))
     s.settle()
     assert {c: tab.text(2, c) for r, c in tab.cells if r == 2} == {
-        0: "2026/11/22", 3: "柊優花", 4: "戦場がマイホームの声優です（有效至 2026/12/23）\n全部下载", 7: "录播"}
+        0: "2026/11/22", 3: "森野鈴", 4: "今日はのんびり雑談するよ〜（有效至 2026/12/23）\n全部下载", 7: "录播"}
     assert tab.texts(3) == ["主播1"]
 
 
@@ -80,14 +80,14 @@ def test_the_row_names_the_streamer_the_kind_and_the_archives_date_without_leadi
     s = make()
     s.keeper.add(s.sheet, archive_row(date="20260105"))
     s.settle()
-    assert [s.tab.text(2, c) for c in (0, 2, 4)] == ["柊優花", "2026/1/5", "录播"]
+    assert [s.tab.text(2, c) for c in (0, 2, 4)] == ["森野鈴", "2026/1/5", "录播"]
 
 
 def test_the_link_cell_holds_the_title_the_expiry_and_the_label_linking_to_the_address():
     s = make()
     s.keeper.add(s.sheet, archive_row())
     s.settle()
-    assert s.tab.rich(2, 6) == [{"text": "戦場がマイホームの声優です（有效至 2026/12/23）\n"},
+    assert s.tab.rich(2, 6) == [{"text": "今日はのんびり雑談するよ〜（有效至 2026/12/23）\n"},
                                 {"text": "全部下载", "link_url": LINK}]
     assert LINK not in s.tab.text(2, 6)
 
@@ -97,7 +97,7 @@ def test_the_expiry_is_a_hong_kong_date_when_utc_is_on_another_day():
     s = make()
     s.keeper.add(s.sheet, archive_row(expires=1_798_759_800.0))
     s.settle()
-    assert s.tab.text(2, 6).split("\n")[0] == "戦場がマイホームの声優です（有效至 2027/1/1）"
+    assert s.tab.text(2, 6).split("\n")[0] == "今日はのんびり雑談するよ〜（有效至 2027/1/1）"
 
 
 def test_a_tab_without_a_header_gets_no_row_and_the_failure_names_the_header(caplog):
@@ -120,7 +120,7 @@ def test_the_log_says_the_row_was_written_and_never_the_link(caplog):
     with caplog.at_level(logging.DEBUG):
         s.settle()
     written = [r.getMessage() for r in caplog.records if "row written" in r.getMessage()]
-    assert len(written) == 1 and "柊優花" in written[0] and "戦場がマイホームの声優です" in written[0]
+    assert len(written) == 1 and "森野鈴" in written[0] and "今日はのんびり雑談するよ〜" in written[0]
     assert "录播" in written[0]
     assert LINK not in caplog.text and "AbCdEf1234" not in caplog.text
 

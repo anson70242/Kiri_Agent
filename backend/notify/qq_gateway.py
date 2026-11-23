@@ -54,7 +54,7 @@ PLATFORMS = {"youtube": "YouTube", "twitch": "Twitch"}
 
 
 def subscribed_people(subs: list[str], names: dict[str, str]) -> list[str]:
-    """Each subscribed person once, with their platforms: "柊優花 (YouTube / Twitch)".
+    """Each subscribed person once, with their platforms: "森野鈴 (YouTube / Twitch)".
     `names`: channel id ("platform:channel") -> person. A subscription is a person's name
     (all their channels) or, from older saves, one channel id."""
     people: dict[str, list[str]] = {}

@@ -99,7 +99,7 @@ def test_the_help_lists_the_filing_rules_only_for_a_group_whose_files_are_kept(t
     fake = FakeQQ()
     gw, groups, _ = gateway(tmp_path, fake)
     groups.register("G1")
-    groups.update("G1", name="章鱼烧字幕组")
+    groups.update("G1", name="向日葵字幕组")
 
     dispatch(gw, "GROUP_MESSAGE_CREATE", ordinary("G1", "M1", "<@BOTID> 帮助", mentions=[BOT]))
     assert "【待校】" not in text(fake)
@@ -110,5 +110,5 @@ def test_the_help_lists_the_filing_rules_only_for_a_group_whose_files_are_kept(t
     assert any("- 订阅：" in line for line in lines)  # the commands come first
     rules = [line for line in lines if "→" in line]
     assert len(rules) == 5
-    assert any("【待轴】" in line and ".mp4" in line and "章鱼烧字幕组/剪辑/" in line for line in rules)
-    assert any("【已校】" in line and ".ass" in line and "章鱼烧字幕组/已校/" in line for line in rules)
+    assert any("【待轴】" in line and ".mp4" in line and "向日葵字幕组/剪辑/" in line for line in rules)
+    assert any("【已校】" in line and ".ass" in line and "向日葵字幕组/已校/" in line for line in rules)

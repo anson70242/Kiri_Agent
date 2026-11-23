@@ -18,7 +18,7 @@ from .test_source_record_processed import processed, store
 from .test_source_record_wiring import app
 
 SHEET = SourceRecordSheet(FILE_ID, TAB_ID)
-RECORDING = ("G1", {"name": "章鱼烧字幕组", "streamers": ["A"], "source_record_sheet": SHEET})
+RECORDING = ("G1", {"name": "向日葵字幕组", "streamers": ["A"], "source_record_sheet": SHEET})
 
 
 def restarted(s, tmp_path):

@@ -17,7 +17,7 @@ from .helpers import sample_archive
 from .test_drive_restart import run_until
 from .test_drive_stage import FakeDrive, make
 
-STEM = "[20261105][柊優花] 歌枠"
+STEM = "[20261105][森野鈴] 歌枠"
 
 
 def test_a_full_archive_gives_one_zip_named_after_its_stem_with_video_chat_subtitles_and_sheet(tmp_path):

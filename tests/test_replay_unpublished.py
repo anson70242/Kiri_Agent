@@ -206,7 +206,7 @@ def test_discord_shows_the_notice_with_the_automatic_download_footer_and_not_as_
 
 def test_qq_groups_that_chose_the_notice_get_it(tmp_path):
     fake = FakeQQ()
-    chosen = {"openid": "G1", "name": "章鱼烧", "enabled": True, "streamers": ["Mika"],
+    chosen = {"openid": "G1", "name": "向日葵", "enabled": True, "streamers": ["Mika"],
               "kinds": ["downloaded", "replay_unpublished"]}
     n = qq_notifier(tmp_path, fake, chosen, {**chosen, "openid": "G2", "kinds": ["downloaded"]})
     asyncio.run(n.send(notice()))

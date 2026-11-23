@@ -163,7 +163,7 @@ def test_notify_page_names_and_subscribes_a_group(page, notify_server):
     page.goto(url + "/notify")
     card = page.get_by_role("group", name="QQ 群 G1ABCDEF")
     expect_text(card, "关闭")
-    card.get_by_label("群名").fill("章鱼烧字幕组")
+    card.get_by_label("群名").fill("向日葵字幕组")
     card.get_by_label("开启通知").check()
     card.get_by_label("A", exact=True).check()
     card.get_by_label("路灯表已生成").check()
@@ -171,5 +171,5 @@ def test_notify_page_names_and_subscribes_a_group(page, notify_server):
     expect_text(page.locator("body"), "已保存")
 
     (g,) = json.loads((tmp / "qq_groups.json").read_text(encoding="utf-8"))
-    assert (g["name"], g["enabled"], g["streamers"]) == ("章鱼烧字幕组", True, ["A"])
+    assert (g["name"], g["enabled"], g["streamers"]) == ("向日葵字幕组", True, ["A"])
     assert "analyzed" in g["kinds"] and "live" in g["kinds"]

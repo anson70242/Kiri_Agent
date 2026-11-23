@@ -386,7 +386,7 @@ The code is in [backend/group_files](../backend/group_files). For turning it on,
 You can check changes to the pages without deploying:
 
 ```sh
-uv run scripts/pull_archive.py 鹿乃 --minutes 3    # 从服务器复制一场录播（影片只取 3 分钟）
+uv run scripts/pull_archive.py 青葉 --minutes 3    # 从服务器复制一场录播（影片只取 3 分钟）
 uv run -m backend.monitor.server --dev --reload    # http://127.0.0.1:8770
 ```
 

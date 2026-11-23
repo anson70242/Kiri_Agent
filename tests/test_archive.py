@@ -17,7 +17,7 @@ from backend.archive import (
 
 from .helpers import sample_archive
 
-STEM = "[20261105][柊優花] 歌枠"
+STEM = "[20261105][森野鈴] 歌枠"
 
 
 def test_an_artifact_is_the_file_named_after_the_video(tmp_path):
@@ -62,9 +62,9 @@ def test_raw_chat_is_either_platforms_file(tmp_path):
     folder = sample_archive(tmp_path, raw_chat={})
     assert Archive.from_folder(folder).file(Artifact.RAW_CHAT) == folder / f"{STEM}.live_chat.json"
     twitch = sample_archive(tmp_path, title="雑談", raw_chat=None)
-    (twitch / "[20261105][柊優花] 雑談.chat.json").write_text("[]", encoding="utf-8")
-    assert Archive.from_folder(twitch).file(Artifact.RAW_CHAT) == twitch / "[20261105][柊優花] 雑談.chat.json"
-    assert Archive.from_folder(twitch).file(Artifact.CHAT) == twitch / "[20261105][柊優花] 雑談.chat_parsed.json"
+    (twitch / "[20261105][森野鈴] 雑談.chat.json").write_text("[]", encoding="utf-8")
+    assert Archive.from_folder(twitch).file(Artifact.RAW_CHAT) == twitch / "[20261105][森野鈴] 雑談.chat.json"
+    assert Archive.from_folder(twitch).file(Artifact.CHAT) == twitch / "[20261105][森野鈴] 雑談.chat_parsed.json"
 
 
 def test_an_archive_opened_from_its_video_names_artifacts_after_it(tmp_path):
@@ -207,7 +207,7 @@ def test_a_file_that_vanishes_while_its_folder_is_scanned_is_skipped(tmp_path, m
 
     monkeypatch.setattr(os, "scandir", racing_scandir)
     everything = set(Artifact) - {Artifact.RAW_CHAT, Artifact.DRIVE_LINK}  # what sample_archive makes
-    assert Downloads(root).open("柊優花/20261105/歌枠").present() == everything  # not "archive not found"
+    assert Downloads(root).open("森野鈴/20261105/歌枠").present() == everything  # not "archive not found"
     assert Archive.from_video(folder / f"{STEM}.mp4").present() == everything  # not an empty folder
     assert [a.present() for a in Downloads(root).list()] == [everything]
 
@@ -223,13 +223,13 @@ def test_an_empty_archive_folder_dates_from_the_folder(tmp_path):
 def test_a_folder_reference_opens_the_archive(tmp_path):
     root = tmp_path / "downloads"
     folder = sample_archive(root)
-    a = Downloads(root).open("柊優花/20261105/歌枠")
-    assert a.folder == folder.resolve() and a.creator == "柊優花" and a.ref == "柊優花/20261105/歌枠"
+    a = Downloads(root).open("森野鈴/20261105/歌枠")
+    assert a.folder == folder.resolve() and a.creator == "森野鈴" and a.ref == "森野鈴/20261105/歌枠"
     assert a.video == folder.resolve() / f"{STEM}.mp4"
 
 
-@pytest.mark.parametrize("ref", ["", ".", "..", "../", "../..", "柊優花/../..", "nope/20261105/歌枠",
-                                 f"柊優花/20261105/歌枠/{STEM}.mp4"])
+@pytest.mark.parametrize("ref", ["", ".", "..", "../", "../..", "森野鈴/../..", "nope/20261105/歌枠",
+                                 f"森野鈴/20261105/歌枠/{STEM}.mp4"])
 def test_a_folder_reference_outside_the_root_the_root_itself_or_not_a_folder_is_rejected(tmp_path, ref):
     root = tmp_path / "downloads"
     sample_archive(root)
@@ -242,7 +242,7 @@ def test_a_named_file_is_served_only_from_directly_inside_the_archive(tmp_path):
     folder = sample_archive(root)
     (folder / "sub").mkdir()
     (tmp_path / "secret.txt").write_text("x")
-    a = Downloads(root).open("柊優花/20261105/歌枠")
+    a = Downloads(root).open("森野鈴/20261105/歌枠")
     assert a.member(f"{STEM}.mp4") == folder.resolve() / f"{STEM}.mp4"
     assert a.member("missing.mp4") is None
     assert a.member("sub") is None  # not a plain file

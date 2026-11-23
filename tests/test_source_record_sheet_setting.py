@@ -62,7 +62,7 @@ def test_a_sheet_is_saved_as_its_file_and_tab_and_shown_again_after_a_restart(tm
 
 def test_a_new_group_and_a_group_saved_before_the_field_have_no_sheet(tmp_path, monkeypatch):
     (tmp_path / "qq_groups.json").write_text(json.dumps([
-        {"openid": "G1", "name": "章鱼烧字幕组", "enabled": True, "streamers": ["A"], "kinds": ["live"],
+        {"openid": "G1", "name": "向日葵字幕组", "enabled": True, "streamers": ["A"], "kinds": ["live"],
          "status": "active", "added_at": "2026-11-01T00:00:00+00:00"}]), encoding="utf-8")
     client = app(tmp_path, monkeypatch)
     assert group(client)["source_record_sheet"] == ""
@@ -73,7 +73,7 @@ def test_a_new_group_and_a_group_saved_before_the_field_have_no_sheet(tmp_path, 
 
 def test_an_address_without_a_tab_is_refused_and_nothing_is_saved(tmp_path, monkeypatch):
     client = app(tmp_path, monkeypatch)
-    r = patch(client, {"name": "章鱼烧字幕组", "source_record_sheet": "https://docs.qq.com/sheet/DFakeFile123"})
+    r = patch(client, {"name": "向日葵字幕组", "source_record_sheet": "https://docs.qq.com/sheet/DFakeFile123"})
     assert r.status_code == 422 and "tab=" in r.json()["detail"]
     assert saved(tmp_path)["name"] == "" and "source_record_sheet" not in saved(tmp_path)
 
@@ -90,12 +90,12 @@ def test_an_address_that_is_not_a_sheet_is_refused_and_the_saved_one_stays(tmp_p
 def test_an_empty_field_clears_the_sheet_and_leaving_it_out_keeps_it(tmp_path, monkeypatch):
     client = app(tmp_path, monkeypatch)
     assert patch(client, {"source_record_sheet": ADDRESS}).status_code == 200
-    assert patch(client, {"name": "章鱼烧字幕组"}).status_code == 200
+    assert patch(client, {"name": "向日葵字幕组"}).status_code == 200
     assert group(client)["source_record_sheet"] == ADDRESS
 
     assert patch(client, {"source_record_sheet": "  "}).status_code == 200
     assert group(client)["source_record_sheet"] == ""
-    assert "source_record_sheet" not in saved(tmp_path) and saved(tmp_path)["name"] == "章鱼烧字幕组"
+    assert "source_record_sheet" not in saved(tmp_path) and saved(tmp_path)["name"] == "向日葵字幕组"
 
 
 def test_two_groups_name_two_sheets(tmp_path, monkeypatch):

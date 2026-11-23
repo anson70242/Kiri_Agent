@@ -36,27 +36,27 @@ def test_a_new_group_starts_with_both_switches_off(tmp_path, monkeypatch):
 
 def test_a_group_saved_before_the_switches_reads_as_off_and_off(tmp_path, monkeypatch):
     (tmp_path / "qq_groups.json").write_text(json.dumps([
-        {"openid": "G1", "name": "章鱼烧字幕组", "enabled": True, "streamers": ["A"], "kinds": ["live"],
+        {"openid": "G1", "name": "向日葵字幕组", "enabled": True, "streamers": ["A"], "kinds": ["live"],
          "status": "active", "added_at": "2026-11-01T00:00:00+00:00"}]), encoding="utf-8")
     client = app(tmp_path, monkeypatch)  # registering a known group changes nothing
 
     g = group(client)
     assert (g["group_files_to_drive"], g["group_file_notices"]) == (False, False)
-    assert g["group_folder"] == "章鱼烧字幕组"
+    assert g["group_folder"] == "向日葵字幕组"
     files = client.app.state.notifier.qq.groups.group_files("G1")
-    assert (files.to_drive, files.notices, files.folder) == (False, False, "章鱼烧字幕组")
+    assert (files.to_drive, files.notices, files.folder) == (False, False, "向日葵字幕组")
 
 
 def test_both_switches_are_saved_and_read_back(tmp_path, monkeypatch):
     client = app(tmp_path, monkeypatch)
-    r = patch(client, {"name": "章鱼烧字幕组", "group_files_to_drive": True, "group_file_notices": True})
+    r = patch(client, {"name": "向日葵字幕组", "group_files_to_drive": True, "group_file_notices": True})
     assert r.status_code == 200 and r.json()["group_files_to_drive"] is True
 
     g = group(client)
-    assert (g["group_files_to_drive"], g["group_file_notices"], g["group_folder"]) == (True, True, "章鱼烧字幕组")
+    assert (g["group_files_to_drive"], g["group_file_notices"], g["group_folder"]) == (True, True, "向日葵字幕组")
     assert (saved(tmp_path)["group_files_to_drive"], saved(tmp_path)["group_file_notices"]) == (True, True)
     files = client.app.state.notifier.qq.groups.group_files("G1")  # what the group-files module reads
-    assert (files.to_drive, files.notices, files.folder) == (True, True, "章鱼烧字幕组")
+    assert (files.to_drive, files.notices, files.folder) == (True, True, "向日葵字幕组")
 
     assert patch(client, {"group_files_to_drive": False}).status_code == 200
     assert (group(client)["group_files_to_drive"], group(client)["group_file_notices"]) == (False, True)
@@ -88,22 +88,22 @@ def test_a_name_that_cannot_be_one_folder_is_refused_with_what_is_wrong(tmp_path
 
 def test_while_the_first_switch_is_on_the_name_cannot_be_cleared_or_spoiled(tmp_path, monkeypatch):
     client = app(tmp_path, monkeypatch)
-    assert patch(client, {"name": "章鱼烧字幕组", "group_files_to_drive": True}).status_code == 200
+    assert patch(client, {"name": "向日葵字幕组", "group_files_to_drive": True}).status_code == 200
 
     r = patch(client, {"name": ""})
     assert r.status_code == 422 and "先填群名" in r.json()["detail"]
-    r = patch(client, {"name": "章鱼烧|字幕组"})
+    r = patch(client, {"name": "向日葵|字幕组"})
     assert r.status_code == 422 and "|" in r.json()["detail"]
-    assert saved(tmp_path)["name"] == "章鱼烧字幕组"
+    assert saved(tmp_path)["name"] == "向日葵字幕组"
 
-    assert patch(client, {"name": "  章鱼烧二组 "}).status_code == 200  # a usable name: the folder follows
-    assert group(client)["group_folder"] == "章鱼烧二组"
+    assert patch(client, {"name": "  向日葵二组 "}).status_code == 200  # a usable name: the folder follows
+    assert group(client)["group_folder"] == "向日葵二组"
     assert patch(client, {"name": "", "group_files_to_drive": False}).status_code == 200  # off, then cleared
 
 
 def test_the_switches_do_not_depend_on_notices_streamers_or_kinds(tmp_path, monkeypatch):
     client = app(tmp_path, monkeypatch)
-    assert patch(client, {"name": "章鱼烧字幕组", "enabled": False, "streamers": [], "kinds": [],
+    assert patch(client, {"name": "向日葵字幕组", "enabled": False, "streamers": [], "kinds": [],
                           "group_files_to_drive": True, "group_file_notices": True}).status_code == 200
     assert patch(client, {"enabled": True, "streamers": ["A", "B"], "kinds": ["live"]}).status_code == 200
     assert patch(client, {"enabled": False, "streamers": [], "kinds": []}).status_code == 200
@@ -138,7 +138,7 @@ def test_the_status_says_once_whether_the_drive_is_available(tmp_path, monkeypat
 @pytest.mark.parametrize("switches", [{"group_files_to_drive": "yes"}, {"group_file_notices": 1},
                                       {"group_files_to_drive": None}])
 def test_a_groups_file_with_a_switch_that_is_not_true_or_false_stops_the_service(tmp_path, monkeypatch, switches):
-    text = json.dumps([{"openid": "G1", "name": "章鱼烧字幕组", **switches}])
+    text = json.dumps([{"openid": "G1", "name": "向日葵字幕组", **switches}])
     (tmp_path / "qq_groups.json").write_text(text, encoding="utf-8")
 
     with pytest.raises(StateFileError) as e:
@@ -150,10 +150,10 @@ def test_a_groups_file_with_a_switch_that_is_not_true_or_false_stops_the_service
 def test_a_removed_group_keeps_its_switches_but_its_files_are_off(tmp_path, monkeypatch):
     client = app(tmp_path, monkeypatch)
     groups = client.app.state.notifier.qq.groups
-    patch(client, {"name": "章鱼烧字幕组", "group_files_to_drive": True, "group_file_notices": True})
+    patch(client, {"name": "向日葵字幕组", "group_files_to_drive": True, "group_file_notices": True})
     groups.update("G1", status="removed")  # the bot was kicked
 
     assert (group(client)["group_files_to_drive"], group(client)["group_file_notices"]) == (True, True)
     files = groups.group_files("G1")
-    assert (files.to_drive, files.notices, files.folder) == (False, False, "章鱼烧字幕组")
+    assert (files.to_drive, files.notices, files.folder) == (False, False, "向日葵字幕组")
     assert groups.group_files("NOPE") is None

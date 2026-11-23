@@ -12,14 +12,14 @@ from backend.monitor.archives import create_router
 
 from .helpers import sample_archive
 
-FOLDER = "柊優花/20261105/歌枠"
-STEM = "[20261105][柊優花] 歌枠"
+FOLDER = "森野鈴/20261105/歌枠"
+STEM = "[20261105][森野鈴] 歌枠"
 
 
 @pytest.fixture
 def client(tmp_path):
     out = tmp_path / "downloads"
-    table = {"streamer": "柊優花", "title": "歌枠", "rows": [
+    table = {"streamer": "森野鈴", "title": "歌枠", "rows": [
         {"start": "00:00:00", "end": "00:05:00", "score": 8, "top_pick": {"title": "开场"}, "timeline": [
             {"start": "00:00", "end": "02:00", "title": "开场", "detail": "打招呼"},
             {"start": "02:00", "end": "05:00", "title": "杂谈", "detail": "聊天"}]},
@@ -27,9 +27,9 @@ def client(tmp_path):
     ]}
     # every artifact (helpers.CHAT has 3 messages); the raw chat is not in the zip
     sample_archive(out, *FOLDER.split("/"), highlights=table, raw_chat={})
-    partial = out / "柊優花/20261106/雑談"
+    partial = out / "森野鈴/20261106/雑談"
     partial.mkdir(parents=True)
-    (partial / "[20261106][柊優花] 雑談.mp4.part").write_bytes(b"xx")
+    (partial / "[20261106][森野鈴] 雑談.mp4.part").write_bytes(b"xx")
     (tmp_path / "config.json").write_text("{}")  # traversal target
 
     app = FastAPI()
@@ -43,7 +43,7 @@ def test_list(client):
     newest, done = data["archives"]
     assert newest["date"] == "20261106" and newest["downloading"] and newest["video"] is None
     assert done["folder"] == FOLDER
-    assert done["creator"] == "柊優花" and done["title"] == "歌枠"
+    assert done["creator"] == "森野鈴" and done["title"] == "歌枠"
     assert done["video"] == f"{STEM}.mp4" and done["video_size"] == 10
     assert not done["downloading"]
     assert done["has_chat"] and done["chat_count"] == 3
@@ -61,7 +61,7 @@ def test_chat(client):
     data = client.get("/api/archives/chat", params={"folder": FOLDER}).json()
     assert len(data["messages"]) == 3
     assert data["density"] == [2, 0, 1]
-    r = client.get("/api/archives/chat", params={"folder": "柊優花/20261106/雑談"})
+    r = client.get("/api/archives/chat", params={"folder": "森野鈴/20261106/雑談"})
     assert r.status_code == 404
 
 
@@ -69,7 +69,7 @@ def test_subtitles_vtt(client):
     r = client.get("/api/archives/subtitles.vtt", params={"folder": FOLDER})
     assert r.status_code == 200 and r.headers["content-type"].startswith("text/vtt")
     assert r.text == "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nやっほー\n"
-    r = client.get("/api/archives/subtitles.vtt", params={"folder": "柊優花/20261106/雑談"})
+    r = client.get("/api/archives/subtitles.vtt", params={"folder": "森野鈴/20261106/雑談"})
     assert r.status_code == 404  # no transcript yet
     assert client.get("/api/archives/subtitles.vtt", params={"folder": "../.."}).status_code == 404
 
@@ -77,28 +77,28 @@ def test_subtitles_vtt(client):
 def test_transcript(client):
     r = client.get("/api/archives/transcript", params={"folder": FOLDER})
     assert r.json() == {"segments": [{"start": 1.0, "end": 2.0, "text": "やっほー"}]}
-    assert client.get("/api/archives/transcript", params={"folder": "柊優花/20261106/雑談"}).status_code == 404
+    assert client.get("/api/archives/transcript", params={"folder": "森野鈴/20261106/雑談"}).status_code == 404
 
 
 def test_highlights_list_and_table(client):
     listing = client.get("/api/highlights").json()["tables"]
-    assert [(t["folder"], t["creator"], t["date"], t["title"]) for t in listing] == [(FOLDER, "柊優花", "20261105", "歌枠")]
+    assert [(t["folder"], t["creator"], t["date"], t["title"]) for t in listing] == [(FOLDER, "森野鈴", "20261105", "歌枠")]
     assert (listing[0]["segments"], listing[0]["best_score"], listing[0]["picks"]) == (2, 8, 1)
 
     table = client.get("/api/highlights/table", params={"folder": FOLDER}).json()
     assert [r["start"] for r in table["rows"]] == ["00:00:00", "00:05:00"]
-    assert client.get("/api/highlights/table", params={"folder": "柊優花/20261106/雑談"}).status_code == 404
+    assert client.get("/api/highlights/table", params={"folder": "森野鈴/20261106/雑談"}).status_code == 404
     assert client.get("/api/highlights/table", params={"folder": "../.."}).status_code == 404
 
 
 def test_a_highlight_table_that_is_not_an_object_counts_as_damaged(client, tmp_path):
-    sample_archive(tmp_path / "downloads", "柊優花", "20261107", "朝活", highlights=[{"start": "00:00:00"}])
+    sample_archive(tmp_path / "downloads", "森野鈴", "20261107", "朝活", highlights=[{"start": "00:00:00"}])
 
     listing = client.get("/api/highlights")
     assert listing.status_code == 200 and [t["folder"] for t in listing.json()["tables"]] == [FOLDER]  # skipped
-    r = client.get("/api/highlights/table", params={"folder": "柊優花/20261107/朝活"})
+    r = client.get("/api/highlights/table", params={"folder": "森野鈴/20261107/朝活"})
     assert (r.status_code, r.json()["detail"]) == (500, "路灯表 is not valid JSON")
-    assert client.get("/api/highlights/xlsx", params={"folder": "柊優花/20261107/朝活"}).status_code == 500
+    assert client.get("/api/highlights/xlsx", params={"folder": "森野鈴/20261107/朝活"}).status_code == 500
 
 
 def test_listing_says_which_archives_have_a_table(client):
@@ -136,19 +136,19 @@ def test_highlights_xlsx(client):
             assert c.alignment.horizontal == want, c.coordinate
             if c.row > 1:
                 assert c.alignment.wrap_text, c.coordinate  # multi-line cells keep wrapping
-    assert client.get("/api/highlights/xlsx", params={"folder": "柊優花/20261106/雑談"}).status_code == 404
+    assert client.get("/api/highlights/xlsx", params={"folder": "森野鈴/20261106/雑談"}).status_code == 404
 
 
 def test_highlights_xlsx_shows_a_song_entry_with_its_own_end(client, tmp_path):
     song = {"start": "00:03:00", "end": "00:07:30", "topic": "唱歌", "title": "【Midori no Kasa】",
             "detail": "原唱：Invented Artist"}  # ends past its row's end
-    table = {"streamer": "柊優花", "title": "歌枠", "rows": [
+    table = {"streamer": "森野鈴", "title": "歌枠", "rows": [
         {"start": "00:00:00", "end": "00:05:00", "topics": ["开场", "唱歌"], "score": 6, "top_pick": None,
          "timeline": [{"start": "00:00:10", "end": "00:02:50", "topic": "开场", "title": "【开场】", "detail": "打招呼"},
                       song]}]}
-    sample_archive(tmp_path / "downloads", "柊優花", "20261108", "歌枠", highlights=table)
+    sample_archive(tmp_path / "downloads", "森野鈴", "20261108", "歌枠", highlights=table)
 
-    r = client.get("/api/highlights/xlsx", params={"folder": "柊優花/20261108/歌枠"})
+    r = client.get("/api/highlights/xlsx", params={"folder": "森野鈴/20261108/歌枠"})
     ws = openpyxl.load_workbook(io.BytesIO(r.content)).active
     assert ws["D2"].value.split("\n\n")[-1] == "00:03:00–00:07:30 【Midori no Kasa】 原唱：Invented Artist"
     assert ws["C2"].value == "开场\n唱歌"
@@ -181,7 +181,7 @@ def test_chinese_subtitles(client):
     r = client.get("/api/archives/srt", params=q | {"lang": "zh"})
     assert "attachment" in r.headers["content-disposition"]
     assert r.text == "1\n00:00:01,000 --> 00:00:02,000\n哈喽\n\n"
-    assert client.get("/api/archives/srt", params={"folder": "柊優花/20261106/雑談", "lang": "zh"}).status_code == 404
+    assert client.get("/api/archives/srt", params={"folder": "森野鈴/20261106/雑談", "lang": "zh"}).status_code == 404
 
 
 def test_highlights_page(client):

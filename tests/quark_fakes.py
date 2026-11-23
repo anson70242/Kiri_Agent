@@ -65,7 +65,7 @@ def uploaded(name: str, size: int) -> list[str]:
                                               "fileSize": size, "instantUpload": False}, action="upload", type="list"),
             result("upload", data={"fileNames": [name], "fileCount": 1, "totalSize": size, "fids": [FILE_ID],
                                    "successCount": 1, "instantUpload": False, "instantUploadCount": 0,
-                                   "fullPath": "夸克网盘/录播/柊優花"})]
+                                   "fullPath": "夸克网盘/录播/森野鈴"})]
 
 
 def upload_failed(code: int, msg: str, record: bool = True) -> list[str]:

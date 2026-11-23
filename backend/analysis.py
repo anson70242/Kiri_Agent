@@ -1,7 +1,7 @@
 """Stream analysis: turn a transcript + chat into the 路灯表 (highlight table).
 
     from backend.analysis import analyze
-    analyze(video, complete, streamer="鹿乃まほろ", title="...")
+    analyze(video, complete, streamer="青葉みのり", title="...")
     # -> the highlight table artifact next to the video
 
 Passes (AutoKiri's clip_highlight, adapted):

@@ -89,7 +89,7 @@ def test_youtube_check_turns_errors_into_unknown():
 
 # The /streams tab lists a channel's streams as "lockup" items (trimmed from the real
 # page). /live can resolve to a scheduled item even while a members-only stream is
-# live (seen 2026-11-12 on @wakuse_ito), so a LIVE badge here must win.
+# live (seen 2026-11-12), so a LIVE badge here must win.
 
 def yt_lockup(video_id, title, *, live=False, members=False, upcoming=False):
     badge = (
@@ -123,11 +123,11 @@ def yt_streams_page(*items):
     )
 
 
-MEMBERS_TITLE = "【 メン限 】11月のいとっこちゃん作戦会議【 惑世いと┆#vtuber 】"
+MEMBERS_TITLE = "【 メン限 】11月のみんなとの作戦会議【 綾瀬りん┆#vtuber 】"
 WAKUSE_STREAMS = yt_streams_page(
     yt_lockup("DhreCl4ocKc", "weekly schedule", upcoming=True),
     yt_lockup("wDoutWmF4uY", "【💿News! 】とっておきの3つめのCDが販売されました♪", upcoming=True),
-    yt_lockup("DggkYPYfAtk", MEMBERS_TITLE, live=True, members=True),
+    yt_lockup("AbCdEfGhIjK", MEMBERS_TITLE, live=True, members=True),
     yt_lockup("yKlo9BkZVrg", "【 歌枠 】寒くなってきたねえ"),
 )
 
@@ -135,10 +135,10 @@ WAKUSE_STREAMS = yt_streams_page(
 def test_youtube_streams_tab_finds_members_only_live_among_upcoming():
     st = YouTubeMonitor.parse_streams_page(YT, WAKUSE_STREAMS)
     assert st.state is LiveState.LIVE
-    assert st.stream_id == "DggkYPYfAtk"
+    assert st.stream_id == "AbCdEfGhIjK"
     assert st.title == MEMBERS_TITLE
-    assert st.url == "https://www.youtube.com/watch?v=DggkYPYfAtk"
-    assert st.thumbnail == "https://i.ytimg.com/vi/DggkYPYfAtk/hq720.jpg?a=1&b=2"
+    assert st.url == "https://www.youtube.com/watch?v=AbCdEfGhIjK"
+    assert st.thumbnail == "https://i.ytimg.com/vi/AbCdEfGhIjK/hq720.jpg?a=1&b=2"
 
 
 def test_youtube_streams_tab_without_live_finds_nothing():
@@ -171,16 +171,16 @@ def test_youtube_members_only_live_wins_over_upcoming_on_live_tab():
     # /live serves the far-future premiere; the members-only stream is live meanwhile.
     st = check_youtube(yt_watch_page(is_upcoming=True, video_id="wDoutWmF4uY"), WAKUSE_STREAMS)
     assert st.state is LiveState.LIVE
-    assert st.stream_id == "DggkYPYfAtk"
+    assert st.stream_id == "AbCdEfGhIjK"
     assert st.title == MEMBERS_TITLE
-    assert st.thumbnail == "https://i.ytimg.com/vi/DggkYPYfAtk/hq720.jpg?a=1&b=2"
+    assert st.thumbnail == "https://i.ytimg.com/vi/AbCdEfGhIjK/hq720.jpg?a=1&b=2"
     assert st.avatar == "https://yt3.ggpht.com/av=s176-c-k"
 
 
 def test_youtube_members_only_live_when_live_tab_shows_channel_page():
     st = check_youtube(YT_CHANNEL_PAGE, WAKUSE_STREAMS)
     assert st.state is LiveState.LIVE
-    assert st.stream_id == "DggkYPYfAtk"
+    assert st.stream_id == "AbCdEfGhIjK"
     assert st.avatar == "https://yt3.googleusercontent.com/av=s176-c-k"
 
 

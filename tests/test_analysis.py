@@ -87,7 +87,7 @@ class FakeLLM:
 
 
 def make_archive(tmp_path):
-    video = tmp_path / "[20261111][鹿乃まほろ] 土豆.mp4"
+    video = tmp_path / "[20261111][青葉みのり] 土豆.mp4"
     video.write_bytes(b"x")
     stem = video.name.removesuffix(".mp4")
     (tmp_path / f"{stem}.transcript.json").write_text(json.dumps(
@@ -111,9 +111,9 @@ def test_analyze_writes_the_table(tmp_path):
     video = make_archive(tmp_path)
     llm = FakeLLM(SCORES)
 
-    out = analyze(video, llm, streamer="鹿乃まほろ", title="土豆")
+    out = analyze(video, llm, streamer="青葉みのり", title="土豆")
 
-    assert out == tmp_path / "[20261111][鹿乃まほろ] 土豆.highlights.json"
+    assert out == tmp_path / "[20261111][青葉みのり] 土豆.highlights.json"
     data = json.loads(out.read_text(encoding="utf-8"))
     first, second = data["rows"]
     assert (first["start"], first["end"], second["start"]) == ("00:00:00", "00:05:00", "00:05:00")
@@ -129,11 +129,11 @@ def test_analyze_writes_the_table(tmp_path):
 def test_analyze_prompts_carry_the_material(tmp_path):
     video = make_archive(tmp_path)
     llm = FakeLLM(SCORES)
-    analyze(video, llm, streamer="鹿乃まほろ", title="土豆")
+    analyze(video, llm, streamer="青葉みのり", title="土豆")
 
     assert len(llm.calls) == 3  # 2 segments + 1 scoring pass
     seg1 = llm.calls[0][-1]["content"]
-    assert "鹿乃まほろ" in seg1 and "土豆" in seg1
+    assert "青葉みのり" in seg1 and "土豆" in seg1
     assert "00:00:10 6万個のじゃがいも" in seg1
     assert "草 ×2" in seg1
     seg2 = llm.calls[1][-1]["content"]

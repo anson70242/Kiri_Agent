@@ -18,7 +18,7 @@ from .quark_fakes import (AUTH_URL, DEVICE_ID, FOLDER_ID, LAPSED_103, NOISE, REC
                           FakeCli, FakeProcess, browse, create_folder, lapsed_11001, line, needs_authorization, progress,
                           result, upload_failed, uploaded)
 
-STEM = "[20261105][柊優花] 歌枠"
+STEM = "[20261105][森野鈴] 歌枠"
 ZIP = f"{STEM}.zip"
 
 
@@ -69,12 +69,12 @@ def test_a_drive_copy_is_uploaded_into_the_folder_made_from_the_top_of_the_drive
     folder = sample_archive(root)
     seen = uploading(cli)
 
-    done = drive(root).upload(Archive.from_folder(folder), "录播/柊優花")
+    done = drive(root).upload(Archive.from_folder(folder), "录播/森野鈴")
 
     assert done.sent
-    assert done.copy.path == f"录播/柊優花/{ZIP}" and done.copy.link.startswith(SHARE_URL)
+    assert done.copy.path == f"录播/森野鈴/{ZIP}" and done.copy.link.startswith(SHARE_URL)
     assert cli.commands() == [
-        ["create-folder", "--dir-path", "录播/柊優花", "--parent-fid", "0"],
+        ["create-folder", "--dir-path", "录播/森野鈴", "--parent-fid", "0"],
         ["browse", "--parent-fid", FOLDER_ID, "--all"],
         ["upload", cli.commands()[2][1], "--parent-fid", FOLDER_ID],
         cli.commands()[3],
@@ -88,9 +88,9 @@ def test_a_zip_with_the_same_name_on_the_drive_whatever_its_size_is_neither_buil
     folder = sample_archive(root)
     uploading(cli, files=[("别的.zip", 5), (ZIP, size)])
 
-    done = drive(root).upload(Archive.from_folder(folder), "录播/柊優花")
+    done = drive(root).upload(Archive.from_folder(folder), "录播/森野鈴")
 
-    assert not done.sent and done.copy.path == f"录播/柊優花/{ZIP}"
+    assert not done.sent and done.copy.path == f"录播/森野鈴/{ZIP}"
     assert [c[0] for c in cli.commands()] == ["create-folder", "browse", "share"]
     assert not built(root)
 
@@ -100,7 +100,7 @@ def test_the_uploads_progress_reaches_the_callback(root, cli):
     seen = uploading(cli)
     reports = []
 
-    drive(root).upload(Archive.from_folder(folder), "录播/柊優花", lambda sent, total: reports.append((sent, total)))
+    drive(root).upload(Archive.from_folder(folder), "录播/森野鈴", lambda sent, total: reports.append((sent, total)))
 
     size = seen["size"]
     assert reports[-2:] == [(size // 2, size), (size, size)]
@@ -110,9 +110,9 @@ def test_the_pipeline_gets_the_drive_copy_from_the_drive_as_a_call(root, cli):
     folder = sample_archive(root)
     uploading(cli)
 
-    copy = drive(root)(Archive.from_folder(folder), "录播/柊優花", lambda sent, total: None)
+    copy = drive(root)(Archive.from_folder(folder), "录播/森野鈴", lambda sent, total: None)
 
-    assert copy.path == f"录播/柊優花/{ZIP}" and copy.link.startswith(SHARE_URL)
+    assert copy.path == f"录播/森野鈴/{ZIP}" and copy.link.startswith(SHARE_URL)
 
 
 # ---- failures ----
@@ -127,7 +127,7 @@ def test_a_failed_upload_raises_failed_with_the_cli_message_and_forgets_its_task
     uploading(cli, answer=answer)
 
     with pytest.raises(DriveFailed, match=message):
-        drive(root).upload(Archive.from_folder(folder), "录播/柊優花")
+        drive(root).upload(Archive.from_folder(folder), "录播/森野鈴")
 
     assert cli.commands()[-1] == ["upload", "delete", "--record-id", RECORD_ID]
     assert not [c for c in cli.commands() if "resume" in c]
@@ -148,7 +148,7 @@ def test_a_lapsed_authorization_raises_lapsed_in_words_of_its_own(root, cli, ste
     cli.answers["upload list"] = [result("upload-list", data={"totalCount": 0})]
 
     with pytest.raises(DriveAuthorizationLapsed) as lapsed:
-        drive(root).upload(Archive.from_folder(folder), "录播/柊優花")
+        drive(root).upload(Archive.from_folder(folder), "录播/森野鈴")
     assert str(lapsed.value) == f"夸克网盘的授权已失效（{code}）"  # never the CLI's text: it may hold the device id
     assert no_zip_left(root)
     assert built(root) == (step == "upload")  # found before the zip is built, when it can be
@@ -159,7 +159,7 @@ def test_no_address_from_a_cli_message_reaches_a_failure(root, cli):
     uploading(cli, answer=upload_failed(-204, f"上传失败，请到 {AUTH_URL} 查看"))
 
     with pytest.raises(DriveFailed) as failed:
-        drive(root).upload(Archive.from_folder(folder), "录播/柊優花")
+        drive(root).upload(Archive.from_folder(folder), "录播/森野鈴")
     assert "上传失败" in str(failed.value)
     assert "http" not in str(failed.value) and DEVICE_ID not in str(failed.value)
 
@@ -177,7 +177,7 @@ def test_an_upload_without_progress_for_the_idle_time_is_killed_and_failed(root,
         result("upload-list", data={"totalCount": 2})]
 
     with pytest.raises(DriveFailed, match="没有进度"):
-        drive(root, idle_timeout=0.3).upload(Archive.from_folder(folder), "录播/柊優花")
+        drive(root, idle_timeout=0.3).upload(Archive.from_folder(folder), "录播/森野鈴")
 
     assert stuck.killed.is_set()
     assert cli.commands()[-2:] == [["upload", "list"], ["upload", "delete", "--record-id", RECORD_ID]]
@@ -188,7 +188,7 @@ def test_an_archive_without_video_uploads_nothing(root, cli):
     folder = sample_archive(root, video=None)
 
     with pytest.raises(DriveFailed, match="没有影片"):
-        drive(root).upload(Archive.from_folder(folder), "录播/柊優花")
+        drive(root).upload(Archive.from_folder(folder), "录播/森野鈴")
     assert cli.calls == []
 
 
@@ -217,20 +217,20 @@ def test_the_command_uploads_every_archive_in_a_folder_and_says_what_became_of_e
     sample_archive(root, date="20261106", title="雑談")
     sample_archive(root, date="20261107", title="没有影片", video=None)
     sample_archive(root, date="20261108", title="坏了")
-    seen = uploading(cli, files=[("[20261106][柊優花] 雑談.zip", 123)])
+    seen = uploading(cli, files=[("[20261106][森野鈴] 雑談.zip", 123)])
     upload = cli.answers["upload"]
     cli.answers["upload"] = lambda argv, cwd: (upload_failed(-204, "网络超时") if "坏了" in argv[3] else upload(argv, cwd))
 
-    code, out = upload_command(cfg, capsys, root / "柊優花")
+    code, out = upload_command(cfg, capsys, root / "森野鈴")
 
     assert code == 1  # one failed
     assert out == [
-        f"已上传：{ZIP} → 录播/柊優花/{ZIP}",
+        f"已上传：{ZIP} → 录播/森野鈴/{ZIP}",
         f"  网盘链接：{SHARE_URL}?pwd=Ab3d",
-        "已在网盘：[20261106][柊優花] 雑談.zip → 录播/柊優花/[20261106][柊優花] 雑談.zip",
+        "已在网盘：[20261106][森野鈴] 雑談.zip → 录播/森野鈴/[20261106][森野鈴] 雑談.zip",
         f"  网盘链接：{SHARE_URL}?pwd=Ab3d",
-        "跳过：柊優花/20261107/没有影片（没有影片）",
-        "失败：[20261108][柊優花] 坏了.zip：网络超时（-204）",
+        "跳过：森野鈴/20261107/没有影片（没有影片）",
+        "失败：[20261108][森野鈴] 坏了.zip：网络超时（-204）",
     ]
     assert seen["name"] == ZIP
 
@@ -240,11 +240,11 @@ def test_the_command_takes_one_archive_folder_and_the_folder_given(tmp_path, roo
     folder = sample_archive(root)
     uploading(cli)
 
-    code, out = upload_command(cfg, capsys, folder, "--folder", "直播录像/优花")
+    code, out = upload_command(cfg, capsys, folder, "--folder", "直播录像/小铃")
 
     assert code == 0
-    assert out == [f"已上传：{ZIP} → 直播录像/优花/{ZIP}", f"  网盘链接：{SHARE_URL}?pwd=Ab3d"]
-    assert cli.commands()[0][:3] == ["create-folder", "--dir-path", "直播录像/优花"]
+    assert out == [f"已上传：{ZIP} → 直播录像/小铃/{ZIP}", f"  网盘链接：{SHARE_URL}?pwd=Ab3d"]
+    assert cli.commands()[0][:3] == ["create-folder", "--dir-path", "直播录像/小铃"]
 
 
 def test_the_folder_given_with_backslashes_is_taken_as_the_gear_takes_it(tmp_path, root, cli, capsys):
@@ -252,29 +252,29 @@ def test_the_folder_given_with_backslashes_is_taken_as_the_gear_takes_it(tmp_pat
     folder = sample_archive(root)
     uploading(cli)
 
-    code, _ = upload_command(cfg, capsys, folder, "--folder", " \\直播录像\\优花\\ ")
+    code, _ = upload_command(cfg, capsys, folder, "--folder", " \\直播录像\\小铃\\ ")
 
     assert code == 0
-    assert cli.commands()[0][:3] == ["create-folder", "--dir-path", "直播录像/优花"]
+    assert cli.commands()[0][:3] == ["create-folder", "--dir-path", "直播录像/小铃"]
 
 
 def test_a_folder_given_that_a_drive_cannot_have_is_refused_before_anything_is_asked(tmp_path, root, cli, capsys):
     cfg = write_config(tmp_path, root)
     folder = sample_archive(root)
 
-    code = quark.main(["upload", str(folder), "--folder", "直播录像\\\\优花", "--config", str(cfg)])
+    code = quark.main(["upload", str(folder), "--folder", "直播录像\\\\小铃", "--config", str(cfg)])
 
     assert code == 2 and "网盘文件夹" in capsys.readouterr().err
     assert cli.calls == []
 
 
 @pytest.mark.parametrize("streamers, expected", [
-    ([{"name": "柊優花", "platform": "youtube", "channel": "@a", "drive": True, "drive_folder": "直播录像/优花"}],
-     "直播录像/优花"),
-    ([{"name": "柊優花", "platform": "youtube", "channel": "@a"},
-      {"name": "柊優花", "platform": "twitch", "channel": "b", "drive_folder": "直播录像/Twitch"}], "直播录像/Twitch"),
-    ([{"name": "柊優花", "platform": "youtube", "channel": "@a"}], "录播/柊優花"),
-    ([{"name": "别人", "platform": "youtube", "channel": "@b", "drive_folder": "别人"}], "录播/柊優花"),
+    ([{"name": "森野鈴", "platform": "youtube", "channel": "@a", "drive": True, "drive_folder": "直播录像/小铃"}],
+     "直播录像/小铃"),
+    ([{"name": "森野鈴", "platform": "youtube", "channel": "@a"},
+      {"name": "森野鈴", "platform": "twitch", "channel": "b", "drive_folder": "直播录像/Twitch"}], "直播录像/Twitch"),
+    ([{"name": "森野鈴", "platform": "youtube", "channel": "@a"}], "录播/森野鈴"),
+    ([{"name": "别人", "platform": "youtube", "channel": "@b", "drive_folder": "别人"}], "录播/森野鈴"),
 ], ids=["the roster's folder", "the entry with a folder", "the roster's blank folder", "no roster entry"])
 def test_without_a_folder_the_command_takes_the_roster_entry_named_like_the_creator(tmp_path, root, cli, capsys,
                                                                                    streamers, expected):
@@ -309,5 +309,5 @@ def test_the_command_skips_an_archive_still_being_downloaded(tmp_path, root, cli
     code, out = upload_command(cfg, capsys, folder)
 
     assert code == 0
-    assert out == ["跳过：柊優花/20261105/歌枠（还在下载）"]
+    assert out == ["跳过：森野鈴/20261105/歌枠（还在下载）"]
     assert cli.calls == []

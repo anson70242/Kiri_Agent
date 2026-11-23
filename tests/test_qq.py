@@ -90,7 +90,7 @@ def send(n: QQNotifier, event: StreamEvent) -> None:
     asyncio.run(n.send(event))
 
 
-SUBSCRIBED = {"openid": "G1", "name": "章鱼烧", "enabled": True, "streamers": [A.id],
+SUBSCRIBED = {"openid": "G1", "name": "向日葵", "enabled": True, "streamers": [A.id],
               "kinds": ["live", "offline", "downloaded", "uploaded"]}
 
 

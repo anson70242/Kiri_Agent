@@ -100,7 +100,7 @@ def test_a_processed_live_lands_in_the_groups_sheet_with_the_messages_short_down
     a.state.auth.download_links.clock = Clock(datetime(2026, 11, 22, 15, 30, tzinfo=timezone.utc).timestamp())
     groups = a.state.notifier.qq.groups
     groups.register("G1")
-    groups.update("G1", name="章鱼烧字幕组", streamers=["A"], enabled=False, source_record_sheet=SHEET)
+    groups.update("G1", name="向日葵字幕组", streamers=["A"], enabled=False, source_record_sheet=SHEET)
     docs = FakeTencentDocs()
     tab = record_sheet(docs)
     keeper = a.state.source_record

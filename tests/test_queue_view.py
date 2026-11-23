@@ -6,8 +6,8 @@ import json
 
 from .test_monitor_page import browser, page, server  # noqa: F401  (pytest fixtures)
 
-LIVE = {"name": "鹿乃まほろ", "platform": "youtube", "url": "https://x/v1",
-        "title": "【Minecraft】可愛いウーパールーパーのおうち作りたい(∂ω∂)【鹿乃まほろ/ミリプロ】"}
+LIVE = {"name": "青葉みのり", "platform": "youtube", "url": "https://x/v1",
+        "title": "【Minecraft】可愛いウーパールーパーのおうち作りたい(∂ω∂)【青葉みのり/ミリプロ】"}
 NO_PROGRESS = {"percent": None, "downloaded": 0, "total": None, "speed": None, "eta": None}
 
 

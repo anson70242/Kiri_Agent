@@ -1,9 +1,9 @@
 """Copy one archive from the server into ./downloads for a local preview.
 
     uv run scripts/pull_archive.py                  # newest archive, first 10 min of video
-    uv run scripts/pull_archive.py 鹿乃 --minutes 3  # newest whose path contains "鹿乃"
-    uv run scripts/pull_archive.py 鹿乃 --minutes 0  # no video (subtitles, chat, 路灯表 only)
-    uv run scripts/pull_archive.py 鹿乃 --full       # whole video (GBs)
+    uv run scripts/pull_archive.py 青葉 --minutes 3  # newest whose path contains "青葉"
+    uv run scripts/pull_archive.py 青葉 --minutes 0  # no video (subtitles, chat, 路灯表 only)
+    uv run scripts/pull_archive.py 青葉 --full       # whole video (GBs)
 
 Then: uv run -m backend.monitor.server --dev --reload  ->  http://127.0.0.1:8770
 
