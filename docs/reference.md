@@ -259,8 +259,9 @@ A 5-hour live takes about 120,000 tokens. By hand: `uv run -m backend.translate 
 
 - **直播状态** (live status, [monitor.html](../frontend/monitor.html)): who is live / in a waiting room / not live, with covers and tag search.
   「＋ 新增主播」 (add streamer) adds a streamer. The gear ⚙ on each card sets auto-download, how many archives to keep, auto-upload to Tencent Docs and the target spreadsheet,
-  auto-upload of drive copies to Quark (自动上传到夸克网盘) and the drive folder, and can delete the streamer.
-  Settings that are on show on the card as ⬇ 自动下载 (auto-download) / ⬆ 自动上传 (auto-upload) / ☁ 网盘 (drive).
+  auto-upload of drive copies to Quark (自动上传到夸克网盘) and the drive folder, flash transfers (自动上传到 QQ 闪传; greyed out
+  while no flash service is configured, and the API refuses to tick it then), and can delete the streamer.
+  Settings that are on show on the card as ⬇ 自动下载 (auto-download) / ⬆ 自动上传 (auto-upload) / ☁ 网盘 (drive) / ⚡ 闪传 (flash transfer).
 - **录播** ([archives.html](../frontend/archives.html)): downloaded archives and their processing progress. Each one can be played,
   with Chinese (default) / Japanese subtitles, a 中 / 日 / 双语 subtitle panel, chat replay and a chat density chart. Downloads: video, chat,
   SRT (Chinese / Japanese), highlight table (Excel), or everything as one zip (without the raw chat); once the live's drive copy is on the drive,
