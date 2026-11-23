@@ -52,8 +52,11 @@ Rules:
   saves it in the job, and looks at its progress every FLASH_PROGRESS_LOOK seconds until
   it is uploaded. Then the flash link is noted in the archive and READY goes out with it
   (no short download link is made), and the source record sheet is told the flash link. A
-  flash transfer that cannot be made is given up on: READY goes out as without one. One
-  flash transfer at a time, in the order the lives were processed.
+  failed try (an error, a failed file, an upload that has not moved for FLASH_STALL, the
+  files that could not be prepared) is retried like any stage, each try a new flash
+  transfer; at `max_errors` it is given up on: READY goes out as without one, and the owner
+  gets one operator alert (`alert`). One flash transfer at a time, in the order the lives
+  were processed; a failed one waits for its next try without holding the others.
 - Jobs live in `state_file`, so a restart resumes them (yt-dlp resumes partial files).
 """
 
@@ -65,6 +68,7 @@ import functools
 import json
 import logging
 import os
+import re
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
@@ -79,7 +83,7 @@ from backend.asr import ASRSettings, transcribe
 from backend.drive import LOGIN_COMMAND as DRIVE_LOGIN_COMMAND
 from backend.drive import Drive, DriveAuthorizationLapsed, DriveCopy, DriveFailed
 from backend.drive_copy import remove_leftover_drive_copies
-from backend.flash.client import FlashClient, FlashFailed, FlashUnavailable, StartedTransfer
+from backend.flash.client import STALL_SECONDS, FlashClient, FlashFailed, FlashUnavailable, StartedTransfer
 from backend.flash.files import note_flash_link, prepare, remove_staging
 from backend.llm import LLMError, chat, load_llm
 from backend.tencent_docs import (
@@ -139,6 +143,10 @@ class Job:
     flash_link: str | None = field(default=None, repr=False)
     flash_expires: float | None = None
     flash_made: float | None = None
+    # Flash stage, a hung upload: the bytes sent at the last look at the started flash
+    # transfer's progress and when they last moved (epoch seconds); None until one is started.
+    flash_sent: int | None = None
+    flash_moved_at: float | None = None
 
     @property
     def stream_key(self) -> str:
@@ -177,6 +185,8 @@ class Job:
             "flash_link": self.flash_link,
             "flash_expires": self.flash_expires,
             "flash_made": self.flash_made,
+            "flash_sent": self.flash_sent,
+            "flash_moved_at": self.flash_moved_at,
         }
 
     @property
@@ -219,6 +229,7 @@ class Outcome:
     # Flash stage: the flash transfer just started (wait: to be saved in the job), or the one
     # uploaded (done)
     flash: StartedTransfer | None = None
+    sent: int | None = None  # flash stage, wait while uploading: the bytes sent at this look
 
 
 class AutoDownloader:
@@ -277,6 +288,9 @@ class AutoDownloader:
         # told once more.
         self._lapse_alerted = False
         self.notify = notify
+        # The owner's operator alert (Discord only; `LiveNotifier.alert`, called on the event
+        # loop's thread): a flash transfer given up on. None: nobody is told.
+        self.alert: Callable[[str], None] | None = None
         self.clock = clock
         # One worker per stage, so a long transcription never holds up downloads.
         self._wake = {stage: asyncio.Event() for stage in STAGES}
@@ -568,12 +582,15 @@ class AutoDownloader:
         if progress.failed:
             return self._flash_failed(archive, f"{progress.failed} 个文件上传失败")
         if not progress.finished:
+            moved_at = job.flash_moved_at  # None: not looked at since a restart from an older queue file
+            if moved_at is not None and progress.sent == job.flash_sent and self.clock() - moved_at >= FLASH_STALL:
+                return self._flash_failed(archive, f"上传 {FLASH_STALL // 60} 分钟没有进展")
             self._active["flash"] = {
                 "name": s.streamer.name, "platform": s.streamer.platform, "title": s.title, "url": s.url,
                 "started": started.made.timestamp(), "stage": "flash",
                 "percent": round(progress.sent / progress.total * 100, 1) if progress.total else None,
                 "downloaded": progress.sent, "total": progress.total or None, "speed": None, "eta": None}
-            return Outcome("wait", "闪传上传中", retry_at=self.clock() + FLASH_PROGRESS_LOOK)
+            return Outcome("wait", "闪传上传中", retry_at=self.clock() + FLASH_PROGRESS_LOOK, sent=progress.sent)
         try:
             note_flash_link(archive, started)
         except Exception:  # noqa: BLE001 - the page loses the link, the message still carries it
@@ -871,26 +888,59 @@ class AutoDownloader:
 
     def _finish_flash(self, job: Job, outcome: Outcome) -> None:
         """A flash job's look: while it waits (its late chat, its upload) the job stays, with
-        the flash transfer it started; else it ends, and READY goes out, with the flash link
-        when the flash transfer is uploaded, else as for a live without one."""
+        the flash transfer it started and how far its upload moved. A failed try is counted
+        and tried again after the retry interval with a new flash transfer; at `max_errors`
+        the job is given up on (`_end_flash` with the owner's alert). Else it ends, and READY
+        goes out, with the flash link when the flash transfer is uploaded, else as for a live
+        without one."""
         jobs = self.load()
         current = next((j for j in jobs if j.key == job.key), job)
         rest = [j for j in jobs if j.key != job.key]
         if outcome.kind == "wait":  # neither an attempt nor an error
-            if outcome.flash:
+            now = self.clock()
+            if outcome.flash:  # just started: nothing sent yet
                 current.transfer = outcome.flash
-            current.next_try = outcome.retry_at if outcome.retry_at is not None else self.clock()
+                current.flash_sent, current.flash_moved_at = 0, now
+            elif outcome.sent is not None and (outcome.sent != current.flash_sent or current.flash_moved_at is None):
+                current.flash_sent, current.flash_moved_at = outcome.sent, now
+            current.next_try = outcome.retry_at if outcome.retry_at is not None else now
             self.save(rest + [current])
             return
         name = job.status.streamer.name
-        if outcome.kind == "error":
-            log.warning("flash transfer given up on: %s: %s", name, outcome.message)
         self._active["flash"] = None
-        self.save(rest)
-        assert current.video  # a flash job is only queued for a live with a video
+        if outcome.kind == "error":  # a failed try: the next one starts a new flash transfer
+            current.attempts += 1
+            current.errors += 1
+            current.last_error = outcome.message
+            current.transfer = None
+            current.flash_sent = current.flash_moved_at = None
+            log.warning("flash transfer failed (%d/%d): %s: %s", current.errors, self.max_errors, name,
+                        ADDRESS.sub("(address left out)", outcome.message))
+            if current.errors < self.max_errors:
+                current.next_try = self.clock() + self.retry_interval
+                self.save(rest + [current])
+                return
+            log.warning("flash transfer given up on: %s %s", name, current.status.url)
+            self._end_flash(current, rest, alert=flash_given_up_message(current, self.settings.output_dir))
+            return
         if outcome.kind == "done":
             log.info("flash transfer uploaded: %s %s", name, current.status.url)
-        self._send_ready(job, Path(current.video), outcome.flash if outcome.kind == "done" else None)
+        self._end_flash(current, rest, outcome.flash if outcome.kind == "done" else None)
+
+    def _end_flash(self, job: Job, rest: list[Job], flash: StartedTransfer | None = None,
+                   alert: str | None = None) -> None:
+        """The flash job leaves the queue (`rest`: the queue without it) and its live's READY
+        goes out: with the flash link of `flash`, the flash transfer uploaded; without it, as
+        for a live without a flash transfer (the short download link). `alert`: the owner's
+        operator alert, sent after READY (a flash transfer given up on)."""
+        self.save(rest)
+        assert job.video  # a flash job is only queued for a live with a video
+        self._send_ready(job, Path(job.video), flash)
+        if alert and self.alert:
+            try:
+                self.alert(alert)
+            except Exception:  # noqa: BLE001 - an alert never holds up the pipeline
+                log.exception("the owner was not told of a flash transfer given up on: %s", job.status.streamer.name)
 
     def _settle(self, job: Job, jobs: list[Job]) -> None:
         """Save `jobs`, the queue without `job`. When that leaves nothing for its live, its
@@ -1035,6 +1085,24 @@ def flash_ready_links(video: Path, site_url: str, output_dir: Path, flash_link: 
     return (Link(FLASH_LINK_LABEL, flash_link), *page)
 
 
+def flash_given_up_message(job: Job, output_dir: Path) -> str:
+    """The owner's operator alert for a flash job given up on (Chinese, like the other operator
+    messages): the streamer, the live and the last try's reason, and the command that makes
+    the flash transfer by hand. It carries no link: an address in the reason is left out."""
+    s = job.status
+    assert job.video  # a flash job is only queued for a live with a video
+    video = Path(job.video)
+    reason = ADDRESS.sub("（地址略）", job.last_error)[:REASON_KEPT]
+    return "\n".join([
+        f"QQ 闪传试了 {job.errors} 次仍失败，已放弃；「全部处理完成」已照常发出（不带闪传链接）",
+        f"配信者：{s.streamer.name}",
+        f"日期：{live_date(video)}",
+        f"直播：{s.title or '（无标题）'}",
+        f"原因：{reason}",
+        f"手动做闪传：`{FLASH_UPLOAD_COMMAND} \"{Downloads(output_dir).ref(video.parent)}\"`",
+    ])
+
+
 def flash_expiry_line(flash: StartedTransfer) -> str:
     """READY's line saying until when the flash link works: its day in Hong Kong, written as
     the source record sheet writes dates (`2026/12/7`)."""
@@ -1054,6 +1122,15 @@ FLASH_PROGRESS_LOOK = 10
 # A flash job waiting (for its live's late chat) is looked at again this often: READY waits
 # for it, so the wait should not outlast the chat by more than a minute.
 FLASH_WAIT_LOOK = 60
+# An upload whose bytes sent have not moved for this long counts as a failed try: a 7.7 GB
+# video went up in five minutes on the server, so half an hour without a byte is no slow line
+# but a hung flash transfer, which would otherwise hold READY for ever. The command's limit too.
+FLASH_STALL = STALL_SECONDS
+# What the owner runs on the server to make a flash transfer given up on by hand (the alert
+# adds the archive's folder reference).
+FLASH_UPLOAD_COMMAND = "docker compose exec kiri /app/.venv/bin/python -m backend.flash upload"
+ADDRESS = re.compile(r"https?://\S+")  # left out of the reason an alert tells: it carries no link
+REASON_KEPT = 500  # characters of a reason an alert tells
 SHEET_LABEL = "腾讯文档路灯表"
 
 
@@ -1250,5 +1327,6 @@ def attach(config: Path, mon: StreamMonitor, drive: Drive | None = None,
         mon.on_change.append(notifier.on_change)
     if auto and notifier:
         auto.notify = notifier.send
+        auto.alert = notifier.alert
         notifier.on_ended.append(auto.on_ended)
     return notifier, auto

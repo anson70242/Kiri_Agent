@@ -171,3 +171,29 @@ def flash_ready_links(creator: str = "A", link: str = FLASH_LINK) -> list[tuple[
     then the page."""
     ref = f"{creator}%2F20261110%2F%E6%AD%8C%E6%9E%A0"
     return [(link, FLASH_LABEL), (f"{SITE}/archives#{ref}", "录播页面")]
+
+
+# ---- a failed flash transfer (ticket 09) ----
+
+PAUSE = 900  # the pipeline's retry pause in the tests' pipeline (`make`: retry_interval=900)
+
+
+def alerts_of(ad) -> list[str]:
+    """The pipeline's operator alerts (the owner's Discord messages), collected from now on."""
+    alerts: list[str] = []
+    ad.alert = alerts.append
+    return alerts
+
+
+def refused(n: int = 3, reason: str = "闪传服务拒绝了") -> FakeFlash:
+    """A fake flash service that refuses the first `n` starts, then starts and finishes."""
+    from backend.flash.client import FlashFailed
+
+    return FakeFlash(start=[FlashFailed(reason) for _ in range(n)])
+
+
+def staging_exists(ad) -> bool:
+    """Whether any staging folder of a flash transfer is on disk."""
+    from backend.archive import Downloads
+
+    return Downloads(ad.settings.output_dir).flash_staging.exists()
