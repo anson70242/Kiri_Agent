@@ -25,6 +25,7 @@ from backend.archive import Downloads
 from backend.auth import auth_enabled, is_admin, load_auth
 from backend.downloader import load_settings
 from backend.downloader.auto import ShortDownloadLink, attach
+from backend.flash.client import flash_configured
 from backend.group_files import GroupFileKeeper
 from backend.group_files.report import GroupFileReport
 from backend.notify.incidents import IncidentAlerts
@@ -64,6 +65,7 @@ class StreamerSettings(BaseModel):
     upload_sheet: str | None = None  # docs.qq.com/sheet/... link or id; "" clears it
     drive: bool | None = None  # upload each live's drive copy to Quark once it is processed
     drive_folder: str | None = None  # folder on the drive; "" means the default 录播/<name>
+    flash: bool | None = None  # put each live on QQ's flash transfer once it is processed
 
 
 def has_tencent_docs_token(config: Path) -> bool:
@@ -265,11 +267,13 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
             auto.keep = roster.keep_map(auto.default_keep)
             auto.uploads = roster.upload_map()
             auto.drive_folders = roster.drive_map()
+            auto.flash_streamers = roster.flash_streamers()
 
     @app.get("/api/streamers")
     async def list_streamers(request: Request) -> dict:
         names = visible(request)
-        return {"streamers": [s for s in roster.to_dicts() if names is None or s["name"] in names]}
+        return {"streamers": [s for s in roster.to_dicts() if names is None or s["name"] in names],
+                "flash_available": flash_configured()}
 
     @app.post("/api/streamers", status_code=201)
     async def add_streamer(body: NewStreamer) -> dict:
@@ -293,7 +297,7 @@ def create_app(config: Path, interval: float | None = None, dev: bool = False,
     @app.patch("/api/streamers")
     async def update_streamer(id: str, body: StreamerSettings) -> dict:
         try:
-            entry = roster.update(id, **body.model_dump())
+            entry = roster.update(id, flash_available=flash_configured(), **body.model_dump())
         except RosterError as e:
             raise HTTPException(e.status, str(e)) from None
         apply()

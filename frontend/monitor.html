@@ -126,6 +126,7 @@
   dialog form { display: flex; flex-direction: column; gap: 12px; }
   dialog label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
   dialog label.row { flex-direction: row; align-items: center; gap: 8px; color: var(--text); font-size: 14px; }
+  dialog label.row:has(input:disabled) { color: var(--muted); }
   dialog input:not([type=checkbox]), dialog select { font: inherit; font-size: 14px; padding: 7px 10px;
     border: 1px solid var(--border); border-radius: 8px; color: var(--text); background: var(--card); }
   dialog .hint { font-size: 12px; color: var(--muted); }
@@ -198,6 +199,8 @@
     <label class="row"><input type="checkbox" name="drive"> 自动上传到夸克网盘</label>
     <label>网盘文件夹 <input name="drive_folder"></label>
     <span class="hint">每场处理完打包成 zip 永久存到网盘；从根目录算起，留空用默认，没有会自动建</span>
+    <label class="row"><input type="checkbox" name="flash"> 自动上传到 QQ 闪传</label>
+    <span class="hint" id="flash-hint"></span>
     <div class="msg" role="alert"></div>
     <div class="actions">
       <button type="button" class="danger left" name="delete">删除主播</button>
@@ -249,9 +252,10 @@ function card(s) {
       <span class="chip state"><span class="dot"></span>${LABEL[s.state] || s.state}</span>
       <span class="platform ${esc(s.platform)}">${esc(s.platform)}</span>
     </div>
-    ${settings[key(s)]?.auto_download || settings[key(s)]?.upload || settings[key(s)]?.drive ? `<div class="badges">
+    ${settings[key(s)]?.auto_download || settings[key(s)]?.upload || settings[key(s)]?.drive || settings[key(s)]?.flash ? `<div class="badges">
       ${settings[key(s)]?.auto_download ? `<span class="badge">⬇ 自动下载</span>` : ""}
       ${settings[key(s)]?.drive ? `<span class="badge">☁ 网盘</span>` : ""}
+      ${settings[key(s)]?.flash ? `<span class="badge">⚡ 闪传</span>` : ""}
       ${settings[key(s)]?.upload ? `<span class="badge up">⬆ 自动上传</span>` : ""}
     </div>` : ""}
     ${title ? `<div class="title">${title}</div>` : ""}
@@ -285,6 +289,7 @@ const sortRows = list => [...list].sort((a, b) =>
   || a.platform.localeCompare(b.platform));
 let lastData = null;
 let settings = {};  // "platform:channel" -> {auto_download, keep, ...} from /api/streamers
+let flashAvailable = false;  // a flash service is configured: the flash box can be ticked
 
 function draw() {
   if (!lastData) return;
@@ -434,7 +439,9 @@ async function load(method = "GET") {
       fetch(method === "POST" ? "/api/refresh" : "/api/status", { method }),
       fetch("/api/streamers"),
     ]);
-    settings = Object.fromEntries((await st.json()).streamers.map(s => [s.id, s]));
+    const roster = await st.json();
+    settings = Object.fromEntries(roster.streamers.map(s => [s.id, s]));
+    flashAvailable = !!roster.flash_available;
     render(await res.json());
   } catch (e) {
     document.getElementById("meta").textContent = "连不上后端，确认 server 在运行";
@@ -485,7 +492,7 @@ const idUrl = () => `/api/streamers?id=${encodeURIComponent(gearId)}`;
 const gear = wire(gearDlg, f => send("PATCH", idUrl(),
   { auto_download: f.auto_download.checked, keep: f.keep.value ? +f.keep.value : null,
     upload: f.upload.checked, upload_sheet: f.upload_sheet.value,
-    drive: f.drive.checked, drive_folder: f.drive_folder.value }));
+    drive: f.drive.checked, drive_folder: f.drive_folder.value, flash: f.flash.checked }));
 document.getElementById("grid").addEventListener("click", e => {
   const b = e.target.closest(".gear");
   if (!b || !kiri.isAdmin()) return;  // members never get the settings dialog
@@ -501,6 +508,12 @@ document.getElementById("grid").addEventListener("click", e => {
   gear.form.drive.checked = !!s.drive;
   gear.form.drive_folder.value = s.drive_folder || "";
   gear.form.drive_folder.placeholder = s.drive_folder_default || "";
+  gear.form.flash.checked = !!s.flash;
+  // Without a flash service the box cannot be ticked; one ticked before can still be unticked.
+  gear.form.flash.disabled = !flashAvailable && !s.flash;
+  document.getElementById("flash-hint").textContent = flashAvailable
+    ? "每场处理完把影片、弹幕、中日字幕和路灯表传成 QQ 闪传，「全部处理完成」给闪传链接（14 天有效）"
+    : "未设置闪传服务，不能开启";
   gear.msg.textContent = "";
   gearDlg.showModal();
 });
