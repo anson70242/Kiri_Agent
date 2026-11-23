@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import backend.downloader
-from backend.archive import Archive
+from backend.archive import Archive, Downloads
 from backend.downloader.auto import Outcome
 from backend.downloader.base import DownloadResult, VideoInfo
 from backend.downloader.pending import PendingChats
@@ -171,3 +171,9 @@ def flash_ready_links(creator: str = "A", link: str = FLASH_LINK) -> list[tuple[
     then the page."""
     ref = f"{creator}%2F20261110%2F%E6%AD%8C%E6%9E%A0"
     return [(link, FLASH_LABEL), (f"{SITE}/archives#{ref}", "录播页面")]
+
+
+def staging(tmp_path, creator: str = "A") -> Path:
+    """The staging folder of `<creator>/20261110/歌枠` in the downloads folder of
+    `flash_pipeline(tmp_path, ...)`."""
+    return Downloads(tmp_path / "dl").flash_staging / creator / "20261110" / "歌枠"
