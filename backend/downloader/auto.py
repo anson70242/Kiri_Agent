@@ -218,6 +218,7 @@ class AutoDownloader:
         self.default_keep = default_keep
         self.uploads: dict[str, str] = {}  # streamer id -> Tencent Docs spreadsheet id (the gear)
         self.drive_folders: dict[str, str] = {}  # streamer id -> folder on the Quark drive (the gear)
+        self.flash_streamers: set[str] = set()  # streamer ids whose lives get a flash transfer (the gear)
         self.site_url = ""  # the dashboard's address (SITE_URL in .env): links in messages
         # A new short download link for the archive at a folder reference, so that the 全部下载
         # address downloads without logging in; None when the dashboard has no login.
@@ -967,6 +968,7 @@ def load_auto(config: Path, drive: Drive | None = None) -> AutoDownloader | None
     )
     ad.uploads = roster.upload_map()
     ad.drive_folders = roster.drive_map()
+    ad.flash_streamers = roster.flash_streamers()
     ad.site_url = os.getenv("SITE_URL", "").strip().rstrip("/")
     return ad
 

@@ -1,7 +1,8 @@
 """The streamer list: who is monitored, and per-streamer settings (the dashboard's gear):
 auto_download, keep, upload (to Tencent Docs), upload_sheet (the spreadsheet id),
-drive (upload drive copies to Quark) and drive_folder (where on the drive; blank: 录播/<name>,
-the name as the archives are filed).
+drive (upload drive copies to Quark), drive_folder (where on the drive; blank: 录播/<name>,
+the name as the archives are filed) and flash (put each live on QQ's flash transfer; absent
+means off).
 
 config.json is replaced on every deploy, so the list the dashboard edits lives in
 its own file (`monitor.streamers_file`, default `data/streamers.json` next to the
@@ -100,11 +101,15 @@ class Roster:
         self.entries.append(entry)
         return entry
 
-    def update(self, sid: str, **settings: Any) -> dict[str, Any]:
-        """Change per-streamer settings (the gear); None values are left alone."""
+    def update(self, sid: str, *, flash_available: bool = False, **settings: Any) -> dict[str, Any]:
+        """Change per-streamer settings (the gear); None values are left alone.
+        `flash_available`: a flash service is configured. Without one the flash box cannot be
+        ticked; unticking it, or saving it as it stands, is always allowed."""
         entry = self.find(sid)
         if entry is None:
             raise RosterError(404, "没有这个主播")
+        if settings.get("flash") and not entry.get("flash") and not flash_available:
+            raise RosterError(422, "没有设置闪传服务，不能开启自动上传到 QQ 闪传")
         new = entry | {k: v for k, v in settings.items() if v is not None}
         if "upload_sheet" in settings and settings["upload_sheet"] is not None:
             text = settings["upload_sheet"].strip()
@@ -140,6 +145,11 @@ class Roster:
         """Streamer id -> folder on the Quark drive, for the streamers whose drive box is ticked."""
         return {entry_id(e): drive_folder(e) for e in self.entries if e.get("drive")}
 
+    def flash_streamers(self) -> set[str]:
+        """The ids of the streamers whose flash box is ticked (whether a flash service is
+        configured is not asked here)."""
+        return {entry_id(e) for e in self.entries if e.get("flash")}
+
     def streamers(self) -> list[Streamer]:
         return [Streamer(e.get("name") or e["channel"], e["platform"], e["channel"]) for e in self.entries]
 
@@ -147,6 +157,7 @@ class Roster:
         return [{"id": entry_id(e), **e, "auto_download": bool(e.get("auto_download")),
                  "upload": bool(e.get("upload")), "upload_sheet": e.get("upload_sheet") or "",
                  "drive": bool(e.get("drive")), "drive_folder": e.get("drive_folder") or "",
+                 "flash": bool(e.get("flash")),
                  "drive_folder_default": default_drive_folder(e.get("name") or e["channel"])} for e in self.entries]
 
 
