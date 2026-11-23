@@ -14,9 +14,9 @@ next try to look before it inserts again, so that one job never fills two rows:
 
 - the row is already there, written by that try although its answer was lost: one of the
   rows from the third down holds this row's three text cells, and its link cell's first line
-  is this row's (the live's title, and a short download link's expiry). The label line
-  behind the link is not compared: how the endpoint reads rich text back was never seen.
-  Nothing more is written.
+  is this row's (the live's title, and the expiry of a short download link or a flash link).
+  The label line behind the link is not compared: how the endpoint reads rich text back was
+  never seen. Nothing more is written.
 - the third row is still empty under the four headers: the row that try inserted. It is
   merged like the row below it (the spans not merged yet) and written, from step 4.
 - else (somebody typed into it, or inserted a row above it; or the insert never happened)
@@ -96,7 +96,7 @@ def write_row(tab: SheetTabCalls, row: SheetRow, *, again: bool = False,
 
 
 def first_line(text: str) -> str:
-    """A link cell's first line: the live's title (and a short download link's expiry)."""
+    """A link cell's first line: the live's title (and its link's expiry)."""
     return text.split("\n", 1)[0].strip()
 
 

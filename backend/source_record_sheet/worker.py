@@ -69,11 +69,14 @@ class SourceRecordKeeper:
         self._wake = asyncio.Event()
 
     def processed(self, streamer: Streamer, *, date: str, title: str, link: str, expires: float | None,
-                  stream_id: str) -> None:
-        """This live is fully processed ("全部处理完成"), here is its short download link: a
-        录播 row for every tab that records the streamer. `date` is the archive's (`YYYYMMDD`),
-        `expires` when the link stops working (None: it does not). Returns at once."""
-        self._tell(streamer, SheetRow(RowKind.ARCHIVE, streamer.name, date, title, link, expires, stream_id))
+                  stream_id: str, flash: bool = False) -> None:
+        """This live is fully processed ("全部处理完成"), here is the link its message gave: a
+        录播 row for every tab that records the streamer. `flash`: the link is its flash link
+        (behind 闪传链接), else its short download link (behind 全部下载). `date` is the
+        archive's (`YYYYMMDD`), `expires` when the link stops working (None: it does not).
+        A live has one 录播 row a tab: told again with the other link, it gets no second.
+        Returns at once."""
+        self._tell(streamer, SheetRow(RowKind.ARCHIVE, streamer.name, date, title, link, expires, stream_id, flash))
 
     def uploaded(self, streamer: Streamer, *, date: str, title: str, link: str, stream_id: str) -> None:
         """This live's drive copy is uploaded ("网盘上传完成"), here is its drive link (with its

@@ -1,6 +1,7 @@
 """The source record sheet (录播源记录表): a subtitle group's own sheet on Tencent Docs where
 its editors look up where the files of a live can be fetched. The service adds a row to it
-for an archive's short download link (录播), and another for its drive link (网盘).
+for an archive's short download link or its flash link (录播; the caller says which), and
+another for its drive link (网盘).
 
     pipeline --processed(streamer, ...)--> SourceRecordKeeper --QQGroups.recording--> one job per tab
              (saved in the jobs file, unless the record says that row was written) --run()--> write_row,
