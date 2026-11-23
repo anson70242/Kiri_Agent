@@ -86,9 +86,14 @@ def prepare(archive: Archive, root: Path, *, ffmpeg: str | None = None, limit: i
         for name, data in extra.items():
             (staging / name).write_bytes(data)
             sent.append(staging / name)
-    except (CutError, OSError) as e:
+    except CutError as e:  # ffmpeg's own words go to the log; the owner reads a short reason
         shutil.rmtree(staging, ignore_errors=True)
-        raise FlashFailed(f"准备闪传的文件失败：{e}") from None
+        log.warning("cutting a video for a flash transfer failed: %s", e)
+        raise FlashFailed("切分影片失败（详情见日志）") from None
+    except OSError as e:
+        shutil.rmtree(staging, ignore_errors=True)
+        log.warning("writing the files of a flash transfer failed: %s: %s", type(e).__name__, e)
+        raise FlashFailed("准备闪传的文件失败（详情见日志）") from None
     return TransferFiles(archive.stem, sent)
 
 

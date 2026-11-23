@@ -445,7 +445,8 @@ makes the cutting start again with one part more, up to three more. Each part is
   「全部处理完成」 is the flash job's to send.
 - One flash transfer at a time, in the order the lives were processed. An archive is not deleted from the server (see `keep`) while its flash job is in the queue.
 
-**When it fails.** A try fails when the flash service refuses or answers an error, a file fails, the bytes sent do not move for 30 minutes, or the files cannot be prepared or cut.
+**When it fails.** A try fails when the flash service refuses or answers an error, a file fails, the bytes sent do not move for 30 minutes, or the files cannot be prepared or cut
+(then the reason is 「切分影片失败（详情见日志）」 or 「准备闪传的文件失败（详情见日志）」, and ffmpeg's own words, or the system's, are in the log).
 It is tried again with the pipeline's retry settings (`download.auto.retry_minutes` and `max_errors`: three tries, fifteen minutes apart), each try a new flash transfer;
 a failing one waits for its next try without holding back other lives. After the last try, 「全部处理完成」 goes out as for a streamer without flash transfers
 (the short download link; the sheet is told it), and the owner gets one Discord alert: the streamer, the live's date and title, the reason (without any address),
