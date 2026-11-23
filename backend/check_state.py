@@ -14,9 +14,10 @@ the one whose upload is running: a waiting upload is done again after the restar
 running one would start over from zero. Group files (posted in a QQ group, on their way to
 the drive) count the same way: only the one whose upload is running holds a deploy; one
 waiting is uploaded after the restart from the copy on the server, and one downloading is
-continued or downloaded again. Flash jobs do not count either: a flash transfer uploads in
-the flash service, and its job asks for its progress again after the restart. Rows waiting for a source record sheet never hold a deploy:
-they are written after the restart.
+continued or downloaded again. Flash jobs count only while their video is being cut: a
+flash transfer uploads in the flash service and its job asks for its progress again after
+the restart, one waiting is tried after the restart, and a cutting would start over. Rows
+waiting for a source record sheet never hold a deploy: they are written after the restart.
 """
 
 from __future__ import annotations
@@ -81,21 +82,26 @@ def main(argv: list[str] | None = None) -> int:
         print("状态文件有问题，先修复或从备份恢复，再部署。")
         return 1
     print("状态文件正常。")
-    # A flash job never holds a deploy: its upload runs in the flash service, and the job asks
-    # for its progress again after the restart.
     jobs = [j for j in queue if j.stage not in ("drive", "flash")]
     drive = [j for j in queue if j.stage == "drive"]
     uploading = [j for j in drive if j.uploading]
+    # A flash job holds a deploy only while its video is cut: its upload runs in the flash
+    # service, and the job asks for its progress again after the restart.
+    flash = [j for j in queue if j.stage == "flash"]
+    cutting = [j for j in flash if j.cutting]
     print(f"下载队列：{len(jobs)} 个任务。")
     print(f"网盘上传：{len(drive)} 个任务，{len(uploading)} 个正在上传（只有正在上传的会挡住部署）。")
+    print(f"闪传：{len(flash)} 个任务，{len(cutting)} 个正在切分影片（只有正在切分的会挡住部署）。")
     files = [f for f in group_files if f.uploading]
     print(f"群文件：{len(group_files)} 个任务，{len(files)} 个正在上传（只有正在上传的会挡住部署）。")
-    if not args.require_idle or not (jobs or uploading or files):
+    if not args.require_idle or not (jobs or uploading or cutting or files):
         return 0
     if jobs:
         print("下载队列还有任务，等处理完再部署。")
     for j in uploading:
         print(f"正在上传到网盘：{j.status.streamer.name} {j.status.title or j.status.url}，等它传完再部署。")
+    for j in cutting:
+        print(f"正在切分影片准备闪传：{j.status.streamer.name} {j.status.title or j.status.url}，等它切完再部署。")
     for f in files:
         print(f"正在上传群文件到网盘：{f.group_folder} 群的 {f.name}，等它传完再部署。")
     return 2

@@ -80,7 +80,7 @@ from backend.drive import LOGIN_COMMAND as DRIVE_LOGIN_COMMAND
 from backend.drive import Drive, DriveAuthorizationLapsed, DriveCopy, DriveFailed
 from backend.drive_copy import remove_leftover_drive_copies
 from backend.flash.client import FlashClient, FlashFailed, FlashUnavailable, StartedTransfer
-from backend.flash.files import note_flash_link, prepare, remove_staging
+from backend.flash.files import needs_cutting, note_flash_link, prepare, remove_leftover_staging, remove_staging
 from backend.llm import LLMError, chat, load_llm
 from backend.tencent_docs import (
     TencentDocsError, load_credentials, sheet_title, upload_table)
@@ -129,6 +129,10 @@ class Job:
     ready_sent: bool = False
     lapsed_since: float | None = None  # drive stage: its first try of the current lapse
     uploading: bool = False  # drive stage: its upload is running (a deploy waits for it)
+    # Flash stage: its video is being cut for the flash transfer (a deploy waits for it: the
+    # cutting would start over). Only the cutting marks a flash job; its upload runs in the
+    # flash service and goes on by its id after a restart.
+    cutting: bool = False
     # The address of the replay's own cover, from its metadata ("" when it has none); None
     # until the replay is downloaded. The messages show the picture `StreamStatus.as_ended`
     # picks with it.
@@ -172,6 +176,7 @@ class Job:
             "ready_sent": self.ready_sent,
             "lapsed_since": self.lapsed_since,
             "uploading": self.uploading,
+            "cutting": self.cutting,
             "replay_cover": self.replay_cover,
             "transfer_id": self.transfer_id,
             "flash_link": self.flash_link,
@@ -333,11 +338,15 @@ class AutoDownloader:
         """Process due jobs forever: one download and one transcription at a time,
         side by side. The download worker also retries late chats."""
         jobs = self.load()
-        if any(j.uploading for j in jobs):  # left by a kill: that upload is gone, and done again
+        if any(j.uploading or j.cutting for j in jobs):  # left by a kill: that upload or cutting is gone, and done again
             for j in jobs:
-                j.uploading = False
+                j.uploading = j.cutting = False
             self.save(jobs)
         remove_leftover_drive_copies(self.settings.output_dir)
+        # A started flash transfer goes on in the flash service, reading its staging folder;
+        # any other staging folder was left by a kill (a flash job without an id prepares again).
+        remove_leftover_staging(self.settings.output_dir,
+                                keep=[Path(j.video).parent for j in jobs if j.stage == "flash" and j.transfer_id and j.video])
         await asyncio.gather(*(self.run_stage(stage) for stage in STAGES))
 
     async def run_stage(self, stage: str) -> None:
@@ -366,19 +375,29 @@ class AutoDownloader:
 
     async def run_due(self, stage: str | None = None) -> None:
         while job := self.next_due(stage):
+            # Marked here, not in the thread: one writer of the queue at a time.
             if job.stage == "drive":
-                self._mark_uploading(job)  # here, not in the thread: one writer of the queue at a time
+                self._mark_busy(job, "uploading")
+            elif job.stage == "flash" and self._cuts(job):
+                self._mark_busy(job, "cutting")
             outcome = await asyncio.to_thread(self.attempt, job)
             self.finish(job, outcome)
 
-    def _mark_uploading(self, job: Job) -> None:
-        """Note in the queue file that the drive job's upload is running (the attempt's end
-        clears it)."""
+    def _mark_busy(self, job: Job, mark: Literal["uploading", "cutting"]) -> None:
+        """Note in the queue file that the job's work a deploy waits for is running: a drive
+        job's upload, a flash job's cutting (the attempt's end clears it)."""
         jobs = self.load()
         for j in jobs:
             if j.key == job.key:
-                j.uploading = True
+                setattr(j, mark, True)
         self.save(jobs)
+
+    def _cuts(self, job: Job) -> bool:
+        """This try at the flash job prepares its files and cuts its video: no flash transfer
+        is started yet, the late chat is not awaited, and the video is over the limit."""
+        if job.transfer_id or not self.flash or not job.video or self._awaits_chat(job):
+            return False
+        return needs_cutting(Archive.from_video(Path(job.video)))
 
     def next_due(self, stage: str | None = None) -> Job | None:
         now = self.clock()
@@ -876,6 +895,7 @@ class AutoDownloader:
         jobs = self.load()
         current = next((j for j in jobs if j.key == job.key), job)
         rest = [j for j in jobs if j.key != job.key]
+        current.cutting = False  # the attempt is over, whatever its outcome
         if outcome.kind == "wait":  # neither an attempt nor an error
             if outcome.flash:
                 current.transfer = outcome.flash
