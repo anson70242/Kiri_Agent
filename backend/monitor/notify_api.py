@@ -7,6 +7,10 @@
                                              source_record_sheet? (a sheet tab's address; "" clears it)}
     DELETE /api/notify/groups?id=<openid>
     POST   /api/notify/test             {target: "discord" | <group openid>}
+    GET    /api/notify/flash            the flash account: {state: online | offline | unreachable |
+                                        unconfigured, qr_image (a data: URI, only while offline),
+                                        error (the flash service's words), missing (a setting)}
+    POST   /api/notify/flash/qr-code    a new QR code; answers as GET /api/notify/flash
 """
 
 from __future__ import annotations
@@ -18,6 +22,8 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from backend.flash.client import ACTIONS_URL_ENV, FlashClient, FlashFailed, FlashUnavailable
+from backend.flash.qr_image import qr_image
 from backend.notify import EventKind, LiveNotifier
 from backend.notify.qq import KIND_LABELS, GroupFiles, QQError, SourceRecordSheet
 from backend.notify.qq_gateway import QQGateway
@@ -29,6 +35,7 @@ from .roster import Roster, entry_id
 PAGE = REPO_ROOT / "frontend" / "notify.html"
 TEST_TEXT = "🧪 测试消息：切片小助手的通知正常 ✅"
 NO_TENCENT_DOCS = f"这台服务器上没有腾讯文档的令牌（.env 里的 {TOKEN_ENV}），不能登记到录播源记录表"
+NO_FLASH = f"没有设置闪传服务（.env 里的 {ACTIONS_URL_ENV}）"
 
 
 class GroupSettings(BaseModel):
@@ -46,11 +53,13 @@ class TestTarget(BaseModel):
 
 
 def create_notify_router(notifier: LiveNotifier | None, roster: Roster, gateway: QQGateway | None,
-                         drive_available: bool = False, tencent_docs_available: bool = False) -> APIRouter:
+                         drive_available: bool = False, tencent_docs_available: bool = False,
+                         flash: FlashClient | None = None) -> APIRouter:
     """`drive_available`: the Quark drive can be used on this server (the page says so when
     not, next to the switch that sends group files there). `tencent_docs_available`: the
     service has a Tencent Docs token, so a group's source record sheet can be written (without
-    it the page shows the field as unavailable and a sheet is not saved)."""
+    it the page shows the field as unavailable and a sheet is not saved). `flash`: the flash
+    service's client, None when none is configured (the 「闪传账号」 block says 未设置)."""
     router = APIRouter()
     qq = notifier.qq if notifier else None
     discord = next((n for n in notifier.notifiers if n.name == "discord"), None) if notifier else None
@@ -161,5 +170,37 @@ def create_notify_router(notifier: LiveNotifier | None, roster: Roster, gateway:
             return {"ok": False, "error": str(e)}
         qq.history.add("qq", body.target, TEST_TEXT, True)
         return {"ok": True}
+
+    # The 「闪传账号」 block. Plain `def`: the client's calls block, so FastAPI runs them in its
+    # thread pool. The QR code's text is drawn here and goes nowhere else (no log line).
+
+    def flash_account() -> dict[str, Any]:
+        if flash is None:
+            return {"state": "unconfigured", "qr_image": None, "error": "", "missing": NO_FLASH}
+        try:
+            account = flash.account()
+        except FlashFailed as e:  # the flash service answered, but with an error: it is of no use
+            return {"state": "unreachable", "qr_image": None, "error": str(e), "missing": ""}
+        # Ticket 10 adds here how many lives wait for the account ("waiting").
+        return {"state": account.state,
+                "qr_image": qr_image(account.qr_code) if account.qr_code else None,
+                "error": account.error, "missing": account.missing}
+
+    @router.get("/api/notify/flash")
+    def flash_state() -> dict[str, Any]:
+        return flash_account()
+
+    @router.post("/api/notify/flash/qr-code")
+    def new_qr_code() -> dict[str, Any]:
+        """Asks the flash service for a new QR code; answers the state with it."""
+        if flash is None:
+            raise HTTPException(404, NO_FLASH)
+        try:
+            flash.refresh_qr_code()
+        except FlashUnavailable as e:
+            raise HTTPException(503, str(e)) from None
+        except FlashFailed as e:
+            raise HTTPException(502, str(e)) from None
+        return flash_account()
 
     return router
