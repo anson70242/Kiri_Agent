@@ -12,8 +12,8 @@ from backend.flash.client import flash_configured, load_flash
 
 
 def test_a_checkout_whose_env_file_names_a_flash_service_gives_a_test_none(tmp_path, monkeypatch):
-    (tmp_path / ".env").write_text("FLASH_ACTIONS_URL=ws://flash.example:3001\n"
-                                   "FLASH_LOGIN_URL=http://flash.example:6099\n"
+    (tmp_path / ".env").write_text("FLASH_ACTIONS_URL=ws://flash.example:8001\n"
+                                   "FLASH_LOGIN_URL=http://flash.example:8002\n"
                                    "FLASH_LOGIN_HASH=made-up-hash\n", encoding="utf-8")
     monkeypatch.setattr(backend.flash.client, "REPO_ROOT", tmp_path)  # the checkout
     config = tmp_path / "config.json"
@@ -26,6 +26,6 @@ def test_a_checkout_whose_env_file_names_a_flash_service_gives_a_test_none(tmp_p
 
 
 def test_a_test_that_wants_a_flash_service_switches_it_on_itself(monkeypatch):
-    monkeypatch.setenv("FLASH_ACTIONS_URL", "ws://flash.example:3001")
+    monkeypatch.setenv("FLASH_ACTIONS_URL", "ws://flash.example:8001")
 
     assert flash_configured()

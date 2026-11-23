@@ -10,7 +10,7 @@ import pytest
 from .test_drive_gear import streamer
 from .test_streamers_api import app_for, write_config
 
-FLASH_URL = "ws://flash.example:3001"  # made up: no flash service is ever called
+FLASH_URL = "ws://flash.example:8001"  # made up: no flash service is ever called
 
 
 @pytest.fixture
