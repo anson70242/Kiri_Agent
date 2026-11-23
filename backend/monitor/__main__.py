@@ -73,6 +73,7 @@ async def main() -> int:
             print(f"{ts}  {fmt(new)}", flush=True)
 
         from backend.downloader.auto import attach  # lazy: imports this package
+        from backend.flash.client import load_flash
         from backend.quark import load_quark
         from backend.notify.incidents import IncidentAlerts
         from backend.state_file import set_incident_hook
@@ -80,7 +81,7 @@ async def main() -> int:
         mon.on_change.append(on_change)
         alerts = IncidentAlerts()
         set_incident_hook(alerts)  # a damaged runtime state file -> operator alert
-        notifier, auto = attach(args.config, mon, load_quark(args.config))
+        notifier, auto = attach(args.config, mon, load_quark(args.config), load_flash(args.config))
         alerts.start(notifier)
         names = ", ".join(n.name for n in notifier.notifiers) if notifier else ""
         print(f"Monitoring {len(streamers)} streamer(s) every {args.interval or interval:g}s. "

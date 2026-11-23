@@ -43,6 +43,17 @@ Rules:
   hours, an upload starts only inside them (a retry too): outside, the job waits for their
   next beginning, which is neither an attempt nor an error and is not told; an upload that
   is running when they end goes on to its end. READY and group files are not held by them.
+- Flash transfers (docs/adr/0003-flash-transfers-through-an-outside-qq-client-service.md):
+  for a streamer whose gear ticks 自动上传到 QQ 闪传, when a flash service is configured
+  (`flash`, backend/flash/client.py) and the archive has a video, a flash job is queued in
+  the same save as the drive job (both may be; neither waits for the other). Its live's
+  READY is then the flash job's to send, and nobody else's: it waits for a late chat, then
+  the flash job prepares the files (backend/flash/files.py), starts the flash transfer and
+  saves it in the job, and looks at its progress every FLASH_PROGRESS_LOOK seconds until
+  it is uploaded. Then the flash link is noted in the archive and READY goes out with it
+  (no short download link is made), and the source record sheet is told the flash link. A
+  flash transfer that cannot be made is given up on: READY goes out as without one. One
+  flash transfer at a time, in the order the lives were processed.
 - Jobs live in `state_file`, so a restart resumes them (yt-dlp resumes partial files).
 """
 
@@ -68,6 +79,8 @@ from backend.asr import ASRSettings, transcribe
 from backend.drive import LOGIN_COMMAND as DRIVE_LOGIN_COMMAND
 from backend.drive import Drive, DriveAuthorizationLapsed, DriveCopy, DriveFailed
 from backend.drive_copy import remove_leftover_drive_copies
+from backend.flash.client import FlashClient, FlashFailed, FlashUnavailable, StartedTransfer
+from backend.flash.files import note_flash_link, prepare, remove_staging
 from backend.llm import LLMError, chat, load_llm
 from backend.tencent_docs import (
     TencentDocsError, load_credentials, sheet_title, upload_table)
@@ -88,7 +101,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 NOT_READY = ("is_live", "is_upcoming", "post_live")
-STAGES = ("download", "transcribe", "analyze", "translate", "upload", "drive")
+STAGES = ("download", "transcribe", "analyze", "translate", "upload", "drive", "flash")
 AUTH_HINTS = ("member", "sign in", "cookie", "login", "subscriber", "private")
 # A live shorter than this whose replay is not published is dropped without a word: test
 # lives and the fragments a dropped connection leaves.
@@ -107,17 +120,25 @@ class Job:
     attempts: int = 0
     errors: int = 0  # failures other than "not ready yet"
     last_error: str = ""
-    stage: Literal["download", "transcribe", "analyze", "translate", "upload", "drive"] = "download"
+    stage: Literal["download", "transcribe", "analyze", "translate", "upload", "drive", "flash"] = "download"
     video: str | None = None  # set once downloaded
     live_ended_at: float | None = None  # when the live ended (epoch seconds); None: not known
     unpublished_notice_sent: bool = False  # the owner was told the replay is not published
-    ready_sent: bool = False  # drive stage: "全部处理完成" went out for this live
+    # Drive stage: "全部处理完成" is not this job's to send: it went out for this live, or the
+    # live's flash job sends it.
+    ready_sent: bool = False
     lapsed_since: float | None = None  # drive stage: its first try of the current lapse
     uploading: bool = False  # drive stage: its upload is running (a deploy waits for it)
     # The address of the replay's own cover, from its metadata ("" when it has none); None
     # until the replay is downloaded. The messages show the picture `StreamStatus.as_ended`
     # picks with it.
     replay_cover: str | None = None
+    # Flash stage: the flash transfer started (its id, flash link, the link's expiry and when
+    # it was started, epoch seconds); None until it is. The link is never logged.
+    transfer_id: str | None = None
+    flash_link: str | None = field(default=None, repr=False)
+    flash_expires: float | None = None
+    flash_made: float | None = None
 
     @property
     def stream_key(self) -> str:
@@ -152,7 +173,27 @@ class Job:
             "lapsed_since": self.lapsed_since,
             "uploading": self.uploading,
             "replay_cover": self.replay_cover,
+            "transfer_id": self.transfer_id,
+            "flash_link": self.flash_link,
+            "flash_expires": self.flash_expires,
+            "flash_made": self.flash_made,
         }
+
+    @property
+    def transfer(self) -> StartedTransfer | None:
+        """Flash stage: the flash transfer started for this live, None until it is."""
+        if self.transfer_id is None or not self.flash_link or self.flash_expires is None or self.flash_made is None:
+            return None
+        return StartedTransfer(self.transfer_id, self.flash_link,
+                               datetime.fromtimestamp(self.flash_expires, timezone.utc),
+                               datetime.fromtimestamp(self.flash_made, timezone.utc))
+
+    @transfer.setter
+    def transfer(self, started: StartedTransfer | None) -> None:
+        self.transfer_id = started.id if started else None
+        self.flash_link = started.link if started else None
+        self.flash_expires = started.expires.timestamp() if started else None
+        self.flash_made = started.made.timestamp() if started else None
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Job:
@@ -166,14 +207,18 @@ def decode_jobs(raw: Any) -> list[Job]:
 
 @dataclass
 class Outcome:
-    # lapsed: the drive's authorization; unavailable: no drive any more for a drive job
+    # lapsed: the drive's authorization; unavailable: no drive (flash service) any more for a
+    # drive (flash) job
     kind: Literal["done", "wait", "unpublished", "error", "lapsed", "unavailable"]
     message: str = ""
-    retry_at: float | None = None  # drive stage, wait: not to be tried again before this time
+    retry_at: float | None = None  # drive and flash stages, wait: not to be tried again before this time
     result: DownloadResult | None = None
     pruned: list[Path] = field(default_factory=list)
     prune_error: str = ""  # done, but deleting old archives raised this (type: message)
     drive: DriveCopy | None = None  # drive stage, done: what the drive answered
+    # Flash stage: the flash transfer just started (wait: to be saved in the job), or the one
+    # uploaded (done)
+    flash: StartedTransfer | None = None
 
 
 class AutoDownloader:
@@ -199,10 +244,12 @@ class AutoDownloader:
         # (from, until): the hours of Hong Kong time between which a drive copy's upload may
         # start; None: at any time
         drive_hours: tuple[int, int] | None = None,
+        flash: FlashClient | None = None,  # makes flash transfers; None: no flash service is configured
     ):
         self.upload = upload
         self.drive = drive
         self.drive_hours = drive_hours
+        self.flash = flash
         self.transcribe = transcribe
         self.analyze = analyze
         self.translate = translate
@@ -309,7 +356,7 @@ class AutoDownloader:
                 pass
 
     def sleep_time(self, stage: str | None = None) -> float:
-        times = [j.next_try for j in self.load() if stage in (None, j.stage)]
+        times = [j.next_try for j in self._eligible(self.load(), stage)]
         if stage in (None, "download") and (queue := PendingChats.from_settings(self.settings)):
             if (due := queue.next_due()) is not None:
                 times.append(due)
@@ -335,8 +382,19 @@ class AutoDownloader:
 
     def next_due(self, stage: str | None = None) -> Job | None:
         now = self.clock()
-        due = [j for j in self.load() if j.next_try <= now and stage in (None, j.stage)]
-        return min(due, key=lambda j: j.next_try) if due else None
+        due = [j for j in self._eligible(self.load(), stage) if j.next_try <= now]
+        # Flash transfers go in the order the lives were processed, the other stages' jobs
+        # in the order they came due.
+        return min(due, key=lambda j: j.queued_at if j.stage == "flash" else j.next_try) if due else None
+
+    @staticmethod
+    def _eligible(jobs: list[Job], stage: str | None) -> list[Job]:
+        """The stage's jobs that may be tried when due: while a flash transfer is started, no
+        other flash job (one flash transfer at a time)."""
+        jobs = [j for j in jobs if stage in (None, j.stage)]
+        if any(j.stage == "flash" and j.transfer_id for j in jobs):
+            jobs = [j for j in jobs if j.stage != "flash" or j.transfer_id]
+        return jobs
 
     def attempt(self, job: Job) -> Outcome:
         """One try at the job's current stage (blocking)."""
@@ -350,6 +408,8 @@ class AutoDownloader:
             return self.attempt_upload(job)
         if job.stage == "drive":
             return self.attempt_drive(job)
+        if job.stage == "flash":
+            return self.attempt_flash(job)
         s = job.status
         try:
             dl = downloader_for(s.url or "", self.settings, self.streamers)
@@ -478,6 +538,55 @@ class AutoDownloader:
             self._active["drive"] = None
         return Outcome("done", drive=copy)
 
+    def attempt_flash(self, job: Job) -> Outcome:
+        """One look at the live's flash transfer: after its late chat, prepare the files and
+        start it (`Outcome.flash` is then saved in the job), or, once started, ask for its
+        progress. Done once it is uploaded, with its flash link noted in the archive. The
+        staging folder goes once the flash transfer is uploaded or cannot be made."""
+        s = job.status
+        assert job.video  # a flash job is only queued for a live with a video
+        if not self.flash:  # gone since the job was queued (.env changed, then a restart)
+            log.warning("flash transfers are on for %s, but no flash service is configured: dropped", s.streamer.name)
+            return Outcome("unavailable")
+        if self._awaits_chat(job):  # the chat goes into the flash transfer: wait until it is in or given up
+            return Outcome("wait", "等待弹幕补抓", retry_at=self.clock() + FLASH_WAIT_LOOK)
+        archive = Archive.from_video(Path(job.video))
+        root = self.settings.output_dir
+        started = job.transfer
+        try:
+            if started is None:
+                prepared = prepare(archive, root, ffmpeg=self.settings.ffmpeg)
+                started = self.flash.start(prepared.files, prepared.name)
+                log.info("flash transfer started: %s %s (%d files)", s.streamer.name, s.url, len(prepared.files))
+                return Outcome("wait", "闪传上传中", retry_at=self.clock(), flash=started)
+            progress = self.flash.progress(started.id)
+        except (FlashFailed, FlashUnavailable) as e:
+            return self._flash_failed(archive, str(e))
+        except Exception as e:  # noqa: BLE001 - a bug or a surprise: a failed try, not a stuck job
+            log.exception("flash attempt raised: %s %s", s.streamer.name, s.url)
+            return self._flash_failed(archive, f"{type(e).__name__}: {e}")
+        if progress.failed:
+            return self._flash_failed(archive, f"{progress.failed} 个文件上传失败")
+        if not progress.finished:
+            self._active["flash"] = {
+                "name": s.streamer.name, "platform": s.streamer.platform, "title": s.title, "url": s.url,
+                "started": started.made.timestamp(), "stage": "flash",
+                "percent": round(progress.sent / progress.total * 100, 1) if progress.total else None,
+                "downloaded": progress.sent, "total": progress.total or None, "speed": None, "eta": None}
+            return Outcome("wait", "闪传上传中", retry_at=self.clock() + FLASH_PROGRESS_LOOK)
+        try:
+            note_flash_link(archive, started)
+        except Exception:  # noqa: BLE001 - the page loses the link, the message still carries it
+            log.exception("noting the flash link in the archive failed: %s %s", s.streamer.name, s.url)
+        remove_staging(archive, root)
+        return Outcome("done", flash=started)
+
+    def _flash_failed(self, archive: Archive, reason: str) -> Outcome:
+        """A try at a flash transfer failed: its staging folder goes (a new try prepares the
+        files again)."""
+        remove_staging(archive, self.settings.output_dir)
+        return Outcome("error", reason)
+
     def _on_drive_progress(self, sent: int, total: int | None) -> None:
         """The drive's progress (runs in the drive thread)."""
         if active := self._active["drive"]:
@@ -502,9 +611,12 @@ class AutoDownloader:
     def finish(self, job: Job, outcome: Outcome) -> None:
         """Record an attempt's outcome and send its message. Once nothing is left for the
         live (every stage done or given up), report it ready with what it has; a live with a
-        drive job is reported ready by `send_waiting_ready`."""
+        flash job is reported ready by its end, one with only a drive job by `send_waiting_ready`."""
         if job.stage == "drive":
             self._finish_drive(job, outcome)
+            return
+        if job.stage == "flash":
+            self._finish_flash(job, outcome)
             return
         self._finish(job, outcome)
         video = job.video or (str(outcome.result.video) if outcome.result and outcome.result.video else None)
@@ -512,19 +624,27 @@ class AutoDownloader:
             self._send_ready(job, Path(video))
         self.send_waiting_ready()
 
-    def _send_ready(self, job: Job, video: Path) -> None:
+    def _send_ready(self, job: Job, video: Path, flash: StartedTransfer | None = None) -> None:
         """READY with the site's links; the source record sheet is told the 全部下载 link it
-        carries (none without SITE_URL: then nothing is told)."""
-        short = (self.download_link(Downloads(self.settings.output_dir).ref(video.parent))
-                 if self.site_url and self.download_link else None)
-        links = ready_links(video, self.site_url, self.settings.output_dir, short)
-        self._send(EventKind.READY, job, ready_detail(video), links)
-        if self.source_record and links:
+        carries (none without SITE_URL: then nothing is told). With the live's uploaded flash
+        transfer `flash`, READY carries its flash link in place of 全部下载 (no short download
+        link is made) and says until when it works; the sheet is told the flash link."""
+        if flash:
+            links = flash_ready_links(video, self.site_url, self.settings.output_dir, flash.link)
+            told = {"link": flash.link, "expires": flash.expires.timestamp(), "flash": True}
+            self._send(EventKind.READY, job, f"{ready_detail(video)}\n{flash_expiry_line(flash)}", links)
+        else:
+            short = (self.download_link(Downloads(self.settings.output_dir).ref(video.parent))
+                     if self.site_url and self.download_link else None)
+            links = ready_links(video, self.site_url, self.settings.output_dir, short)
+            told = {"link": links[0].url, "expires": short.expires if short else None} if links else {}
+            self._send(EventKind.READY, job, ready_detail(video), links)
+        if self.source_record and told:
             s = job.status
             try:
                 self.source_record.processed(
                     s.streamer, date=Archive.from_video(video).date_folder, title=s.title or "",
-                    link=links[0].url, expires=short.expires if short else None, stream_id=s.stream_id or s.url or "")
+                    stream_id=s.stream_id or s.url or "", **told)
             except Exception:  # noqa: BLE001 - the sheet is bookkeeping: it never holds up a message
                 log.exception("telling the source record sheet failed: %s", s.streamer.name)
 
@@ -749,18 +869,68 @@ class AutoDownloader:
             except Exception:  # noqa: BLE001 - the sheet is bookkeeping: it never holds up a message
                 log.exception("telling the source record sheet failed: %s", name)
 
-    def _settle(self, job: Job, jobs: list[Job]) -> None:
-        """Save `jobs`, the queue without `job`. When that leaves nothing for its live and the
-        live goes to the drive, its drive job is queued in the same save (so a prune never
-        sees the archive without a job)."""
-        if not any(j.stream_key == job.stream_key for j in jobs) and self._goes_to_drive(job):
-            drive = Job.from_dict(job.to_dict())
-            drive.stage = "drive"
-            drive.attempts, drive.errors, drive.last_error, drive.next_try = 0, 0, "", self.clock()
-            self.save(jobs + [drive])
-            self._wake["drive"].set()
+    def _finish_flash(self, job: Job, outcome: Outcome) -> None:
+        """A flash job's look: while it waits (its late chat, its upload) the job stays, with
+        the flash transfer it started; else it ends, and READY goes out, with the flash link
+        when the flash transfer is uploaded, else as for a live without one."""
+        jobs = self.load()
+        current = next((j for j in jobs if j.key == job.key), job)
+        rest = [j for j in jobs if j.key != job.key]
+        if outcome.kind == "wait":  # neither an attempt nor an error
+            if outcome.flash:
+                current.transfer = outcome.flash
+            current.next_try = outcome.retry_at if outcome.retry_at is not None else self.clock()
+            self.save(rest + [current])
             return
-        self.save(jobs)
+        name = job.status.streamer.name
+        if outcome.kind == "error":
+            log.warning("flash transfer given up on: %s: %s", name, outcome.message)
+        self._active["flash"] = None
+        self.save(rest)
+        assert current.video  # a flash job is only queued for a live with a video
+        if outcome.kind == "done":
+            log.info("flash transfer uploaded: %s %s", name, current.status.url)
+        self._send_ready(job, Path(current.video), outcome.flash if outcome.kind == "done" else None)
+
+    def _settle(self, job: Job, jobs: list[Job]) -> None:
+        """Save `jobs`, the queue without `job`. When that leaves nothing for its live, its
+        drive job and its flash job are queued in the same save, for a live that goes to the
+        drive or to a flash transfer (so a prune never sees the archive without a job)."""
+        if any(j.stream_key == job.stream_key for j in jobs):
+            self.save(jobs)
+            return
+        now = self.clock()
+        to_flash = self._goes_to_flash(job)
+        follow: list[Job] = []
+        if self._goes_to_drive(job):
+            drive = self._follower(job, "drive", now)
+            drive.ready_sent = to_flash  # the flash job's end sends READY
+            follow.append(drive)
+        if to_flash:
+            flash = self._follower(job, "flash", now)
+            flash.queued_at = now  # flash transfers go in the order the lives were processed
+            follow.append(flash)
+        self.save(jobs + follow)
+        for j in follow:
+            self._wake[j.stage].set()
+
+    @staticmethod
+    def _follower(job: Job, stage: str, now: float) -> Job:
+        """A copy of the live's last processing job for a stage after the processing."""
+        follower = Job.from_dict(job.to_dict())
+        follower.stage = stage  # type: ignore[assignment]
+        follower.attempts, follower.errors, follower.last_error, follower.next_try = 0, 0, "", now
+        return follower
+
+    def _goes_to_flash(self, job: Job) -> bool:
+        """A ticked streamer's live with a video, when a flash service is configured."""
+        if job.status.streamer.id not in self.flash_streamers or not job.video:
+            return False
+        if not self.flash:
+            log.warning("flash transfers are on for %s, but no flash service is configured: skipped",
+                        job.status.streamer.name)
+            return False
+        return Archive.from_video(Path(job.video)).has(Artifact.VIDEO)
 
     def _goes_to_drive(self, job: Job) -> bool:
         """A ticked streamer's live with a video, when the drive is available."""
@@ -858,11 +1028,32 @@ def ready_links(video: Path, site_url: str, output_dir: Path,
             Link(PAGE_LABEL, archive_link(site_url, ref)))
 
 
+def flash_ready_links(video: Path, site_url: str, output_dir: Path, flash_link: str) -> tuple[Link, ...]:
+    """READY's links when the live's flash transfer is uploaded: its flash link, then, with
+    SITE_URL, the archive's page."""
+    page = (Link(PAGE_LABEL, archive_link(site_url, Downloads(output_dir).ref(video.parent))),) if site_url else ()
+    return (Link(FLASH_LINK_LABEL, flash_link), *page)
+
+
+def flash_expiry_line(flash: StartedTransfer) -> str:
+    """READY's line saying until when the flash link works: its day in Hong Kong, written as
+    the source record sheet writes dates (`2026/12/7`)."""
+    day = flash.expires.astimezone(DRIVE_HOURS_ZONE)
+    return f"闪传链接有效至 {day.year}/{day.month}/{day.day}"
+
+
 READY_ARTIFACTS = [("影片", Artifact.VIDEO), ("弹幕", Artifact.CHAT), ("日文字幕", Artifact.TRANSCRIPT),
                    ("中文字幕", Artifact.CHINESE_TRANSCRIPT), ("路灯表", Artifact.HIGHLIGHTS)]  # in the message's order
 PAGE_LABEL = "录播页面"
+FLASH_LINK_LABEL = "闪传链接（影片、弹幕、中日字幕 SRT、路灯表）"
 DRIVE_LINK_LABEL = "网盘链接"
 DRIVE_LAPSE_GIVE_UP = 72 * 3600  # a drive job waits this long for the owner to authorize again
+# A flash transfer's progress is asked for this often while it uploads: a 7.7 GB video took
+# five minutes on the server, and READY waits for the end.
+FLASH_PROGRESS_LOOK = 10
+# A flash job waiting (for its live's late chat) is looked at again this often: READY waits
+# for it, so the wait should not outlast the chat by more than a minute.
+FLASH_WAIT_LOOK = 60
 SHEET_LABEL = "腾讯文档路灯表"
 
 
@@ -923,11 +1114,12 @@ def failure_detail(job: Job, settings: DownloadSettings) -> str:
     return text
 
 
-def load_auto(config: Path, drive: Drive | None = None) -> AutoDownloader | None:
+def load_auto(config: Path, drive: Drive | None = None, flash: FlashClient | None = None) -> AutoDownloader | None:
     """AutoDownloader from config.json (streamers from the roster), or None if
     `download.auto.enabled` is false. `drive`: the service's one drive (`load_quark`), so
     drive copies take turns with the other uploads through it; None: not available (the
-    deploy check needs none)."""
+    deploy check needs none). `flash`: the flash service's client (`load_flash`), the one
+    the dashboard also uses; None: no flash service is configured."""
     cfg = json.loads(config.read_text(encoding="utf-8"))
     auto = (cfg.get("download") or {}).get("auto") or {}
     if auto.get("enabled") is False:
@@ -965,6 +1157,7 @@ def load_auto(config: Path, drive: Drive | None = None) -> AutoDownloader | None
         # None without the CLI: ticked streamers get no drive job
         drive=drive,
         drive_hours=drive_upload_hours(cfg),
+        flash=flash,
     )
     ad.uploads = roster.upload_map()
     ad.drive_folders = roster.drive_map()
@@ -1047,11 +1240,11 @@ def load_analyzer(config: Path, cfg: dict[str, Any]) -> Callable[[Path, str, str
     return run
 
 
-def attach(config: Path, mon: StreamMonitor,
-           drive: Drive | None = None) -> tuple[LiveNotifier | None, AutoDownloader | None]:
+def attach(config: Path, mon: StreamMonitor, drive: Drive | None = None,
+           flash: FlashClient | None = None) -> tuple[LiveNotifier | None, AutoDownloader | None]:
     """Hook notifications and auto-download onto a monitor. Run `auto.run()` as a task.
-    `drive`: as in load_auto."""
-    auto = load_auto(config, drive)
+    `drive`, `flash`: as in load_auto."""
+    auto = load_auto(config, drive, flash)
     notifier = load_notifier(config, allow_empty=auto is not None)
     if notifier:
         mon.on_change.append(notifier.on_change)

@@ -14,7 +14,8 @@ the one whose upload is running: a waiting upload is done again after the restar
 running one would start over from zero. Group files (posted in a QQ group, on their way to
 the drive) count the same way: only the one whose upload is running holds a deploy; one
 waiting is uploaded after the restart from the copy on the server, and one downloading is
-continued or downloaded again. Rows waiting for a source record sheet never hold a deploy:
+continued or downloaded again. Flash jobs do not count either: a flash transfer uploads in
+the flash service, and its job asks for its progress again after the restart. Rows waiting for a source record sheet never hold a deploy:
 they are written after the restart.
 """
 
@@ -80,7 +81,9 @@ def main(argv: list[str] | None = None) -> int:
         print("状态文件有问题，先修复或从备份恢复，再部署。")
         return 1
     print("状态文件正常。")
-    jobs = [j for j in queue if j.stage != "drive"]
+    # A flash job never holds a deploy: its upload runs in the flash service, and the job asks
+    # for its progress again after the restart.
+    jobs = [j for j in queue if j.stage not in ("drive", "flash")]
     drive = [j for j in queue if j.stage == "drive"]
     uploading = [j for j in drive if j.uploading]
     print(f"下载队列：{len(jobs)} 个任务。")
