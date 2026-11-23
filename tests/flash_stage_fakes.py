@@ -182,6 +182,12 @@ def staging(tmp_path, creator: str = "A") -> Path:
     return Downloads(tmp_path / "dl").flash_staging / creator / "20261110" / "歌枠"
 
 
+# Every field flash transfers added to a job of the download queue: a queue file written before
+# them has none of these (the tests of such a file drop them all).
+FLASH_JOB_FIELDS = ("transfer_id", "flash_link", "flash_expires", "flash_made", "flash_sent", "flash_moved_at",
+                    "flash_offline_since", "flash_reminded_at", "flash_status_online", "cutting")
+
+
 # ---- a failed flash transfer (ticket 09) ----
 
 PAUSE = 900  # the pipeline's retry pause in the tests' pipeline (`make`: retry_interval=900)

@@ -9,11 +9,10 @@ import json
 from backend import check_state
 from backend.downloader.auto import Job
 
+from .flash_stage_fakes import FLASH_JOB_FIELDS
 from .helpers import B, live
 from .test_check_state import files
 from .test_drive_restart import drive_job, queue
-
-FLASH_FIELDS = ("transfer_id", "flash_link", "flash_expires", "flash_made", "cutting")
 
 
 def flash_job(sid, s=None, started=False, cutting=False):
@@ -58,7 +57,7 @@ def test_the_other_stages_hold_a_deploy_as_before_beside_flash_transfers(tmp_pat
 def test_a_queue_file_written_before_flash_transfers_is_read(tmp_path, capsys):
     old = [drive_job("v1").to_dict(), Job(live(sid="v2"), queued_at=100.0, next_try=200.0).to_dict()]
     for job in old:
-        for name in FLASH_FIELDS:
+        for name in FLASH_JOB_FIELDS:
             job.pop(name)
     cfg = queue(tmp_path)
     (tmp_path / "data" / "download_queue.json").write_text(json.dumps(old), encoding="utf-8")

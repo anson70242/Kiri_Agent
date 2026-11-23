@@ -10,12 +10,9 @@ import logging
 
 from backend.notify import EventKind
 
-from .flash_stage_fakes import (FLASH_LINK, FakeFlash, finished, flash_pipeline, flash_ready_links, processed_live,
-                                ready, run_flash, stages, uploading)
+from .flash_stage_fakes import (FLASH_JOB_FIELDS, FLASH_LINK, FakeFlash, finished, flash_pipeline, flash_ready_links,
+                                processed_live, ready, run_flash, stages, uploading)
 from .test_drive_stage import DRIVE_LINK, FakeDrive, kinds, links, rewrite_queue, step
-
-NEW_FIELDS = ("transfer_id", "flash_link", "flash_expires", "flash_made")
-
 
 def test_a_restart_while_uploading_asks_for_the_same_flash_transfers_progress_and_starts_none(tmp_path):
     before = FakeFlash(uploading())
@@ -36,7 +33,7 @@ def test_a_restart_while_uploading_asks_for_the_same_flash_transfers_progress_an
 
 def test_a_queue_file_from_before_flash_transfers_still_loads(tmp_path):
     processed_live(tmp_path, None, folders={"youtube:@a": "录播/A"}, drive=FakeDrive())  # a drive job
-    rewrite_queue(tmp_path, lambda job: [job.pop(name) for name in NEW_FIELDS])
+    rewrite_queue(tmp_path, lambda job: [job.pop(name) for name in FLASH_JOB_FIELDS])
     restarted, _, sent = flash_pipeline(tmp_path, folders={"youtube:@a": "录播/A"}, drive=FakeDrive())
 
     assert stages(restarted) == ["drive"]

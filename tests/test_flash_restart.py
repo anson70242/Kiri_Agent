@@ -10,10 +10,9 @@ from __future__ import annotations
 from backend.archive import Downloads
 from backend.notify import EventKind
 
-from .flash_stage_fakes import (FakeFlash, finished, flash_pipeline, flash_ready_links, processed_live, ready,
-                                run_flash, staging, uploading)
+from .flash_stage_fakes import (FLASH_JOB_FIELDS, FakeFlash, finished, flash_pipeline, flash_ready_links,
+                                processed_live, ready, run_flash, staging, uploading)
 from .test_drive_restart import run_until
-from .test_check_state_flash import FLASH_FIELDS
 from .test_drive_stage import FakeDrive, kinds, links, rewrite_queue, step
 
 
@@ -102,7 +101,7 @@ def test_a_cutting_mark_left_by_a_kill_is_cleared_when_the_service_starts(tmp_pa
 
 def test_the_service_starts_on_a_queue_file_written_before_flash_transfers(tmp_path):
     processed_live(tmp_path, None, folders={"youtube:@a": "录播/A"}, drive=FakeDrive())  # a drive job
-    rewrite_queue(tmp_path, lambda job: [job.pop(name) for name in FLASH_FIELDS])
+    rewrite_queue(tmp_path, lambda job: [job.pop(name) for name in FLASH_JOB_FIELDS])
 
     restarted, _, sent = flash_pipeline(tmp_path, folders={"youtube:@a": "录播/A"}, drive=FakeDrive())
     run_until(restarted, lambda: not restarted.load())
