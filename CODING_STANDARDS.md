@@ -32,3 +32,5 @@ Knowledge of either kind goes into the owning module. A caller that inspects a f
 - A test goes through a module's interface: the Archive module, `StateFile`, an HTTP route, a command line tool.
 - Sample archives come from `tests/helpers.py` (`sample_archive`, `bare_archive`).
 - Behaviour that differs between Windows and Linux (file system calls, line endings, console encoding) gets a test that fakes the difference, because the suite runs on both.
+- A fake of an outside service lists, at its top, the real service's states and limits: for each, whether the fake models it and where it was seen (a probe's date, the service's own source), and what is left out or unknown. The states include the ones around the happy path: not logged in yet, logged out by the other side, just restarted, refusing. Each state the code handles has a test with the fake in that state.
+- Whatever runs on a timer (a page that asks again, a retry, a worker's look) has its request rate on each outside service worked out in the review and held against that service's limit; a limit nobody knows is written down as unknown in the ticket.

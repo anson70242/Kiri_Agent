@@ -14,6 +14,23 @@ A flash transfer (`create_flash_task`, `get_fileset_info`) answers by default:
 
         service.created                           # the params of every create_flash_task, in order
         service.progress = [fileset(...), ...]    # one per get_fileset_info, the last repeated
+
+The real flash service's states and limits (seen on the server on 2026-11-23 and 24):
+
+- Account online: modelled (`online`, `logged_in`).
+- Account offline, the login interface holds a QR code: modelled (`online = False`).
+- Started and not logged in yet: it answers no action, only the login interface. Not
+  modelled by the fake itself: a test points the actions' address at `closed_port()`.
+- Account logged out by QQ: the login interface keeps the old QR code, which has run out, and
+  refuses a new one until the flash service is restarted. Not modelled (the fake refuses a
+  new QR code only while `logged_in`); nothing in this service can act on that state.
+- The login interface takes a few logins a minute from one caller and refuses the rest.
+  Not modelled: the tests count the logins instead (`login_calls`).
+- A credential runs out after an hour: modelled by changing `credential`. The real refusal
+  was not seen (the service's own source has an answer with an error code); the fake's is
+  HTTP 401. The client treats both alike.
+- A flash transfer that fails, a file that fails: the answers were never seen. The fake's
+  are guesses (`failed` counts in `fileset`).
 """
 
 from __future__ import annotations
