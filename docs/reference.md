@@ -468,6 +468,8 @@ and no alert of a failure (the reminders said why). A restart keeps the waiting 
 **The 「闪传账号」 block** on the 通知 page (admins only, like the rest of the page) shows the state, 在线 / 掉线 / 连不上闪传服务 / 未设置 (online / offline / unreachable / not set up),
 the flash service's own error text, a missing setting, and how many lives wait for the account. While the account is offline it shows the QR code to scan with mobile QQ,
 drawn by the backend (with [segno](https://pypi.org/project/segno/)), and a button 「刷新二维码」 (new QR code); while it shows a QR code it asks again every 3 seconds, so it turns to 在线 by itself after the scan.
+A flash service that answers no action because its account is not logged in yet (it was just started) is shown as 掉线 with the QR code its login interface holds;
+连不上闪传服务 is shown when the login interface cannot be reached either, or says the account is logged in.
 
 - `GET /api/notify/flash` → `{state: online | offline | unreachable | unconfigured, qr_image (a data: URI, only while offline), error, missing, waiting}`.
   A flash service that answers with an error counts as `unreachable`, with its words in `error`.
