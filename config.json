@@ -33,6 +33,6 @@
     "ffmpeg": "",
     "max_height": 1080,
     "chat_retry": { "interval_minutes": 30, "give_up_hours": 48 },
-    "auto": { "keep": 6, "retry_minutes": 15, "give_up_hours": 12, "max_errors": 3 }
+    "auto": { "keep": 6, "retry_minutes": 15, "give_up_hours": 48, "max_errors": 3 }
   }
 }

@@ -195,7 +195,7 @@ the replay is queued for download (video up to `download.max_height`, default 10
 The web server or `uv run -m backend.monitor` runs the queue. See [auto.py](../backend/downloader/auto.py).
 
 - Not ready yet (YouTube still processing, Twitch replay not listed yet): retried every `download.auto.retry_minutes` (15) minutes,
-  for up to `give_up_hours` (12) hours, then the failure is reported on Discord.
+  for up to `give_up_hours` (48) hours, then the failure is reported on Discord.
 - TwitCasting replay not published: if the live lasted 5 minutes or more (or has no start time), one 「回放未公开」 (replay not published) notification is sent, then the download is retried at the interval above;
   if the replay is published in the meantime, it is downloaded as usual. If it is still not published after `give_up_hours`, the program gives up quietly, without reporting a failure. For a live shorter than 5 minutes, no notification is sent and the program gives up at once.
 - Other failures (expired cookies, deleted video, network) are retried `max_errors` (3) times, then reported on Discord;
