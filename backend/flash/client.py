@@ -168,7 +168,7 @@ class FlashClient:
         try:
             status = self._action("get_status", {})
         except FlashUnavailable:
-            return AccountState("unreachable")
+            return self._before_login() or AccountState("unreachable")
         if status.get("online") is True:
             return AccountState("online")
         try:
@@ -181,6 +181,20 @@ class FlashClient:
         error = login.get("loginError")
         return AccountState("offline", qr_code=qr_code if isinstance(qr_code, str) and qr_code else None,
                             error=error.strip() if isinstance(error, str) else "")
+
+    def _before_login(self) -> AccountState | None:
+        """The state of a flash service whose actions cannot be reached while its login
+        interface holds a QR code: it was started and waits for the scan (it answers no
+        action before its account is logged in). None in every other case."""
+        try:
+            login = self._login_status()
+        except (FlashUnavailable, FlashFailed):
+            return None
+        qr_code = login.get("qrcodeurl") if login else None
+        if not isinstance(qr_code, str) or not qr_code or login.get("isLogin") is True:
+            return None
+        error = login.get("loginError")
+        return AccountState("offline", qr_code=qr_code, error=error.strip() if isinstance(error, str) else "")
 
     def flash_path(self, path: Path) -> str:
         """`path`, under this service's downloads folder, as the flash service sees it.

@@ -268,3 +268,27 @@ def test_a_refusal_that_logging_in_again_does_not_cure_is_tried_once_and_told(se
         client.refresh_qr_code()
 
     assert logins(service) == 2  # the first press's, and one more to rule the credential out
+
+
+# ---- before the flash account is logged in, the actions cannot be reached ----
+
+def test_a_flash_service_waiting_for_its_first_scan_is_offline_with_the_qr_code(service, downloads):
+    """A flash service that was just started answers no action until its account is logged
+    in: only the login interface is there, and it has the QR code to scan."""
+    service.login_error = "登录态已失效，请重新登录。"
+    settings = service.settings(FLASH_ACTIONS_URL=f"ws://127.0.0.1:{closed_port()}")
+
+    state = FlashClient(settings, downloads).account()
+
+    assert state.state == "offline"
+    assert state.qr_code == QR_CODE
+    assert state.error == "登录态已失效，请重新登录。"
+
+
+def test_actions_that_cannot_be_reached_while_the_login_interface_says_logged_in_are_unreachable(service, downloads):
+    service.logged_in = True
+    settings = service.settings(FLASH_ACTIONS_URL=f"ws://127.0.0.1:{closed_port()}")
+
+    state = FlashClient(settings, downloads).account()
+
+    assert state.state == "unreachable" and state.qr_code is None
