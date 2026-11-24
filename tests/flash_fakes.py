@@ -76,6 +76,7 @@ class FakeFlashService:
         self.qr_code = QR_CODE  # data.qrcodeurl while not logged in
         self.login_error = ""  # data.loginError
         self.login_hash = LOGIN_HASH
+        self.credential = CREDENTIAL  # what a login answers and the other calls take; change it to run one out
         self.events = list(EVENTS)
         self.answers: dict[str, Answer] = {"get_status": lambda params: {"data": {"online": self.online, "good": True}},
                                            "create_flash_task": self._create, "get_fileset_info": self._fileset_info}
@@ -176,8 +177,8 @@ class FakeFlashService:
         if path == "/api/auth/login":
             if not isinstance(body, dict) or body.get("hash") != self.login_hash:
                 return 200, {"code": -1, "message": "密钥不对", "data": None}
-            return 200, {"code": 0, "message": "success", "data": {"Credential": CREDENTIAL}}
-        if auth != f"Bearer {CREDENTIAL}":
+            return 200, {"code": 0, "message": "success", "data": {"Credential": self.credential}}
+        if auth != f"Bearer {self.credential}":
             return 401, {"code": -1, "message": "Unauthorized", "data": None}
         if path == "/api/QQLogin/CheckLoginStatus":
             return 200, {"code": 0, "message": "success",

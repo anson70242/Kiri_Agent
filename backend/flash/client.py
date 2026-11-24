@@ -156,11 +156,13 @@ class FlashClient:
     """The flash service, for this service's downloads folder `downloads`. Every call blocks
     (one connection per call, at most ACTION_TIMEOUT or LOGIN_TIMEOUT per round trip): the
     pipeline calls it from its stage threads, and async code through `asyncio.to_thread`, as
-    the drive is called. Holds no connection between calls."""
+    the drive is called. Holds no connection between calls, only the login interface's
+    credential."""
 
     def __init__(self, settings: FlashSettings, downloads: Path):
         self.settings = settings
         self.downloads = downloads
+        self._credential: str | None = None  # the login interface's, from the last login; never logged
 
     def account(self) -> AccountState:
         try:
@@ -250,12 +252,22 @@ class FlashClient:
         return self._login_call("/api/QQLogin/CheckLoginStatus") or {}
 
     def _login_call(self, path: str) -> Any:
-        """Logs in with the login hash, then posts to `path` with the credential as bearer;
-        answers the answer's data."""
+        """Posts to `path` with the credential as bearer; answers the answer's data. The
+        credential of the last login is used again: the login interface refuses more than a
+        few logins a minute, and the 通知 page asks every few seconds while a QR code shows.
+        A refusal with a credential used before may mean it has run out, so it is tried
+        once more with a new one."""
+        credential = self._credential
+        if credential is not None:
+            try:
+                return self._post(path, {}, credential)
+            except FlashFailed:
+                self._credential = None
         login = self._post("/api/auth/login", {"hash": self.settings.login_hash}, None)
         credential = login.get("Credential") if isinstance(login, dict) else None
         if not isinstance(credential, str) or not credential:
             raise FlashFailed("登录接口没有给出凭据")
+        self._credential = credential
         return self._post(path, {}, credential)
 
     def _post(self, path: str, body: dict[str, Any], credential: str | None) -> Any:

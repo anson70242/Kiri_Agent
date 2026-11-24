@@ -223,3 +223,48 @@ def test_no_address_hash_credential_qr_code_or_group_message_is_logged_even_at_d
     for secret in secrets:
         assert secret not in caplog.text
         assert not any(secret in error for error in errors)
+
+
+# ---- the credential of the login interface ----
+
+def logins(service) -> int:
+    return sum(path == "/api/auth/login" for path, _, _ in service.login_calls)
+
+
+def test_the_login_interface_is_logged_in_to_once_for_many_looks_at_an_offline_account(service, downloads):
+    """The 通知 page asks every few seconds while a QR code shows, and the login interface
+    refuses more than a few logins a minute."""
+    service.online = False
+    client = FlashClient(service.settings(), downloads)
+
+    states = [client.account() for _ in range(5)]
+    client.refresh_qr_code()
+
+    assert all(state.qr_code == QR_CODE for state in states)
+    assert client.account().qr_code == NEW_QR_CODE
+    assert logins(service) == 1
+
+
+def test_a_credential_the_login_interface_no_longer_takes_is_replaced_by_logging_in_again(service, downloads):
+    service.online = False
+    client = FlashClient(service.settings(), downloads)
+    assert client.account().qr_code == QR_CODE
+
+    service.credential = "made-up-credential-after-an-hour"  # the old one has run out
+
+    state = client.account()
+    assert state.qr_code == QR_CODE and state.error == ""
+    assert client.account().qr_code == QR_CODE
+    assert logins(service) == 2
+
+
+def test_a_refusal_that_logging_in_again_does_not_cure_is_tried_once_and_told(service, downloads):
+    service.logged_in = True
+    client = FlashClient(service.settings(), downloads)
+    with pytest.raises(FlashFailed, match="已经登录了"):
+        client.refresh_qr_code()
+
+    with pytest.raises(FlashFailed, match="已经登录了"):
+        client.refresh_qr_code()
+
+    assert logins(service) == 2  # the first press's, and one more to rule the credential out
