@@ -128,3 +128,46 @@ def test_unreadable_video_raises(tmp_path):
     bad.write_bytes(b"not a video")
     with pytest.raises(ASRError, match="ffmpeg"):
         transcribe(bad, ASRSettings(), client=FakeWhisper([]).client())
+
+
+@needs_ffmpeg
+def test_a_long_live_is_sent_in_pieces_and_its_lines_keep_the_time_in_the_live(tmp_path):
+    # The whisper service holds a whole request's audio in memory: a 6 h 54 min live took
+    # 14.7 GB and was killed (2026-11-17). Each request carries at most `piece` seconds.
+    video = make_video(tmp_path / "[20260908][A] long.mp4", seconds=5)
+    whisper = FakeWhisper([{"id": 0, "start": 0.5, "end": 1.25, "text": "はい"}])  # the answer to every piece
+
+    out = transcribe(video, ASRSettings(piece=2), client=whisper.client())
+
+    assert len(whisper.requests) == 3  # 0-2 s, 2-4 s, 4-5 s
+    assert json.loads(out.read_text(encoding="utf-8")) == [
+        {"start": 0.5, "end": 1.25, "text": "はい"},
+        {"start": 2.5, "end": 3.25, "text": "はい"},
+        {"start": 4.5, "end": 5.25, "text": "はい"},
+    ]
+
+
+@needs_ffmpeg
+def test_a_live_shorter_than_one_piece_is_one_request(tmp_path):
+    video = make_video(tmp_path / "[20261110][A] short.mp4", seconds=2)
+    whisper = FakeWhisper([{"id": 0, "start": 0.5, "end": 1.25, "text": "はい"}])
+
+    transcribe(video, ASRSettings(), client=whisper.client())
+
+    assert len(whisper.requests) == 1
+
+
+@needs_ffmpeg
+def test_a_line_whisper_places_after_the_end_of_its_piece_is_dropped(tmp_path):
+    # Seen on a real live (2026-11-17): the last line of a 2-hour piece came back starting
+    # 26 s after the piece ended, which put it behind the first lines of the next piece.
+    video = make_video(tmp_path / "[20260910][A] long.mp4", seconds=3)  # two pieces: 0-2 s, 2-3 s
+    whisper = FakeWhisper([{"id": 0, "start": 1.0, "end": 1.5, "text": "はい"},
+                           {"id": 1, "start": 2.5, "end": 3.0, "text": "トップ"}])  # past the 2 s of a piece
+
+    out = transcribe(video, ASRSettings(piece=2), client=whisper.client())
+
+    assert json.loads(out.read_text(encoding="utf-8")) == [
+        {"start": 1.0, "end": 1.5, "text": "はい"},
+        {"start": 3.0, "end": 3.5, "text": "はい"},
+    ]

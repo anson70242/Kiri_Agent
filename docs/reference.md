@@ -208,7 +208,7 @@ The web server or `uv run -m backend.monitor` runs the queue. See [auto.py](../b
 ## Transcription
 
 When an auto-download finishes, the same job enters the transcription stage. Downloading and transcription each have one worker (one download and one transcription at a time, running side by side),
-so a long transcription never holds up the next download. ffmpeg extracts the audio (16 kHz mono Opus), and the audio of the whole live is sent to the `whisper` service
+so a long transcription never holds up the next download. ffmpeg extracts the audio (16 kHz mono Opus), and it is sent, two hours a request (the service holds a whole request in memory), to the `whisper` service
 ([services/whisper](../services/whisper), faster-whisper large-v3-turbo, started on the GPU by `docker-compose.yml`,
 reachable only from kiri). The transcript is saved next to the video:
 

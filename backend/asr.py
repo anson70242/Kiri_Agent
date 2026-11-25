@@ -4,8 +4,8 @@
     transcribe(Path("downloads/.../[20261110][A] title.mp4"), ASRSettings())
     # -> the transcript artifact next to the video (named by backend.archive)
 
-The audio track is extracted with ffmpeg (16 kHz mono Opus, ~30 MB for 4 h) and sent
-whole to `POST /transcribe/full` (Japanese, VAD on). Output, one segment per line:
+The audio track is extracted with ffmpeg (16 kHz mono Opus, ~30 MB for 4 h) and sent to
+`POST /transcribe/full` (Japanese, VAD on), two hours a request. Output, one segment per line:
 
     [
       {"start": 0.78, "end": 3.78, "text": "めっちゃ味するよ!"},
@@ -13,7 +13,7 @@ whole to `POST /transcribe/full` (Japanese, VAD on). Output, one segment per lin
     ]
 
     uv run -m backend.asr <video>...              # transcribe by hand
-    uv run -m backend.asr --singing <video>...    # a singing live: whole, without voice detection
+    uv run -m backend.asr --singing <video>...    # a singing live: without voice detection
 """
 
 from __future__ import annotations
@@ -39,8 +39,12 @@ class ASRSettings:
     url: str = "http://whisper:8000"
     language: str = "ja"
     vad: bool = True
-    timeout: float = 3 * 3600  # one request covers the whole stream
+    timeout: float = 3 * 3600  # for one request
     ffmpeg: str = "ffmpeg"
+    # Seconds of audio in one request. The whisper service holds a whole request in memory,
+    # about 2 GB an hour: a live of 6 h 54 min sent whole took 14.7 GB and was killed by the
+    # server, which has 15.5 GB (2026-11-17).
+    piece: float = 2 * 3600
 
 
 class ASRError(Exception):
@@ -49,31 +53,47 @@ class ASRError(Exception):
 
 def transcribe(video: Path, settings: ASRSettings, client: httpx.Client | None = None,
                singing: bool = False) -> Path:
-    """Transcribe `video` and save its transcript in its archive, next to it. `singing`:
-    a singing live, transcribed whole (see `request_segments`)."""
+    """Transcribe `video` and save its transcript in its archive, next to it. The audio
+    goes to the whisper service `settings.piece` seconds a request, one request after
+    another; a line cut by the end of a piece comes back as two, and one that whisper
+    places after the end of its piece is dropped. `singing`: a singing
+    live, transcribed without voice detection (see `request_segments`)."""
+    segments: list[dict[str, Any]] = []
     with tempfile.TemporaryDirectory() as tmp:
-        audio = extract_audio(video, Path(tmp) / "audio.ogg", settings.ffmpeg)
-        segments = request_segments(audio, settings, client, singing)
+        pieces = extract_audio(video, Path(tmp), settings.ffmpeg, settings.piece)
+        for i, audio in enumerate(pieces):
+            log.info("transcribing %s: piece %d/%d", video.name, i + 1, len(pieces))
+            starts = i * settings.piece  # where this piece starts in the live
+            segments += [
+                {**s, "start": round(s["start"] + starts, 2), "end": round(s["end"] + starts, 2)}
+                for s in request_segments(audio, settings, client, singing)
+                if s["start"] < settings.piece  # whisper can time a piece's last line after its end
+            ]
     out = Archive.from_video(video).save(Artifact.TRANSCRIPT, segments)
     log.info("transcribed %s: %d segments", video.name, len(segments))
     return out
 
 
-def extract_audio(video: Path, out: Path, ffmpeg: str = "ffmpeg") -> Path:
+def extract_audio(video: Path, out_dir: Path, ffmpeg: str = "ffmpeg", piece: float = ASRSettings.piece) -> list[Path]:
+    """The audio of `video` as files of `piece` seconds each (the last one shorter), in order."""
     cmd = [ffmpeg, "-loglevel", "error", "-y", "-i", str(video), "-vn", "-ac", "1", "-ar", "16000",
-           "-c:a", "libopus", "-b:a", "24k", str(out)]
+           "-c:a", "libopus", "-b:a", "24k",
+           "-f", "segment", "-segment_time", str(piece), "-reset_timestamps", "1", str(out_dir / "audio%03d.ogg")]
     try:
         subprocess.run(cmd, check=True, capture_output=True, text=True)
     except FileNotFoundError as e:
         raise ASRError(f"ffmpeg not found ({ffmpeg})") from e
     except subprocess.CalledProcessError as e:
         raise ASRError(f"ffmpeg failed: {(e.stderr or '').strip()[:300]}") from e
-    return out
+    pieces = sorted(out_dir.glob("audio*.ogg"))
+    if not pieces:
+        raise ASRError("ffmpeg wrote no audio")
+    return pieces
 
 
 def request_segments(audio: Path, settings: ASRSettings, client: httpx.Client | None = None,
                      singing: bool = False) -> list[dict[str, Any]]:
-    """The whisper service's segments for `audio`.
+    """The whisper service's segments for `audio`, timed from the start of `audio`.
 
     `singing`: without voice detection, which drops quiet singing over music (on a "sleep"
     singing live of 2 h 13 min, 2026-11-16, song naming found 3 songs with it and 8
